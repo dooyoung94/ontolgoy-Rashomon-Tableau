@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from typing import Any
 
 
+HF_ROUTER_URL = "https://router.huggingface.co/v1"
+
+
 @dataclass(frozen=True)
 class Usage:
     input_tokens: int = 0
@@ -53,10 +56,9 @@ def _extract_json(text: str) -> dict[str, Any]:
 class OpenAICompatibleClient:
     """Provider-neutral Chat Completions adapter.
 
-    This intentionally avoids vendor-specific structured-output features so the five
-    MAGIC peer model families receive the same textual JSON contract. It works with
-    OpenAI itself and with vLLM/other OpenAI-compatible endpoints serving frozen
-    Mixtral/Llama checkpoints.
+    No vendor-specific structured-output feature is used: every evaluated model
+    receives the same textual JSON contract.  This works with OpenAI, vLLM and the
+    Hugging Face Inference Providers OpenAI-compatible router.
     """
 
     def __init__(self, *, model: str, api_key: str, base_url: str, timeout: int = 180):
@@ -66,8 +68,6 @@ class OpenAICompatibleClient:
         self.timeout = timeout
 
     def structured(self, *, instructions: str, input_text: str, schema_name: str, schema: dict[str, Any]) -> JsonResponse:
-        # schema_name is accepted for interface parity but deliberately not sent as a
-        # proprietary structured-output option.
         prompt = f"{instructions}\n\n{_json_contract(schema)}\n\nINPUT\n{input_text}"
         payload = {
             "model": self.model,
@@ -140,7 +140,8 @@ class AnthropicMessagesClient:
 
 
 def client_from_environment(model_cfg: dict[str, Any]):
-    model = os.getenv(model_cfg.get("model_env", ""), model_cfg["exact_model"])
+    model_env = model_cfg.get("model_env", "")
+    model = os.getenv(model_env, model_cfg["exact_model"]) if model_env else model_cfg["exact_model"]
     api_key_env = model_cfg.get("api_key_env", "")
     api_key = os.getenv(api_key_env, "")
     if not api_key:
@@ -156,13 +157,17 @@ def client_from_environment(model_cfg: dict[str, Any]):
             api_key=api_key,
             base_url=base_url or "https://api.openai.com/v1",
         )
+    if execution == "huggingface_router":
+        return OpenAICompatibleClient(
+            model=model,
+            api_key=api_key,
+            base_url=base_url or HF_ROUTER_URL,
+        )
     if execution == "openai_compatible":
         if not base_url:
             raise RuntimeError(f"Missing endpoint env {base_env} for {model_cfg['display_name']}")
         return OpenAICompatibleClient(model=model, api_key=api_key, base_url=base_url)
     if execution == "anthropic_or_archived_endpoint":
-        # If CLAUDE_BASE_URL is supplied as an OpenAI-compatible archived endpoint,
-        # set CLAUDE_ENDPOINT_MODE=openai_compatible; otherwise use Anthropic Messages.
         mode = os.getenv("CLAUDE_ENDPOINT_MODE", "anthropic")
         if mode == "openai_compatible":
             if not base_url:

@@ -16,13 +16,18 @@ discriminative_scorer:
   note: "NLI discriminator; never used as a generative claim extractor."
 
 model_sets:
-  # Current 2026 execution track. Report separately from the historical MAGIC peer reproduction.
   current_available:
     - gpt_5_5
     - gpt_5_4_mini
     - claude_sonnet_5
     - mistral_small_4
     - llama_3_3_70b
+
+  # Single-token Hugging Face Inference Providers track. Provider is pinned in the model id.
+  hf_open_llms:
+    - hf_gpt_oss_120b
+    - hf_qwen3_235b
+    - hf_deepseek_r1_0528
 
   historical_magic_peers:
     - mixtral_8x7b
@@ -32,6 +37,30 @@ model_sets:
     - o1
 
 models:
+  hf_gpt_oss_120b:
+    display_name: GPT-OSS 120B (HF)
+    historical_magic_peer: false
+    exact_model: openai/gpt-oss-120b:fireworks-ai
+    execution: huggingface_router
+    api_key_env: HF_TOKEN
+    availability_note: "Open-weight model through Hugging Face Inference Providers; provider pinned to Fireworks AI for reproducibility."
+
+  hf_qwen3_235b:
+    display_name: Qwen3 235B A22B Instruct 2507 (HF)
+    historical_magic_peer: false
+    exact_model: Qwen/Qwen3-235B-A22B-Instruct-2507:deepinfra
+    execution: huggingface_router
+    api_key_env: HF_TOKEN
+    availability_note: "Open-weight Qwen3 MoE through Hugging Face router; provider pinned to DeepInfra."
+
+  hf_deepseek_r1_0528:
+    display_name: DeepSeek-R1-0528 (HF)
+    historical_magic_peer: false
+    exact_model: deepseek-ai/DeepSeek-R1-0528:deepinfra
+    execution: huggingface_router
+    api_key_env: HF_TOKEN
+    availability_note: "Open-weight reasoning model through Hugging Face router; provider pinned to DeepInfra."
+
   gpt_5_5:
     display_name: GPT-5.5
     historical_magic_peer: false
@@ -58,7 +87,7 @@ models:
     model_env: CLAUDE5_MODEL
     base_url_env: CLAUDE5_BASE_URL
     api_key_env: ANTHROPIC_API_KEY
-    availability_note: "Current Anthropic Sonnet model; dateless 5.x model IDs are pinned releases per Anthropic versioning docs."
+    availability_note: "Current Anthropic Sonnet model."
 
   mistral_small_4:
     display_name: Mistral Small 4
