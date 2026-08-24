@@ -37,12 +37,13 @@ def usage_dict(response) -> dict:
     }
 
 
-def run_call(name: str, fn) -> dict:
+def run_call(name: str, fn, token_budget: int | None) -> dict:
     try:
         response = fn()
         return {
             "name": name,
             "ok": True,
+            "token_budget": token_budget,
             "model": response.model,
             "keys": sorted(response.data.keys()),
             "usage": usage_dict(response),
@@ -51,6 +52,7 @@ def run_call(name: str, fn) -> dict:
         return {
             "name": name,
             "ok": False,
+            "token_budget": token_budget,
             "error": str(exc),
         }
 
@@ -67,25 +69,33 @@ def main() -> None:
     row = download_first_row()
     results = []
 
+    schema_names = {
+        "direct": "magic_direct_judgment",
+        "claim_extraction": "magic_claim_extraction",
+        "world_score": "rashomon_world_score",
+    }
+
     for model_key in selected:
-        # Hard safety rule for the smoke test: client-level HTTP and contract retries
-        # are disabled. The three calls below therefore mean at most three HF
-        # provider requests per model, regardless of success/failure.
+        # Hard safety rule: no client retries. The three calls below therefore mean
+        # at most three HF provider requests per model. Task-specific token budgets
+        # affect response length/cost but never increase request count.
         model_cfg = dict(cfg["models"][model_key])
         model_cfg["max_retries"] = 0
         model_cfg["contract_retries"] = 0
         model_cfg["timeout_seconds"] = min(int(model_cfg.get("timeout_seconds", 180)), 120)
-        model_cfg["max_tokens"] = min(int(model_cfg.get("max_tokens", 2048)), 1536)
         client = client_from_environment(model_cfg)
+        budgets = model_cfg.get("schema_max_tokens") or {}
 
         calls = [
             run_call(
                 "direct",
                 lambda: direct_magic_judgment(client, row["context1"], row["context2"]),
+                budgets.get(schema_names["direct"], model_cfg.get("max_tokens")),
             ),
             run_call(
                 "claim_extraction",
                 lambda: extract_claims(client, row["context1"], row["context2"]),
+                budgets.get(schema_names["claim_extraction"], model_cfg.get("max_tokens")),
             ),
             run_call(
                 "world_score",
@@ -96,6 +106,7 @@ def main() -> None:
                         "entity_a --related_to--> entity_b [source=context2, sentence=0]"
                     ],
                 ),
+                budgets.get(schema_names["world_score"], model_cfg.get("max_tokens")),
             ),
         ]
         results.append(
@@ -117,14 +128,17 @@ def main() -> None:
         "retries_enabled": False,
         "full_rashomon_pipeline_executed": False,
         "compute_matched_executed": False,
+        "task_budgets": {
+            "direct": "1024 tokens configured",
+            "claim_extraction": "4096 tokens configured",
+            "world_score": "768 tokens configured",
+        },
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
-    # A smoke run is considered useful if at least one model passes all three
-    # contracts. Failures remain in the artifact for provider-specific diagnosis.
     if not any(model["all_contracts_ok"] for model in results):
         raise SystemExit("No HF model passed all three bounded contract checks")
 
