@@ -91,3 +91,13 @@ def test_mus():
     mus = minimal_unsat_subsets(facts, r)
     assert len(mus) == 1
     assert len(mus[0]) == 2
+
+
+def test_tableau_sorting_handles_mixed_optional_provenance():
+    r = RelationalTableau(Ontology())
+    result = r.check([
+        Literal('r', 'A', 'B', source='context2'),
+        Literal('s', 'B', 'C', source=None),
+    ])
+    assert result.satisfiable
+    assert [x.predicate for x in result.closure] == ['r', 's']
