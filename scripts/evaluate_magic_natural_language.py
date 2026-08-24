@@ -57,8 +57,22 @@ def extracted_literals(claims: list[dict], source: str) -> list[Literal]:
 
 
 def literal_text(x: Literal) -> str:
+    """Audit representation: includes provenance and sentence metadata."""
     neg = "NOT " if x.negated else ""
     return f"{neg}{x.subject} --{x.predicate}--> {x.object} [source={x.source}, sentence={x.story}]"
+
+
+def scorer_literal_text(x: Literal) -> str:
+    """Semantic-only scorer input shared by the LLM and DeBERTa conditions.
+
+    Source/sentence metadata is intentionally excluded: it is provenance, not a
+    proposition, and can create an artificial NLI contradiction when the same fact
+    appears in context1 and context2.  A simple natural-language triple is also
+    closer to the text distribution used by NLI models than the audit arrow form.
+    """
+    if x.negated:
+        return f"It is not the case that {x.subject} {x.predicate} {x.object}."
+    return f"{x.subject} {x.predicate} {x.object}."
 
 
 def _normalize_scores(support: float, contradiction: float, unresolved: float) -> tuple[float, float, float]:
@@ -74,12 +88,12 @@ def build_rashomon_judgment(
     world_scorer: DebertaWorldScorer | None = None,
     extracted_response=None,
 ) -> dict:
-    """Extract query/path candidates, score them, and detect existential conflict.
+    """Extract candidate interpretations/paths, score them, and detect conflict.
 
-    The possible-world marginal is retained as a diagnostic/ablation signal, but it
-    no longer controls the MAGIC binary decision. MAGIC asks whether at least one
-    factual conflict exists, so a single query-path pair whose contradiction score
-    dominates both support and unresolved is sufficient for a positive decision.
+    Rashomon/possible worlds are retained as an uncertainty diagnostic and ablation
+    layer.  They do not control MAGIC's binary decision.  MAGIC asks whether at
+    least one factual conflict exists, so one query-path pair whose contradiction
+    score dominates support and unresolved is sufficient for a positive decision.
     """
     extracted = extracted_response or extract_claims(client, context1, context2)
     extraction_was_shared = extracted_response is not None
@@ -105,18 +119,26 @@ def build_rashomon_judgment(
         )
         for p_index, path in enumerate(paths):
             prefix = f"q{q_index}-p{p_index}"
-            query_repr = literal_text(query)
-            evidence_repr = [literal_text(x) for x in path.literals]
+            query_audit = literal_text(query)
+            evidence_audit = [literal_text(x) for x in path.literals]
+            query_scorer = scorer_literal_text(query)
+            evidence_scorer = [scorer_literal_text(x) for x in path.literals]
             prepared.append({
                 "id": prefix,
                 "q_index": q_index,
                 "query": query,
                 "path": path,
-                "query_repr": query_repr,
-                "evidence_repr": evidence_repr,
+                "query_audit": query_audit,
+                "evidence_audit": evidence_audit,
+                "query_scorer": query_scorer,
+                "evidence_scorer": evidence_scorer,
             })
             if world_scorer is None:
-                batch_items.append({"id": prefix, "query": query_repr, "world_evidence": evidence_repr})
+                batch_items.append({
+                    "id": prefix,
+                    "query": query_scorer,
+                    "world_evidence": evidence_scorer,
+                })
 
     score_map: dict[str, tuple[float, float, float]] = {}
     if world_scorer is None:
@@ -142,7 +164,7 @@ def build_rashomon_judgment(
                 )
     else:
         for item in prepared:
-            nli = world_scorer.score(item["query_repr"], item["evidence_repr"])
+            nli = world_scorer.score(item["query_scorer"], item["evidence_scorer"])
             score_map[item["id"]] = (nli.support, nli.contradiction, nli.unresolved)
 
     by_query: dict[int, list[dict]] = {}
@@ -186,24 +208,28 @@ def build_rashomon_judgment(
             ])
             meta = {
                 "id": prefix,
-                "query": literal_text(query),
+                "query": item["query_audit"],
                 "query_sentence_id": int(query.story or 0),
                 "direction": path.direction,
                 "sentence_ids": sorted({int(x.story) for x in path.literals if x.story is not None}),
+                "scorer_input": {
+                    "query": item["query_scorer"],
+                    "evidence": item["evidence_scorer"],
+                },
                 "raw_scores": {
                     "support": raw_support,
                     "contradiction": raw_contradiction,
                     "unresolved": raw_unresolved,
                 },
                 "scores": {"support": support, "contradiction": contradiction, "unresolved": unresolved},
-                "path": item["evidence_repr"],
+                "path": item["evidence_audit"],
             }
             path_meta[prefix] = meta
             all_scored_paths.append(meta)
             if contradiction > max(support, unresolved):
                 dominant_paths.append(meta)
 
-        # Retain the previous possible-world calculation only for diagnostics.
+        # Keep the possible-world marginal for uncertainty analysis/ablation only.
         worlds = build_possible_worlds(c2, [choices], reasoner, {"context2": 1.0}, max_worlds=128)
         marginal = truth_marginal(worlds, query, reasoner)
         conflict_mass = marginal.contradiction + marginal.both
@@ -238,6 +264,7 @@ def build_rashomon_judgment(
             best_any["scores"]["contradiction"] if best_any else 0.0
         ),
         "decision_rule": "existential_dominant_path_contradiction",
+        "scorer_input_policy": "shared_semantic_triples_without_provenance_metadata",
         "best_contradiction_path": best_dominant or best_any,
         "candidate_queries": len(c1),
         "evaluated_query_paths": len(prepared),
@@ -268,7 +295,7 @@ def run(args) -> dict:
         for row in rows:
             if args.limit and processed >= args.limit:
                 break
-            key = f"{filename}:{row.get('id')}:{args.model}:{scorer_suffix}:batch-v3"
+            key = f"{filename}:{row.get('id')}:{args.model}:{scorer_suffix}:batch-v4"
             if key in existing:
                 output_rows.append(existing[key])
                 processed += 1
@@ -303,6 +330,7 @@ def run(args) -> dict:
         "model": args.model,
         "world_scorer": scorer_suffix,
         "decision_rule": "existential_dominant_path_contradiction",
+        "scorer_input_policy": "shared_semantic_triples_without_provenance_metadata",
         "direct_conflict_recall": direct_id,
         "rashomon_worlds_conflict_recall": rashomon_id,
         "gain_pp": 100 * (rashomon_id - direct_id),
