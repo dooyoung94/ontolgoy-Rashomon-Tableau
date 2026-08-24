@@ -53,8 +53,35 @@ def test_inconsistent_world_is_pruned():
 def test_three_hop_path_hypothesis_derives_endpoint_claim():
     reasoner = RelationalTableau(Ontology())
     facts = [Literal("r1", "A", "X"), Literal("r2", "X", "Y"), Literal("r3", "Y", "B")]
-    hypothesis = PathRelationHypothesis("three-hop", ("r1", "r2", "r3"), "q", 0.8, negated_result=True)
+    hypothesis = PathRelationHypothesis(
+        "three-hop", ("r1", "r2", "r3"), "q", 0.8,
+        negated_result=True, start="A", end="B",
+    )
     worlds = build_possible_worlds(facts, [[WorldChoice(hypothesis, "not-q", 0.8)]], reasoner)
     assert len(worlds) == 1
+    result = truth_marginal(worlds, Literal("q", "A", "B"), reasoner)
+    assert result.contradiction == 1.0
+
+
+def test_path_hypothesis_is_bound_to_retrieved_endpoints():
+    reasoner = RelationalTableau(Ontology())
+    facts = [
+        Literal("r1", "A", "X"), Literal("r2", "X", "B"),
+        Literal("r1", "C", "Y"), Literal("r2", "Y", "D"),
+    ]
+    hypothesis = PathRelationHypothesis("bound", ("r1", "r2"), "q", 1.0, start="A", end="B")
+    worlds = build_possible_worlds(facts, [[WorldChoice(hypothesis, "q", 1.0)]], reasoner)
+    assert Literal("q", "A", "B") in worlds[0].facts
+    assert Literal("q", "C", "D") not in worlds[0].facts
+
+
+def test_reverse_path_hypothesis_derives_query_direction():
+    reasoner = RelationalTableau(Ontology())
+    facts = [Literal("back", "B", "X"), Literal("back2", "X", "A")]
+    hypothesis = PathRelationHypothesis(
+        "reverse", ("back", "back2"), "q", 1.0,
+        negated_result=True, start="B", end="A", swap_endpoints=True,
+    )
+    worlds = build_possible_worlds(facts, [[WorldChoice(hypothesis, "not-q", 1.0)]], reasoner)
     result = truth_marginal(worlds, Literal("q", "A", "B"), reasoner)
     assert result.contradiction == 1.0
