@@ -1,0 +1,46 @@
+{
+  "benchmark": "MAGIC (Findings EMNLP 2025)",
+  "method": "Ontology-Guided Bidirectional Tableau",
+  "validated_workflow_run": 32720349460,
+  "artifact_id": 9517514860,
+  "protocol": {
+    "input": "released structured subgraph/original_triplet/perturb_triplet fields",
+    "candidate_retrieval": "bounded forward + reverse graph paths after ontology closure",
+    "verification": "q / not-q with explicit negation, incompatible relations, and declared exclusivity only",
+    "closed_world_assumption": false,
+    "max_path_hops": 4,
+    "warning": "Graph path coverage is candidate retrieval, not conflict accuracy. A path is accepted as truth/conflict only when ontology rules justify it."
+  },
+  "aggregates": {
+    "single_hop_legacy_direct_detection": 0.975609756097561,
+    "multi_hop_legacy_direct_detection": 0.33163265306122447,
+    "single_hop_ontology_tableau_detection": 0.4268292682926829,
+    "multi_hop_ontology_tableau_detection": 0.05442176870748299,
+    "single_hop_bidirectional_path_coverage": 0.6138211382113821,
+    "multi_hop_bidirectional_path_coverage": 0.6802721088435374
+  },
+  "per_file": [
+    {"file":"1-single-hop_conflict.json","n":208,"legacy_direct_heuristic_detection":0.9759615384615384,"ontology_tableau_conflict_detection":0.1875,"forward_candidate_path_coverage":0.6009615384615384,"reverse_candidate_path_coverage":0.11538461538461539,"bidirectional_candidate_path_coverage":0.6057692307692307,"query_status_counts":{"UNRESOLVED":169,"CONTRADICTED":39}},
+    {"file":"2-single-hop_conflict.json","n":154,"legacy_direct_heuristic_detection":0.9675324675324676,"ontology_tableau_conflict_detection":0.525974025974026,"forward_candidate_path_coverage":0.5324675324675324,"reverse_candidate_path_coverage":0.2597402597402597,"bidirectional_candidate_path_coverage":0.5454545454545454,"query_status_counts":{"CONTRADICTED":109,"UNRESOLVED":193,"SUPPORTED":5,"BOTH":1}},
+    {"file":"3-single-hop_conflict.json","n":80,"legacy_direct_heuristic_detection":0.9875,"ontology_tableau_conflict_detection":0.8,"forward_candidate_path_coverage":0.675,"reverse_candidate_path_coverage":0.4125,"bidirectional_candidate_path_coverage":0.7,"query_status_counts":{"UNRESOLVED":118,"CONTRADICTED":119,"SUPPORTED":2,"BOTH":1}},
+    {"file":"4-single-hop_conflict.json","n":50,"legacy_direct_heuristic_detection":0.98,"ontology_tableau_conflict_detection":0.52,"forward_candidate_path_coverage":0.68,"reverse_candidate_path_coverage":0.2,"bidirectional_candidate_path_coverage":0.72,"query_status_counts":{"CONTRADICTED":60,"UNRESOLVED":138,"SUPPORTED":2}},
+    {"file":"1-multi-hop_conflict.json","n":300,"legacy_direct_heuristic_detection":0.27,"ontology_tableau_conflict_detection":0.013333333333333334,"forward_candidate_path_coverage":0.5466666666666666,"reverse_candidate_path_coverage":0.18,"bidirectional_candidate_path_coverage":0.5733333333333334,"query_status_counts":{"UNRESOLVED":293,"CONTRADICTED":4,"SUPPORTED":3}},
+    {"file":"2-multi-hop_conflict.json","n":158,"legacy_direct_heuristic_detection":0.41139240506329117,"ontology_tableau_conflict_detection":0.10759493670886076,"forward_candidate_path_coverage":0.6708860759493671,"reverse_candidate_path_coverage":0.4177215189873418,"bidirectional_candidate_path_coverage":0.7341772151898734,"query_status_counts":{"SUPPORTED":7,"CONTRADICTED":22,"UNRESOLVED":287}},
+    {"file":"3-multi-hop_conflict.json","n":80,"legacy_direct_heuristic_detection":0.375,"ontology_tableau_conflict_detection":0.075,"forward_candidate_path_coverage":0.7875,"reverse_candidate_path_coverage":0.325,"bidirectional_candidate_path_coverage":0.825,"query_status_counts":{"UNRESOLVED":224,"CONTRADICTED":11,"SUPPORTED":4,"BOTH":1}},
+    {"file":"4-multi-hop_conflict.json","n":50,"legacy_direct_heuristic_detection":0.38,"ontology_tableau_conflict_detection":0.1,"forward_candidate_path_coverage":0.9,"reverse_candidate_path_coverage":0.32,"bidirectional_candidate_path_coverage":0.92,"query_status_counts":{"UNRESOLVED":185,"CONTRADICTED":9,"SUPPORTED":6}}
+  ],
+  "published_peer_reference": {
+    "source": "MAGIC, Findings of EMNLP 2025, Tables 9 and 10",
+    "counts": [300,158,80,50],
+    "peer_mean_weighted_id": 54.34378231292517,
+    "peer_mean_weighted_loc": 29.2483537414966,
+    "rows": {
+      "Mixtral-8x7B":{"weighted_id":28.211190476190477,"weighted_loc":9.226530612244897},
+      "Llama-3.1-70B":{"weighted_id":67.3152380952381,"weighted_loc":27.146496598639455},
+      "Claude-3.5-Haiku":{"weighted_id":48.80850340136055,"weighted_loc":34.014489795918365},
+      "GPT-4o-mini":{"weighted_id":78.40380952380953,"weighted_loc":47.28105442176871},
+      "o1":{"weighted_id":48.98017006802721,"weighted_loc":28.573197278911564}
+    },
+    "comparability_warning": "Published peers read natural-language contexts. Rashomon-Tableau here reads released structured triplets. These are separate evaluation tracks, not a head-to-head ranking."
+  }
+}
