@@ -1,0 +1,43 @@
+{
+  "dataset": "FOLIO v0.0 validation",
+  "source": "https://raw.githubusercontent.com/Yale-LILY/FOLIO/main/data/v0.0/folio-validation.jsonl",
+  "ci_run_id": 32702509600,
+  "total_examples": 204,
+  "supported_fragment_examples": 28,
+  "coverage": 0.13725490196078433,
+  "supported_definition": "Ground facts/conjunctions plus universal Horn implications with explicit negation; single ground-literal query; no existential, disjunction, XOR or biconditional.",
+  "label_distribution_supported": {"False": 8, "Unknown": 11, "True": 9},
+  "direct_fact_baseline": {
+    "accuracy": 0.42857142857142855,
+    "macro_f1": 0.26705653021442494
+  },
+  "forward_horn_baseline": {
+    "accuracy": 0.75,
+    "macro_f1": 0.7417624521072798
+  },
+  "semantic_clause_tableau": {
+    "accuracy": 0.9642857142857143,
+    "macro_f1": 0.9632850241545894,
+    "true_f1": 1.0,
+    "false_f1": 0.9333333333333333,
+    "unknown_f1": 0.9565217391304348
+  },
+  "rashomon_tableau_logical_core": {
+    "accuracy": 0.9642857142857143,
+    "macro_f1": 0.9632850241545894
+  },
+  "gain_vs_direct_fact_pp": {
+    "accuracy": 53.57142857142858,
+    "macro_f1": 69.62284939301645
+  },
+  "gain_vs_forward_horn_pp": {
+    "accuracy": 21.42857142857143,
+    "macro_f1": 22.15225720473096
+  },
+  "full_validation_conservative": {
+    "accuracy": 0.4166666666666667,
+    "macro_f1": 0.3197290675889897,
+    "interpretation": "Unsupported FOL formulas are conservatively predicted Unknown; this score exposes the current grammar-coverage limitation and is not presented as a competitive full-FOLIO result."
+  },
+  "interpretation": "FOLIO is single-context, so perspective indexing and Rashomon proof selection are dormant for class prediction. The experiment validates the semantic Tableau logical core. Multi-context scope gain and multi-proof explanation gain are evaluated separately."
+}
