@@ -8,7 +8,6 @@ conditions:
   - compute_matched_direct
   - rashomon_worlds_llm_scorer
   - rashomon_worlds_deberta_scorer
-
 discriminative_scorer:
   key: deberta_v3_nli
   model: MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli
@@ -23,10 +22,12 @@ model_sets:
     - mistral_small_4
     - llama_3_3_70b
 
+  # The newly introduced model is intentionally first so bounded smoke tests
+  # validate it before spending calls on the two already-known-good models.
   hf_open_llms:
+    - hf_command_a_111b
     - hf_gpt_oss_120b
     - hf_qwen3_235b
-    - hf_llama_3_3_70b
 
   historical_magic_peers:
     - mixtral_8x7b
@@ -36,6 +37,24 @@ model_sets:
     - o1
 
 models:
+  hf_command_a_111b:
+    display_name: Cohere Command A 111B (HF)
+    historical_magic_peer: false
+    exact_model: CohereLabs/c4ai-command-a-03-2025:cohere
+    execution: huggingface_router
+    api_key_env: HF_TOKEN
+    structured_output: true
+    max_tokens: 2048
+    schema_max_tokens:
+      magic_direct_judgment: 1024
+      magic_claim_extraction: 4096
+      rashomon_world_score: 768
+    timeout_seconds: 180
+    max_retries: 2
+    contract_retries: 2
+    retry_backoff_seconds: 2
+    availability_note: "Open-weight 111B Command A through Hugging Face Inference Providers; provider pinned to Cohere, which HF currently marks as supporting structured output. It replaces the HF Llama/Together route after GitHub Actions received Cloudflare HTTP 403 on all bounded smoke calls."
+
   hf_gpt_oss_120b:
     display_name: GPT-OSS 120B (HF)
     historical_magic_peer: false
@@ -72,24 +91,6 @@ models:
     contract_retries: 2
     retry_backoff_seconds: 2
     availability_note: "Open-weight Qwen3 MoE through Hugging Face router; provider pinned to Novita."
-
-  hf_llama_3_3_70b:
-    display_name: Llama 3.3 70B Instruct (HF)
-    historical_magic_peer: false
-    exact_model: meta-llama/Llama-3.3-70B-Instruct:together
-    execution: huggingface_router
-    api_key_env: HF_TOKEN
-    structured_output: true
-    max_tokens: 2048
-    schema_max_tokens:
-      magic_direct_judgment: 1024
-      magic_claim_extraction: 4096
-      rashomon_world_score: 768
-    timeout_seconds: 180
-    max_retries: 2
-    contract_retries: 2
-    retry_backoff_seconds: 2
-    availability_note: "Open-weight Llama 3.3 70B through Hugging Face router; provider pinned to Together because HF currently marks this route as supporting structured output. Replaces DeepSeek-R1 after repeated 504/429 provider instability in bounded smoke tests."
 
   gpt_5_5:
     display_name: GPT-5.5
