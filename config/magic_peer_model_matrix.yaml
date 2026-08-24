@@ -23,7 +23,6 @@ model_sets:
     - mistral_small_4
     - llama_3_3_70b
 
-  # Single-token Hugging Face Inference Providers track. Provider is pinned in the model id.
   hf_open_llms:
     - hf_gpt_oss_120b
     - hf_qwen3_235b
@@ -43,7 +42,14 @@ models:
     exact_model: openai/gpt-oss-120b:novita
     execution: huggingface_router
     api_key_env: HF_TOKEN
-    availability_note: "Open-weight model through Hugging Face Inference Providers; provider pinned to Novita for HF pay-as-you-go compatibility."
+    structured_output: true
+    max_tokens: 4096
+    timeout_seconds: 180
+    max_retries: 2
+    contract_retries: 2
+    retry_backoff_seconds: 2
+    reasoning_effort: low
+    availability_note: "Open-weight model through Hugging Face Inference Providers; provider pinned to Novita. Low reasoning effort preserves output budget for strict JSON benchmark responses."
 
   hf_qwen3_235b:
     display_name: Qwen3 235B A22B Instruct 2507 (HF)
@@ -51,6 +57,12 @@ models:
     exact_model: Qwen/Qwen3-235B-A22B-Instruct-2507:novita
     execution: huggingface_router
     api_key_env: HF_TOKEN
+    structured_output: true
+    max_tokens: 2048
+    timeout_seconds: 180
+    max_retries: 2
+    contract_retries: 2
+    retry_backoff_seconds: 2
     availability_note: "Open-weight Qwen3 MoE through Hugging Face router; provider pinned to Novita."
 
   hf_deepseek_r1_0528:
@@ -59,7 +71,13 @@ models:
     exact_model: deepseek-ai/DeepSeek-R1-0528:novita
     execution: huggingface_router
     api_key_env: HF_TOKEN
-    availability_note: "Open-weight reasoning model through Hugging Face router; provider pinned to Novita."
+    structured_output: true
+    max_tokens: 2048
+    timeout_seconds: 180
+    max_retries: 3
+    contract_retries: 2
+    retry_backoff_seconds: 3
+    availability_note: "Open-weight reasoning model through Hugging Face router; provider pinned to Novita with extra transient retry budget."
 
   gpt_5_5:
     display_name: GPT-5.5
