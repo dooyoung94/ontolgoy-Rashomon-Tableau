@@ -58,11 +58,17 @@ jobs:
             --limit '${{ inputs.limit }}' \
             --out results/magic_peer_matrix_summary.json \
             --loc-export results/magic_peer_loc_blinded.json
+      - name: Analyze paired method effects
+        run: |
+          python scripts/analyze_magic_peer_matrix.py \
+            --cache-dir results/magic_peer_matrix \
+            --out results/magic_peer_matrix_paired_stats.json
       - name: Upload paired results
         uses: actions/upload-artifact@v4
         with:
           name: magic-${{ inputs.model_set }}-paired-results
           path: |
             results/magic_peer_matrix_summary.json
+            results/magic_peer_matrix_paired_stats.json
             results/magic_peer_loc_blinded.json
             results/magic_peer_matrix/*.jsonl
