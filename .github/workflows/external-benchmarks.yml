@@ -44,6 +44,8 @@ jobs:
         run: python scripts/evaluate_magic_structured.py
       - name: Run MAGIC ontology-guided bidirectional Tableau benchmark
         run: python scripts/evaluate_magic_bidirectional.py
+      - name: Run MAGIC possible-world ablation
+        run: python scripts/evaluate_magic_possible_worlds.py
       - name: Clone official DAFNA-EA implementation
         run: git clone --depth 1 https://github.com/qcri/DAFNA-EA.git /tmp/DAFNA-EA
       - name: Prepare identical 100-book AuthorsNamesList subset for official DAFNA
@@ -109,6 +111,7 @@ jobs:
             results/truth_discovery_books_metrics.json
             results/magic_structured_metrics.json
             results/magic_bidirectional_tableau_metrics.json
+            results/magic_possible_worlds_metrics.json
             results/dafna_official/*.json
             results/dafna_official_comparison.json
             results/dafna_official_comparison.md
