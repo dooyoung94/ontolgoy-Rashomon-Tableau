@@ -1,0 +1,68 @@
+name: MAGIC Live Model Matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_set:
+        description: 'Model set from config/magic_peer_model_matrix.yaml'
+        required: true
+        default: current_available
+        type: choice
+        options:
+          - current_available
+          - historical_magic_peers
+      limit:
+        description: 'Rows to run; 0 = all 588'
+        required: true
+        default: '0'
+        type: string
+      attempts:
+        description: 'Independent attempts per MAGIC example'
+        required: true
+        default: '3'
+        type: string
+
+jobs:
+  live-matrix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MISTRAL_BASE_URL: ${{ vars.MISTRAL_BASE_URL || 'https://api.mistral.ai/v1' }}
+      LLAMA33_API_KEY: ${{ secrets.LLAMA33_API_KEY }}
+      LLAMA33_BASE_URL: ${{ vars.LLAMA33_BASE_URL }}
+      LLAMA_API_KEY: ${{ secrets.LLAMA_API_KEY }}
+      LLAMA_BASE_URL: ${{ vars.LLAMA_BASE_URL }}
+      MIXTRAL_API_KEY: ${{ secrets.MIXTRAL_API_KEY }}
+      MIXTRAL_BASE_URL: ${{ vars.MIXTRAL_BASE_URL }}
+      CLAUDE_BASE_URL: ${{ vars.CLAUDE_BASE_URL }}
+      CLAUDE5_BASE_URL: ${{ vars.CLAUDE5_BASE_URL }}
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install project and DeBERTa dependencies
+        run: |
+          pip install -e .
+          pip install 'transformers>=4.50,<5' 'torch>=2.2' sentencepiece
+      - name: Run paired MAGIC model matrix
+        run: |
+          python scripts/run_magic_peer_matrix.py \
+            --model-set '${{ inputs.model_set }}' \
+            --attempts '${{ inputs.attempts }}' \
+            --limit '${{ inputs.limit }}' \
+            --out results/magic_peer_matrix_summary.json \
+            --loc-export results/magic_peer_loc_blinded.json
+      - name: Upload paired results
+        uses: actions/upload-artifact@v4
+        with:
+          name: magic-${{ inputs.model_set }}-paired-results
+          path: |
+            results/magic_peer_matrix_summary.json
+            results/magic_peer_loc_blinded.json
+            results/magic_peer_matrix/*.jsonl
