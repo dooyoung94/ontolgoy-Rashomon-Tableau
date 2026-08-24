@@ -2,25 +2,16 @@
 
 ## Provenance-Aware Possible-World Reasoning for Multi-Hop Conflict and Truth Adjudication
 
-> **Research thesis**  
-> When multi-hop evidence is conflicting and relation semantics are incomplete, committing early to a single interpretation loses viable explanations. This project preserves mutually incompatible but internally consistent interpretations as weighted possible worlds, verifies each world logically, and adjudicates truth by marginalizing source, relation, evidence, and proof reliability across worlds.
+> **Research thesis:** When multi-hop evidence conflicts and relation semantics are incomplete, committing early to one interpretation can discard viable explanations. Rashomon Worlds preserves incompatible but internally consistent interpretations as possible worlds, verifies each world logically, and then adjudicates truth across worlds using provenance-aware reliability.
 
----
-
-## What is new in this research direction?
-
-This repository previously focused on an **Ontology-Guided Bidirectional Tableau**. That work is now treated as a **prior baseline**, not the final research claim.
-
-The new core object is a **PossibleWorld**:
+## Core model
 
 ```text
 Conflicting Provenanced Claims
             ↓
-    Multi-hop Derivations
+     Multi-hop Candidates
             ↓
  Uncertain Relation Semantics
-            ↓
-   Candidate Interpretations
             ↓
 ┌───────────┼───────────┐
 ▼           ▼           ▼
@@ -34,85 +25,80 @@ World 1   World 2    World K
  P(q) / P(¬q) / P(unresolved)
 ```
 
-A world contains:
+A world is represented as:
 
 ```text
 W = {claims, sources, relation interpretations, derivations/proofs}
 ```
 
-and is retained only when:
+and is retained only when `Tableau(W) = SAT`. Relation composition is not automatically promoted to a hard ontology axiom; uncertain compositions are represented as defeasible `RelationHypothesis` / `PathRelationHypothesis` choices that may differ between worlds.
 
-```text
-Tableau(W) = SAT
-```
+## Central research question
 
-Relation composition is **not forced into the hard ontology**. A composition may instead be represented as a defeasible `RelationHypothesis` and can differ across worlds.
+> **Does preserving multiple internally consistent worlds, then ranking them with provenance-aware reliability, improve multi-hop conflict localization and truth adjudication compared with early single-world commitment?**
 
----
-
-# Central Research Question
-
-> **Does preserving multiple internally consistent worlds and ranking them with provenance-aware reliability improve multi-hop conflict localization and truth adjudication compared with early single-world commitment?**
-
-### H1 — World construction
-Adaptive relation interpretations should recover valid multi-hop explanations that a static ontology leaves unresolved.
-
-### H2 — Delayed commitment
-Multiple consistent worlds should reduce false early decisions compared with selecting one relation interpretation or one proof path immediately.
-
-### H3 — World-level truth adjudication
-Combining source reliability, relation reliability, evidence support, and proof consistency at the world level should improve gold truth recovery over majority vote, source-only reliability, or single-proof scoring.
+- **H1 — World construction:** uncertain relation interpretations recover valid multi-hop explanations that static ontology rules leave unresolved.
+- **H2 — Delayed commitment:** retaining multiple consistent worlds avoids losing viable conflict explanations through early commitment.
+- **H3 — World adjudication:** source + relation + proof reliability can select the correct world/truth better than majority, source-only, or single-proof scoring.
 
 ---
 
-# Core Implementation
+# First measured experiment — MAGIC multi-hop structured track
 
-New module:
+Validated on all released MAGIC multi-hop conflict rows:
+
+- **588 rows**
+- **1,056 query-level conflicts**
+- workflow run: **32725453943**
+- artifact: **9519356207**
+
+Important protocol boundary: these released files are conflict cases, so the structured conflict numbers below are **recall**, not full MAGIC ID accuracy. `structured exact LOC` is our strict provenance diagnostic: every `original_triplet[i]` must be matched to a conflicting retained path covering its paired `perturb_triplet[i]`. It is **not** the published natural-language MAGIC LOC metric.
+
+| Variant | Row conflict recall | Query conflict recall | Gold-world query recall | Structured row exact LOC |
+|---|---:|---:|---:|---:|
+| **B1 Static Tableau** | **5.44%** | 4.45% | — | — |
+| **B2 Early-commit single world** | **29.93%** | 22.63% | — | — |
+| **B3 Possible-world retention** | — | — | **39.39%** | **29.42%** |
+| **B4 Weighted possible worlds** | **22.79%** | 16.86% | — | **7.14%** |
+
+Additional complexity measurements:
+
+- mean candidate paths per query: **1.46**
+- mean retained worlds per query: **4.10**
+- mean retained worlds per row: **7.36**
+
+Measured summary: [`results/magic_possible_worlds_summary.json`](./results/magic_possible_worlds_summary.json)
+
+### What the result actually says
+
+The result is **not** “multiverse automatically beats everything.” It separates two problems that the previous design mixed together:
+
+1. **World generation works better than static proof closure.** B3 can preserve an exact paired gold conflict explanation for **39.39% of query conflicts**, while static Tableau directly verifies only **4.45%** at query level.
+2. **World ranking is currently the bottleneck.** With only a weak fixed lexical relation prior and equal source reliability, B4 selects conflict on **22.79%** of rows and exact paired localization on only **7.14%**.
+3. **Naive weighting is not enough.** B4 is below B2's **29.93%** row conflict recall. Therefore H3 is **not yet supported** by MAGIC. This negative result is retained rather than tuned away.
+4. MAGIC does not provide meaningful source-reliability variation for this structured track. Therefore the next adjudication experiment belongs on a truth-discovery dataset such as DAFNA, while MAGIC remains the primary world-construction/localization diagnostic.
+
+The empirical decomposition is now:
 
 ```text
-src/rashomon_tableau/possible_worlds.py
+candidate discovery
+      ↓
+world construction / gold-world retention
+      ↓
+world ranking
+      ↓
+truth adjudication
 ```
 
-Main abstractions:
-
-- `RelationHypothesis`: defeasible two-hop relation interpretation; not a hard ontology axiom.
-- `WorldChoice`: one candidate semantic choice for an uncertainty slot, including an explicit unresolved choice.
-- `PossibleWorld`: claims + derived claims + semantic choices + provenance reliability.
-- `build_possible_worlds(...)`: enumerates candidate worlds and prunes Tableau-inconsistent worlds.
-- `truth_marginal(...)`: computes probability mass over `SUPPORTED / CONTRADICTED / BOTH / UNRESOLVED` across weighted worlds.
-
-Current baseline world weighting is intentionally simple and ablatable:
-
-```text
-world_weight ∝ relation_support × source_support
-```
-
-The scoring function is a research variable, not a fixed theorem.
+The current experiment shows that the largest immediate gap is **gold world retained (39.39%) → correctly selected/localized (7.14% exact row LOC)**, not simply graph path discovery.
 
 ---
 
-# Dataset Roles
+# Published MAGIC peer reference
 
-## MAGIC — Multi-hop conflict / localization
+Published peers read natural-language contexts and are evaluated with official ID/LOC. Their weighted multi-hop values are reference-only and must not be directly ranked against our structured diagnostics.
 
-**Purpose in the new paper:**
-
-> Can the method construct and rank the correct conflicting worlds and localize the evidence responsible for the conflict?
-
-Planned primary metrics:
-
-- official MAGIC **ID**
-- official MAGIC **LOC**
-- world coverage
-- gold-world recall
-- relation-interpretation accuracy
-- proof/provenance localization
-
-### Published MAGIC peer reference
-
-Weighted from the published N=1..4 multi-hop tables using the official subset counts:
-
-| Peer | ID | LOC |
+| Published peer | Weighted ID | Weighted LOC |
 |---|---:|---:|
 | Mixtral 8x7B | 28.21% | 9.23% |
 | Claude 3.5 Haiku | 48.81% | 34.01% |
@@ -121,15 +107,44 @@ Weighted from the published N=1..4 multi-hop tables using the official subset co
 | GPT-4o-mini | **78.40%** | **47.28%** |
 | **5-model mean** | **54.34%** | **29.25%** |
 
-These peers read natural-language contexts. The new Possible-World track must therefore either reproduce the same input protocol or be reported as a separate structured track.
+A fair peer-comparable experiment still requires the same natural-language input/output protocol. The current structured exact LOC should not be described as official MAGIC LOC.
 
-## DAFNA-EA Books — Truth adjudication
+---
 
-**Purpose in the new paper:**
+# Prior research baseline
 
-> Once competing worlds exist, does world-level reliability recover the gold truth better than truth-discovery baselines?
+The repository previously focused on an ontology-guided bidirectional Tableau. That work is retained as prior baseline, not the final research claim.
 
-Existing same-protocol prior baseline:
+Prior MAGIC structured multi-hop diagnostics:
+
+| Prior component | Result |
+|---|---:|
+| Direct heuristic detection | 33.16% |
+| Bidirectional candidate-path coverage | 68.03% |
+| Strict ontology-verified contradiction | 5.44% |
+
+The 68.03% value is candidate path coverage, **not accuracy**. The 5.44% strict contradiction value motivated treating uncertain relation interpretation as a world variable instead of continually hardcoding ontology composition rules.
+
+---
+
+# Dataset roles in the new paper
+
+## MAGIC — world construction and localization
+
+Primary questions:
+
+- Is the correct conflicting explanation present among retained worlds?
+- Are all query-specific gold perturb paths localized?
+- How quickly does the number of possible worlds grow with conflict count?
+- Can a non-leaking relation-semantic model improve world ranking?
+
+## DAFNA-EA Books — world-level truth adjudication
+
+Primary question:
+
+> Once competing worlds are available, does real source reliability improve gold truth recovery?
+
+Existing prior same-protocol result:
 
 | Prior method | Exact Truth Accuracy | Author F1 |
 |---|---:|---:|
@@ -140,100 +155,43 @@ Existing same-protocol prior baseline:
 | 3-Estimates | 53.00% | 65.45% |
 | Accu | 53.00% | 65.45% |
 
-**Important:** 61.00% is a previous-method result. It is not claimed as a Possible-World result until the new evaluator is run.
+The 61.00% value is a prior-method result. It is not claimed as a Rashomon Worlds result until the new world-level DAFNA evaluator is executed.
 
-## LogicNLI / FOLIO
-
-These are retained only as **reasoning-engine sanity checks**, not headline peer benchmarks for the new research claim.
+LogicNLI and FOLIO remain reasoning-engine sanity checks rather than headline peer benchmarks.
 
 ---
 
-# Why the old approach became insufficient
+# Implementation
 
-Prior measured MAGIC structured results were:
-
-| Prior component | Multi-hop |
-|---|---:|
-| direct heuristic detection | 33.16% |
-| bidirectional candidate-path coverage | 68.03% |
-| strict ontology-verified contradiction | 5.44% |
-
-Interpretation:
-
-- path discovery was not the main bottleneck;
-- static relation semantics could not justify most discovered paths;
-- forcing every ambiguous relation path into one hard ontology produces too many `UNRESOLVED` cases;
-- therefore uncertain relation interpretation is now modeled as a **world variable** rather than immediately promoted to an ontology axiom.
-
-These numbers are **prior baseline diagnostics**, not the new method's result.
-
----
-
-# Experimental Comparison Required for the New Paper
-
-The main ablation should be one coherent progression:
-
-| Variant | Relation semantics | Worlds | Reliability | MAGIC ID/LOC | DAFNA Truth |
-|---|---|---|---|---|---|
-| B0 Direct | direct only | single | none | measure | measure |
-| B1 Static Tableau | hard ontology | single | none | measure | measure |
-| B2 Adaptive relation | hard + defeasible candidates | single | relation | measure | measure |
-| B3 Possible worlds | hard + defeasible candidates | **multiple** | uniform | measure | measure |
-| **B4 Rashomon Worlds** | hard + defeasible candidates | **multiple** | **source + relation + proof** | **target** | **target** |
-
-The paper's strongest empirical claim is valid only if **B4 improves over B1–B3 on the same data and protocol**.
-
----
-
-# Research Boundary
-
-This work does **not** claim that:
-
-- possible-world semantics is new;
-- Tableau reasoning is new;
-- rule mining is new;
-- knowledge graphs are new;
-- source reliability is new.
-
-The intended contribution is their focused combination for this specific problem:
-
-> **source-provenanced conflicting multi-hop claims + uncertain relation interpretations + Tableau-consistent worlds + reliability-weighted truth marginalization.**
-
-Any rule miner, external ontology, embedding model, or LLM is a candidate-generator implementation detail unless an experiment specifically studies it.
-
----
-
-# Repository Structure
+Core files:
 
 ```text
-README.md                 # new research overview
-RESEARCH_PAPER.md         # manuscript aligned to possible-world thesis
-BENCHMARK_PROTOCOL.md     # fair dataset / metric / peer comparison protocol
+src/rashomon_tableau/possible_worlds.py
+    RelationHypothesis
+    PathRelationHypothesis
+    WorldChoice
+    PossibleWorld
+    build_possible_worlds(...)
+    truth_marginal(...)
 
-src/rashomon_tableau/
-├── possible_worlds.py    # NEW research core
-├── tableau.py            # logical world verifier
-├── ontology.py           # hard semantics / prior reasoning support
-├── graph_paths.py        # candidate derivation support
-└── ...                   # prior baselines and utilities
-
-tests/
-├── test_possible_worlds.py
-└── test_reasoner.py
-
-results/                  # measured results; prior results remain traceable
+scripts/evaluate_magic_possible_worlds.py
+    B1/B2/B3/B4 MAGIC multi-hop ablation
 ```
+
+Current world weighting is deliberately simple and ablatable:
+
+```text
+world_weight ∝ relation_support × source_support
+```
+
+The first MAGIC experiment uses equal source reliability and a fixed, broad lexical prior over relation names. No row IDs, `rel_id` labels, gold conflict labels, or sample-specific composition rules are used to score candidate relation interpretations. Gold perturb groups are used only after prediction for localization evaluation.
 
 ---
 
-# Status
+# Research boundary
 
-- Possible-world core: **implemented**
-- uncertain relation hypotheses: **implemented**
-- Tableau consistency pruning: **implemented**
-- source/relation weighted world normalization: **implemented baseline**
-- truth marginal over worlds: **implemented**
-- MAGIC official ID/LOC for the new method: **not measured yet**
-- DAFNA new possible-world evaluator: **not measured yet**
+This work does not claim that possible-world semantics, Tableau, knowledge graphs, rule mining, or source reliability are new independently. The intended contribution is the focused framework and empirical decomposition:
 
-No projected performance number is reported as a measured result.
+> **source-provenanced conflicting multi-hop claims + uncertain relation interpretations + Tableau-consistent possible worlds + reliability-weighted world/truth adjudication.**
+
+The strongest final claim remains conditional on the next experiments: improve non-leaking world ranking and validate world-level truth adjudication with real source reliability.
