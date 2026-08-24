@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rashomon-tableau-conan"
-version = "0.1.0"
-description = "Perspective-aware contradiction reasoning PoC on the Conan detective narrative benchmark"
+name = "rashomon-tableau"
+version = "0.2.0"
+description = "Provenance-aware logical conflict localization and truth resolution from conflicting sources"
 requires-python = ">=3.10"
 dependencies = ["PyYAML>=6.0"]
 
