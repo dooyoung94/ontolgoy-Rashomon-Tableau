@@ -20,61 +20,87 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Compile changed benchmark code
+        run: |
+          python -m py_compile \
+            src/rashomon_tableau/peer_llm.py \
+            src/rashomon_tableau/openai_frontend.py \
+            scripts/evaluate_magic_natural_language.py \
+            scripts/run_magic_peer_matrix.py \
+            scripts/analyze_magic_peer_matrix.py
+
       - name: Install project and DeBERTa dependencies
         run: |
           pip install -e .
           pip install 'transformers>=4.50,<5' 'torch>=2.2' sentencepiece
+
       - name: Validate HF token is present
         shell: bash
         run: |
           test -n "$HF_TOKEN" || { echo 'HF_TOKEN repository secret is missing'; exit 1; }
-      - name: Run fixed-call 20-row paired HF MAGIC pilot
+
+      - name: Run corrected fixed-call 20-row paired HF MAGIC pilot
         run: |
           python scripts/run_magic_peer_matrix.py \
             --model-set hf_open_llms \
             --attempts 1 \
             --limit 20 \
             --no-retries \
-            --cache-dir results/magic_hf_fixed20_cache \
-            --out results/magic_hf_fixed20_summary.json \
-            --loc-export results/magic_hf_fixed20_loc_blinded.json
+            --cache-dir results/magic_hf_fixed20_v2_cache \
+            --out results/magic_hf_fixed20_v2_summary.json \
+            --loc-export results/magic_hf_fixed20_v2_loc_blinded.json
+
       - name: Analyze paired method effects
         if: always()
         run: |
-          if ls results/magic_hf_fixed20_cache/*.jsonl >/dev/null 2>&1; then
+          if ls results/magic_hf_fixed20_v2_cache/*.jsonl >/dev/null 2>&1; then
             python scripts/analyze_magic_peer_matrix.py \
-              --cache-dir results/magic_hf_fixed20_cache \
-              --out results/magic_hf_fixed20_paired_stats.json
+              --cache-dir results/magic_hf_fixed20_v2_cache \
+              --out results/magic_hf_fixed20_v2_paired_stats.json
           else
-            echo '{"models":{},"note":"No completed fixed-call rows to analyze."}' > results/magic_hf_fixed20_paired_stats.json
+            echo '{"models":{},"note":"No completed fixed-call rows to analyze."}' > results/magic_hf_fixed20_v2_paired_stats.json
           fi
-      - name: Validate fixed-call budget
+
+      - name: Validate fixed logical-call budget and row completion
         if: always()
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          path = Path('results/magic_hf_fixed20_summary.json')
+          path = Path('results/magic_hf_fixed20_v2_summary.json')
           if not path.exists():
-              print('Summary was not created.')
-              raise SystemExit(0)
+              raise SystemExit('Summary was not created.')
           data = json.loads(path.read_text())
-          print(json.dumps(data.get('fixed_call_policy', {}), indent=2))
-          print('Models completed:', [m['model_key'] for m in data.get('models', [])])
-          print('Failures:', data.get('failures', []))
-          cap = data.get('fixed_call_policy', {}).get('provider_request_cap_if_no_retries')
+          policy = data.get('fixed_call_policy', {})
+          print(json.dumps(policy, indent=2))
+          print('Top-level failures:', data.get('failures', []))
+          cap = policy.get('logical_provider_call_cap')
           if cap != 300:
-              raise SystemExit(f'Unexpected provider request cap: {cap}; expected 300')
+              raise SystemExit(f'Unexpected logical provider call cap: {cap}; expected 300')
+          incomplete = []
           for model in data.get('models', []):
-              print(model['model_key'], 'n=', model['n'], 'calls=', model['physical_provider_calls'], 'expected=', model['expected_calls_if_complete'])
+              print(
+                  model['model_key'],
+                  'completed=', model['n'],
+                  'target=', model['target_rows'],
+                  'failed_rows=', model['failed_rows'],
+                  'physical_calls=', model['physical_provider_calls'],
+                  'transport_retries=', model['transport_retry_count'],
+              )
+              if model['target_rows'] != 20 or model['n'] != 20 or model['failed_rows'] != 0:
+                  incomplete.append(model['model_key'])
+          if data.get('failures') or incomplete:
+              raise SystemExit(f'Incomplete fixed20 models: {incomplete}; top-level failures={data.get("failures", [])}')
           PY
-      - name: Upload fixed-call 20-row pilot results
+
+      - name: Upload corrected fixed-call 20-row pilot results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: magic-hf-fixed-call-pilot-20
+          name: magic-hf-fixed-call-pilot-20-v2
           path: |
-            results/magic_hf_fixed20_summary.json
-            results/magic_hf_fixed20_paired_stats.json
-            results/magic_hf_fixed20_loc_blinded.json
-            results/magic_hf_fixed20_cache/*.jsonl
+            results/magic_hf_fixed20_v2_summary.json
+            results/magic_hf_fixed20_v2_paired_stats.json
+            results/magic_hf_fixed20_v2_loc_blinded.json
+            results/magic_hf_fixed20_v2_cache/*.jsonl
