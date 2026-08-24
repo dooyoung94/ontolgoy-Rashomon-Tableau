@@ -9,6 +9,7 @@ symmetric:
   - equivalent to
   - distinct from
   - connects with
+  - does not connect with
   - territory overlaps
   - territory disjoint with
   - disjoint from
@@ -59,6 +60,7 @@ composition:
 # Only relation pairs with a generally interpretable opposing meaning are declared.
 incompatible:
   - [equivalent to, distinct from]
+  - [connects with, does not connect with]
   - [territory overlaps, territory disjoint with]
 
 # Avoid assuming functionality unless the domain guarantees it.
