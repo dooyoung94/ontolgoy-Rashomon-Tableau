@@ -1,0 +1,66 @@
+{
+  "benchmark": "MAGIC (EMNLP 2025 Findings)",
+  "mode": "structured-triplet sanity benchmark",
+  "important_caveat": "This evaluator uses MAGIC's released structured original/perturbed triplets, not only the natural-language contexts. It therefore validates deterministic conflict/provenance handling but is not directly comparable to the paper's LLM ID/LOC scores.",
+  "total_examples": 1080,
+  "conflict_detection_accuracy": 0.6314814814814815,
+  "pair_localization_coverage": 1.0,
+  "per_file": [
+    {
+      "file": "1-single-hop_conflict.json",
+      "n": 208,
+      "conflict_detection_accuracy": 0.9855769230769231,
+      "pair_localization_coverage": 1.0,
+      "localized_pattern_counts": {"explicit_negation": 26, "object_replacement": 56, "relation_replacement": 123}
+    },
+    {
+      "file": "2-single-hop_conflict.json",
+      "n": 154,
+      "conflict_detection_accuracy": 0.987012987012987,
+      "pair_localization_coverage": 1.0,
+      "localized_pattern_counts": {"explicit_negation": 71, "object_replacement": 38, "relation_replacement": 43}
+    },
+    {
+      "file": "3-single-hop_conflict.json",
+      "n": 80,
+      "conflict_detection_accuracy": 1.0,
+      "pair_localization_coverage": 1.0,
+      "localized_pattern_counts": {"explicit_negation": 47, "object_replacement": 10, "relation_replacement": 23}
+    },
+    {
+      "file": "4-single-hop_conflict.json",
+      "n": 50,
+      "conflict_detection_accuracy": 1.0,
+      "pair_localization_coverage": 1.0,
+      "localized_pattern_counts": {"explicit_negation": 25, "object_replacement": 17, "relation_replacement": 8}
+    },
+    {
+      "file": "1-multi-hop_conflict.json",
+      "n": 300,
+      "conflict_detection_accuracy": 0.27,
+      "pair_localization_coverage": 1.0,
+      "localized_pattern_counts": {"explicit_negation": 0, "object_replacement": 80, "relation_replacement": 1}
+    },
+    {
+      "file": "2-multi-hop_conflict.json",
+      "n": 158,
+      "conflict_detection_accuracy": 0.41139240506329117,
+      "pair_localization_coverage": 1.0,
+      "localized_pattern_counts": {"explicit_negation": 0, "object_replacement": 62, "relation_replacement": 3}
+    },
+    {
+      "file": "3-multi-hop_conflict.json",
+      "n": 80,
+      "conflict_detection_accuracy": 0.375,
+      "pair_localization_coverage": 1.0,
+      "localized_pattern_counts": {"explicit_negation": 0, "object_replacement": 26, "relation_replacement": 4}
+    },
+    {
+      "file": "4-multi-hop_conflict.json",
+      "n": 50,
+      "conflict_detection_accuracy": 0.38,
+      "pair_localization_coverage": 1.0,
+      "localized_pattern_counts": {"explicit_negation": 0, "object_replacement": 15, "relation_replacement": 4}
+    }
+  ]
+}
