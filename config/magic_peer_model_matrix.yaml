@@ -22,14 +22,11 @@ model_sets:
     - mistral_small_4
     - llama_3_3_70b
 
-  # The newly introduced model is intentionally first so bounded smoke tests
-  # validate it before spending calls on the two already-known-good models.
   hf_open_llms:
     - hf_command_a_111b
     - hf_gpt_oss_120b
     - hf_qwen3_235b
 
-  # Compatibility revalidation set: exactly one model, exactly three smoke calls.
   hf_command_a_only:
     - hf_command_a_111b
 
@@ -52,8 +49,11 @@ models:
     max_tokens: 2048
     schema_max_tokens:
       magic_direct_judgment: 1024
+      magic_compute_analysis: 2048
+      magic_compute_final: 1024
       magic_claim_extraction: 4096
       rashomon_world_score: 768
+      rashomon_world_batch_score: 4096
     timeout_seconds: 180
     max_retries: 2
     contract_retries: 2
@@ -70,14 +70,17 @@ models:
     max_tokens: 2048
     schema_max_tokens:
       magic_direct_judgment: 1024
+      magic_compute_analysis: 2048
+      magic_compute_final: 1024
       magic_claim_extraction: 4096
       rashomon_world_score: 768
+      rashomon_world_batch_score: 4096
     timeout_seconds: 180
     max_retries: 2
     contract_retries: 2
     retry_backoff_seconds: 2
     reasoning_effort: low
-    availability_note: "Open-weight GPT-OSS through Hugging Face Inference Providers; provider pinned to Novita. Task-specific output budgets keep claim extraction complete without inflating short judgment/scoring calls."
+    availability_note: "Open-weight GPT-OSS through Hugging Face Inference Providers; provider pinned to Novita. Task-specific output budgets keep claim extraction and batch world scoring complete without inflating short judgment calls."
 
   hf_qwen3_235b:
     display_name: Qwen3 235B A22B Instruct 2507 (HF)
@@ -89,8 +92,11 @@ models:
     max_tokens: 2048
     schema_max_tokens:
       magic_direct_judgment: 1024
+      magic_compute_analysis: 2048
+      magic_compute_final: 1024
       magic_claim_extraction: 4096
       rashomon_world_score: 768
+      rashomon_world_batch_score: 4096
     timeout_seconds: 180
     max_retries: 2
     contract_retries: 2
