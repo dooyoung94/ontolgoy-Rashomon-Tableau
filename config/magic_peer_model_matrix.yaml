@@ -1,5 +1,5 @@
 # MAGIC paired method-effect matrix.
-# Goal: measure the effect of Rashomon Worlds *within the same base model*.
+# Goal: measure the effect of candidate-path conflict scoring *within the same base model*.
 # Gold original_triplet / perturb_triplet fields are evaluation-only.
 
 attempts_per_example: 3
@@ -79,8 +79,9 @@ models:
     max_retries: 2
     contract_retries: 2
     retry_backoff_seconds: 2
+    fixed_transport_retries: 2
     reasoning_effort: low
-    availability_note: "Open-weight GPT-OSS through Hugging Face Inference Providers; provider pinned to Novita. Task-specific output budgets keep claim extraction and batch world scoring complete without inflating short judgment calls."
+    availability_note: "Open-weight GPT-OSS through Hugging Face Inference Providers; provider pinned to Novita. During fixed-call evaluation, transient transport errors such as HTTP 504 may resend the exact same payload up to two times; contract/regeneration retries remain disabled."
 
   hf_qwen3_235b:
     display_name: Qwen3 235B A22B Instruct 2507 (HF)
@@ -148,7 +149,7 @@ models:
     execution: openai_compatible
     model_env: LLAMA33_MODEL
     base_url_env: LLAMA33_BASE_URL
-    api_key_env: LLAMA33_API_KEY
+    api_key_env: LLAMA_API_KEY
     availability_note: "Open weights; serve the frozen checkpoint through vLLM or another OpenAI-compatible endpoint."
 
   mixtral_8x7b:
@@ -158,7 +159,7 @@ models:
     execution: openai_compatible
     model_env: MIXTRAL_MODEL
     base_url_env: MIXTRAL_BASE_URL
-    api_key_env: MIXTRAL_API_KEY
+    api_key_env: MISTRAL_API_KEY
     availability_note: "Retired from Mistral first-party API; use frozen weights or an endpoint serving the exact checkpoint."
 
   llama_3_1_70b:
