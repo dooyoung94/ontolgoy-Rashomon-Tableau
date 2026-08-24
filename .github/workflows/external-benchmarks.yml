@@ -6,7 +6,7 @@ on:
     paths:
       - 'src/rashomon_tableau/**'
       - 'scripts/evaluate_folio_fragment.py'
-      - 'scripts/inspect_logicnli.py'
+      - 'scripts/evaluate_logicnli.py'
       - 'scripts/run_ablation.py'
       - '.github/workflows/external-benchmarks.yml'
       - 'config/ontology_rules.yaml'
@@ -15,7 +15,7 @@ on:
     paths:
       - 'src/rashomon_tableau/**'
       - 'scripts/evaluate_folio_fragment.py'
-      - 'scripts/inspect_logicnli.py'
+      - 'scripts/evaluate_logicnli.py'
       - 'scripts/run_ablation.py'
       - '.github/workflows/external-benchmarks.yml'
       - 'config/ontology_rules.yaml'
@@ -36,8 +36,8 @@ jobs:
         run: python scripts/run_ablation.py
       - name: Run official FOLIO validation fragment benchmark
         run: python scripts/evaluate_folio_fragment.py
-      - name: Inspect official LogicNLI archive
-        run: python scripts/inspect_logicnli.py
+      - name: Run official LogicNLI structured test benchmark
+        run: python scripts/evaluate_logicnli.py
       - name: Run tests
         run: |
           pip install pytest
@@ -48,3 +48,4 @@ jobs:
           path: |
             results/ablation_metrics.json
             results/folio_fragment_metrics.json
+            results/logicnli_metrics.json
