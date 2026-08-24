@@ -1,5 +1,6 @@
 name: MAGIC HF Open-LLM Pilot Once
 
+# fixed-v3 rerun trigger: semantic-only scorer input + transport fixes
 on:
   push:
     branches: [main]
