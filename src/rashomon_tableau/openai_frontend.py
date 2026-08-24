@@ -221,7 +221,6 @@ def direct_magic_judgment(client: OpenAIResponsesClient, context1: str, context2
 
 
 def compute_matched_analysis(client: OpenAIResponsesClient, context1: str, context2: str) -> StructuredResponse:
-    """First of exactly two calls in the fixed-call compute-matched baseline."""
     return client.structured(
         instructions=(
             "Analyze the two contexts for possible factual conflicts, including multi-hop or implicit conflicts. "
@@ -240,7 +239,6 @@ def compute_matched_finalize(
     context2: str,
     analysis: dict[str, Any],
 ) -> StructuredResponse:
-    """Second of exactly two calls in the fixed-call compute-matched baseline."""
     input_text = (
         f"{_contexts_prompt(context1, context2)}\n\nFIRST-PASS ANALYSIS\n"
         f"{json.dumps(analysis, ensure_ascii=False)}"
@@ -265,27 +263,28 @@ def score_world_bidirectionally(
     evidence = "\n".join(f"- {x}" for x in world_evidence)
     return client.structured(
         instructions=(
-            "Score the supplied possible world against the query in three mutually exclusive directions: "
-            "support, contradiction, unresolved. Consider the entire multi-hop evidence. "
-            "Return calibrated relative scores in [0,1]; they need not be exact probabilities because the caller renormalizes them."
+            "Score the supplied evidence against the query in three mutually exclusive directions: support, contradiction, unresolved. "
+            "Contradiction means the evidence implies that the query proposition is false, including an incompatible object/value or "
+            "the opposite polarity reached through a valid multi-hop chain. Evaluate only this query-evidence pair. "
+            "Return calibrated relative scores in [0,1]; the caller renormalizes them."
         ),
-        input_text=f"QUERY\n{query}\n\nWORLD EVIDENCE\n{evidence}",
+        input_text=f"QUERY\n{query}\n\nEVIDENCE\n{evidence}",
         schema_name="rashomon_world_score",
         schema=WORLD_SCORE_SCHEMA,
     )
 
 
 def score_worlds_batch(client: OpenAIResponsesClient, items: list[dict[str, Any]]) -> StructuredResponse:
-    """Score all candidate query-path worlds in one LLM call.
-
-    Each item must contain a stable id, query string, and world_evidence list. The
-    caller verifies that every requested id is returned exactly once.
-    """
+    """Score candidate query-path pairs independently in one physical LLM request."""
     return client.structured(
         instructions=(
-            "For every supplied candidate possible world, score the evidence against its query in three mutually exclusive "
-            "directions: support, contradiction, unresolved. Consider the entire multi-hop evidence for each item independently. "
-            "Return exactly one score object for every input id and preserve each id exactly. Scores must be in [0,1]."
+            "Evaluate EACH input item independently; never average, rank, calibrate, or compare one item against another item in the batch. "
+            "For each id, decide how that item's world_evidence bears on that item's query using three scores: support, contradiction, unresolved. "
+            "CONTRADICTION is high when the evidence entails that the query is false, including a conflicting object/value, an explicit negation, "
+            "or an opposite proposition established through the supplied multi-hop chain. SUPPORT is high only when the evidence entails the query. "
+            "UNRESOLVED is high only when the evidence establishes neither the query nor its contradiction. A single strongly contradictory item "
+            "must remain strongly contradictory even if every other batch item is unresolved or supportive. Do not dilute contradiction because "
+            "other candidate paths exist. Return exactly one score object for every input id, preserve ids exactly, and use scores in [0,1]."
         ),
         input_text=json.dumps({"items": items}, ensure_ascii=False),
         schema_name="rashomon_world_batch_score",
