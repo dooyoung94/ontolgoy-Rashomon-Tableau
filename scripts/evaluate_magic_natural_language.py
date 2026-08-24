@@ -15,7 +15,7 @@ from rashomon_tableau.openai_frontend import (
     OpenAIResponsesClient,
     direct_magic_judgment,
     extract_claims,
-    score_world_bidirectionally,
+    score_worlds_batch,
 )
 from rashomon_tableau.possible_worlds import PathRelationHypothesis, WorldChoice, build_possible_worlds, truth_marginal
 from rashomon_tableau.tableau import RelationalTableau
@@ -73,10 +73,13 @@ def build_rashomon_judgment(
     max_hops: int = 4,
     world_scorer: DebertaWorldScorer | None = None,
 ) -> dict:
-    """Build Rashomon judgment from natural-language contexts.
+    """Build Rashomon judgment with fixed LLM-call policy.
 
-    The LLM always performs claim extraction. World scoring is either the same LLM
-    or a DeBERTa-v3 NLI discriminator. Gold MAGIC triples are never supplied here.
+    same-LLM mode uses exactly two logical LLM calls per macro attempt:
+      1) claim extraction
+      2) one batch scoring call for all candidate query-path worlds
+    DeBERTa mode uses one LLM extraction call plus local discriminative scoring.
+    Gold MAGIC triples are never supplied to prediction.
     """
     extracted = extract_claims(client, context1, context2)
     claims = extracted.data["claims"]
@@ -85,37 +88,78 @@ def build_rashomon_judgment(
 
     ontology = Ontology()
     reasoner = RelationalTableau(ontology)
-    candidates: list[dict] = []
     usage = {
         "input_tokens": extracted.usage.input_tokens,
         "output_tokens": extracted.usage.output_tokens,
         "calls": 1,
     }
-    scorer_name = "deberta-v3" if world_scorer is not None else "same-llm"
+    scorer_name = "deberta-v3" if world_scorer is not None else "same-llm-batch"
 
+    prepared: list[dict] = []
+    batch_items: list[dict] = []
     for q_index, query in enumerate(c1):
-        paths = bidirectional_candidate_paths(c2, query.subject, query.object, max_hops=max_hops, max_paths_per_direction=8)
-        if not paths:
+        paths = bidirectional_candidate_paths(
+            c2, query.subject, query.object, max_hops=max_hops, max_paths_per_direction=8
+        )
+        for p_index, path in enumerate(paths):
+            prefix = f"q{q_index}-p{p_index}"
+            query_repr = literal_text(query)
+            evidence_repr = [literal_text(x) for x in path.literals]
+            prepared.append({
+                "id": prefix,
+                "q_index": q_index,
+                "query": query,
+                "path": path,
+                "query_repr": query_repr,
+                "evidence_repr": evidence_repr,
+            })
+            if world_scorer is None:
+                batch_items.append({"id": prefix, "query": query_repr, "world_evidence": evidence_repr})
+
+    score_map: dict[str, tuple[float, float, float]] = {}
+    if world_scorer is None:
+        # Preserve exactly two LLM calls even when no graph paths are found. The empty
+        # batch is a real diagnostic of the constructed search space and keeps compute
+        # accounting deterministic across rows.
+        batch = score_worlds_batch(client, batch_items)
+        usage["input_tokens"] += batch.usage.input_tokens
+        usage["output_tokens"] += batch.usage.output_tokens
+        usage["calls"] += 1
+        returned = batch.data.get("scores", [])
+        returned_ids = [str(x.get("id")) for x in returned]
+        expected_ids = [str(x["id"]) for x in batch_items]
+        if len(returned_ids) != len(set(returned_ids)):
+            raise RuntimeError("Batch world scorer returned duplicate ids")
+        if set(returned_ids) != set(expected_ids):
+            raise RuntimeError(
+                f"Batch world scorer id mismatch: expected={expected_ids[:20]} returned={returned_ids[:20]}"
+            )
+        for item in returned:
+            score_map[str(item["id"])] = (
+                float(item["support"]),
+                float(item["contradiction"]),
+                float(item["unresolved"]),
+            )
+    else:
+        for item in prepared:
+            nli = world_scorer.score(item["query_repr"], item["evidence_repr"])
+            score_map[item["id"]] = (nli.support, nli.contradiction, nli.unresolved)
+
+    by_query: dict[int, list[dict]] = {}
+    for item in prepared:
+        by_query.setdefault(item["q_index"], []).append(item)
+
+    candidates: list[dict] = []
+    for q_index, query in enumerate(c1):
+        items = by_query.get(q_index, [])
+        if not items:
             continue
         choices: list[WorldChoice] = []
         path_meta: dict[str, dict] = {}
-        for p_index, path in enumerate(paths):
-            query_repr = literal_text(query)
-            evidence_repr = [literal_text(x) for x in path.literals]
-            if world_scorer is None:
-                score = score_world_bidirectionally(client, query=query_repr, world_evidence=evidence_repr)
-                usage["input_tokens"] += score.usage.input_tokens
-                usage["output_tokens"] += score.usage.output_tokens
-                usage["calls"] += 1
-                raw_support = float(score.data["support"])
-                raw_contradiction = float(score.data["contradiction"])
-                raw_unresolved = float(score.data["unresolved"])
-            else:
-                nli = world_scorer.score(query_repr, evidence_repr)
-                raw_support = nli.support
-                raw_contradiction = nli.contradiction
-                raw_unresolved = nli.unresolved
-
+        for item in items:
+            prefix = item["id"]
+            path = item["path"]
+            raw_support, raw_contradiction, raw_unresolved = score_map[prefix]
             support, contradiction, unresolved = _normalize_scores(
                 raw_support, raw_contradiction, raw_unresolved
             )
@@ -123,7 +167,6 @@ def build_rashomon_judgment(
             start = path.literals[0].subject
             end = path.literals[-1].object
             swap = path.direction == "REVERSE"
-            prefix = f"q{q_index}-p{p_index}"
             support_h = PathRelationHypothesis(
                 f"{prefix}-support", relations, query.predicate, support,
                 negated_result=query.negated, origin=f"{scorer_name}-world-scorer",
@@ -143,13 +186,13 @@ def build_rashomon_judgment(
                 "direction": path.direction,
                 "sentence_ids": sorted({int(x.story) for x in path.literals if x.story is not None}),
                 "scores": {"support": support, "contradiction": contradiction, "unresolved": unresolved},
-                "path": evidence_repr,
+                "path": item["evidence_repr"],
             }
 
         worlds = build_possible_worlds(c2, [choices], reasoner, {"context2": 1.0}, max_worlds=128)
         marginal = truth_marginal(worlds, query, reasoner)
         conflict_mass = marginal.contradiction + marginal.both
-        candidate = {
+        candidates.append({
             "query": literal_text(query),
             "query_sentence_id": int(query.story or 0),
             "support_mass": marginal.support,
@@ -157,8 +200,7 @@ def build_rashomon_judgment(
             "unresolved_mass": marginal.unresolved,
             "world_count": len(worlds),
             "paths": path_meta,
-        }
-        candidates.append(candidate)
+        })
 
     ranked = sorted(candidates, key=lambda x: x["contradiction_mass"], reverse=True)
     best = ranked[0] if ranked else None
@@ -176,7 +218,7 @@ def build_rashomon_judgment(
         "locations": locations,
         "confidence": best["contradiction_mass"] if best else 0.0,
         "candidate_queries": len(c1),
-        "evaluated_query_paths": sum(len(x["paths"]) for x in candidates),
+        "evaluated_query_paths": len(prepared),
         "usage": usage,
         "world_scorer": scorer_name,
         "candidates": ranked[:10],
@@ -204,7 +246,7 @@ def run(args) -> dict:
         for row in rows:
             if args.limit and processed >= args.limit:
                 break
-            key = f"{filename}:{row.get('id')}:{args.model}:{scorer_suffix}"
+            key = f"{filename}:{row.get('id')}:{args.model}:{scorer_suffix}:batch-v1"
             if key in existing:
                 output_rows.append(existing[key])
                 processed += 1
