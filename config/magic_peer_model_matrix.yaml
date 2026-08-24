@@ -1,0 +1,70 @@
+# MAGIC peer-model matrix for paired method evaluation.
+# Goal: measure the effect of Rashomon Worlds within each model, not compare unrelated model families.
+# Gold original_triplet / perturb_triplet fields are evaluation-only.
+
+attempts_per_example: 3
+conditions:
+  - magic_direct
+  - compute_matched_direct
+  - rashomon_worlds
+
+models:
+  mixtral_8x7b:
+    display_name: Mixtral 8x7B Instruct
+    historical_magic_peer: true
+    exact_model: open-mixtral-8x7b
+    execution: openai_compatible
+    model_env: MIXTRAL_MODEL
+    base_url_env: MIXTRAL_BASE_URL
+    api_key_env: MIXTRAL_API_KEY
+    availability_note: "Mistral first-party API retired open-mixtral-8x7b on 2025-03-30; use frozen weights or an endpoint serving the exact weights."
+
+  llama_3_1_70b:
+    display_name: Llama 3.1 70B Instruct
+    historical_magic_peer: true
+    exact_model: meta-llama/Llama-3.1-70B-Instruct
+    execution: openai_compatible
+    model_env: LLAMA_MODEL
+    base_url_env: LLAMA_BASE_URL
+    api_key_env: LLAMA_API_KEY
+    availability_note: "Frozen Meta weights remain available; recommended reproduction path is vLLM or another endpoint serving the exact checkpoint."
+
+  claude_3_5_haiku:
+    display_name: Claude 3.5 Haiku
+    historical_magic_peer: true
+    exact_model: claude-3-5-haiku-20241022
+    execution: anthropic_or_archived_endpoint
+    model_env: CLAUDE_MODEL
+    base_url_env: CLAUDE_BASE_URL
+    api_key_env: ANTHROPIC_API_KEY
+    availability_note: "Anthropic retired claude-3-5-haiku-20241022 on 2026-02-19. Exact rerun requires an archived/third-party endpoint that still serves this checkpoint; otherwise report replacement-model results separately."
+
+  gpt_4o_mini:
+    display_name: GPT-4o-mini
+    historical_magic_peer: true
+    exact_model: gpt-4o-mini-2024-07-18
+    execution: openai
+    model_env: GPT4O_MINI_MODEL
+    api_key_env: OPENAI_API_KEY
+    availability_note: "The GPT-4o-mini family remains available; pin the historical snapshot when the account still permits it, otherwise report the alias/version used."
+
+  o1:
+    display_name: o1
+    historical_magic_peer: true
+    exact_model: o1-2024-12-17
+    execution: openai
+    model_env: O1_MODEL
+    api_key_env: OPENAI_API_KEY
+    availability_note: "o1 is a previous-generation model; record the exact endpoint/snapshot accepted by the account."
+
+reporting:
+  primary_effects:
+    - delta_id_rashomon_vs_compute_matched_direct
+    - delta_loc_rashomon_vs_compute_matched_direct
+    - delta_id_rashomon_vs_magic_direct
+    - delta_loc_rashomon_vs_magic_direct
+  aggregate:
+    - mean_delta_id_across_models
+    - mean_delta_loc_across_models
+    - models_improved_id_count
+    - models_improved_loc_count
