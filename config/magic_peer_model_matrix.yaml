@@ -16,14 +16,14 @@ discriminative_scorer:
   note: "NLI discriminator; never used as a generative claim extractor."
 
 model_sets:
-  # Default for new experiments: models/checkpoints that have a practical current execution path.
+  # Current 2026 execution track. Report separately from the historical MAGIC peer reproduction.
   current_available:
+    - gpt_5_5
     - gpt_5_4_mini
+    - claude_sonnet_5
     - mistral_small_4
     - llama_3_3_70b
-    - claude_sonnet_4
 
-  # Historical MAGIC peer reproduction. Keep separate from the current-model track.
   historical_magic_peers:
     - mixtral_8x7b
     - llama_3_1_70b
@@ -32,6 +32,15 @@ model_sets:
     - o1
 
 models:
+  gpt_5_5:
+    display_name: GPT-5.5
+    historical_magic_peer: false
+    exact_model: gpt-5.5
+    execution: openai
+    model_env: GPT55_MODEL
+    api_key_env: OPENAI_API_KEY
+    availability_note: "Current OpenAI frontier model. Record the accepted API model identifier and reasoning settings."
+
   gpt_5_4_mini:
     display_name: GPT-5.4 mini
     historical_magic_peer: false
@@ -39,7 +48,17 @@ models:
     execution: openai
     model_env: GPT54_MINI_MODEL
     api_key_env: OPENAI_API_KEY
-    availability_note: "Current OpenAI API snapshot used for reproducible new-model evaluation."
+    availability_note: "Pinned current OpenAI mini snapshot for reproducible efficiency-oriented evaluation."
+
+  claude_sonnet_5:
+    display_name: Claude Sonnet 5
+    historical_magic_peer: false
+    exact_model: claude-sonnet-5
+    execution: anthropic_or_archived_endpoint
+    model_env: CLAUDE5_MODEL
+    base_url_env: CLAUDE5_BASE_URL
+    api_key_env: ANTHROPIC_API_KEY
+    availability_note: "Current Anthropic Sonnet model; dateless 5.x model IDs are pinned releases per Anthropic versioning docs."
 
   mistral_small_4:
     display_name: Mistral Small 4
@@ -60,16 +79,6 @@ models:
     base_url_env: LLAMA33_BASE_URL
     api_key_env: LLAMA33_API_KEY
     availability_note: "Open weights; serve the frozen checkpoint through vLLM or another OpenAI-compatible endpoint."
-
-  claude_sonnet_4:
-    display_name: Claude Sonnet 4
-    historical_magic_peer: false
-    exact_model: claude-sonnet-4-20250514
-    execution: anthropic_or_archived_endpoint
-    model_env: CLAUDE4_MODEL
-    base_url_env: CLAUDE4_BASE_URL
-    api_key_env: ANTHROPIC_API_KEY
-    availability_note: "Anthropic Messages API model used for the current-model track."
 
   mixtral_8x7b:
     display_name: Mixtral 8x7B Instruct
