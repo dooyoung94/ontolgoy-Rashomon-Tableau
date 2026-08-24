@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  hf-pilot:
+  hf-smoke:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -20,46 +20,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install project and DeBERTa dependencies
+      - name: Install project only
         run: |
           pip install -e .
-          pip install 'transformers>=4.50,<5' 'torch>=2.2' sentencepiece
       - name: Validate HF token is present
         shell: bash
         run: |
           test -n "$HF_TOKEN" || { echo 'HF_TOKEN repository secret is missing'; exit 1; }
-      - name: Run 3-row HF contract diagnostic via Novita
+      - name: Run bounded HF contract smoke test
         run: |
-          python scripts/run_magic_peer_matrix.py \
+          python scripts/smoke_hf_contracts.py \
             --model-set hf_open_llms \
-            --attempts 3 \
-            --limit 3 \
-            --out results/magic_hf_pilot_summary.json \
-            --loc-export results/magic_hf_pilot_loc_blinded.json
-      - name: Require at least one successful HF model
+            --out results/hf_contract_smoke.json
+      - name: Show bounded request policy
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          data = json.loads(Path('results/magic_hf_pilot_summary.json').read_text())
-          models = data.get('models', [])
-          if not models:
-              raise SystemExit(f"No HF model completed successfully. Failures: {data.get('failures', [])}")
-          print(f"Successful HF models: {len(models)}")
-          print(json.dumps(models, indent=2))
+          data = json.loads(Path('results/hf_contract_smoke.json').read_text())
+          print('Hard provider request cap:', data['hard_provider_request_cap'])
+          print('Retries enabled:', data['retries_enabled'])
+          for model in data['models']:
+              print(model['model_key'], model['successful_calls'], '/ 3', 'all_ok=', model['all_contracts_ok'])
           PY
-      - name: Analyze paired method effects
-        run: |
-          python scripts/analyze_magic_peer_matrix.py \
-            --cache-dir results/magic_peer_matrix \
-            --out results/magic_hf_pilot_paired_stats.json
-      - name: Upload HF diagnostic results
+      - name: Upload HF smoke results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: magic-hf-open-llm-diagnostic-3
-          path: |
-            results/magic_hf_pilot_summary.json
-            results/magic_hf_pilot_paired_stats.json
-            results/magic_hf_pilot_loc_blinded.json
-            results/magic_peer_matrix/*.jsonl
+          name: magic-hf-contract-smoke-bounded
+          path: results/hf_contract_smoke.json
