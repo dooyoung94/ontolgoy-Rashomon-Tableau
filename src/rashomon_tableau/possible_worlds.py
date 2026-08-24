@@ -45,11 +45,12 @@ class RelationHypothesis:
 
 @dataclass(frozen=True)
 class PathRelationHypothesis:
-    """A defeasible interpretation of an arbitrary multi-hop relation sequence.
+    """A defeasible interpretation of one arbitrary multi-hop path pattern.
 
-    The sequence is a candidate semantic interpretation, not a hard ontology axiom.
-    It lets one possible world interpret the same observed path as supporting q,
-    opposing q, or leave it unresolved without changing the shared ontology.
+    ``start``/``end`` bind the hypothesis to the retrieved candidate endpoints so
+    the same relation sequence elsewhere in the graph cannot create unrelated
+    claims. ``swap_endpoints`` represents a reverse candidate path while deriving
+    the proposition in the query's canonical subject/object direction.
     """
 
     name: str
@@ -58,6 +59,9 @@ class PathRelationHypothesis:
     confidence: float
     negated_result: bool = False
     origin: str = "path-candidate"
+    start: str | None = None
+    end: str | None = None
+    swap_endpoints: bool = False
 
     def __post_init__(self) -> None:
         if not self.relations:
@@ -73,21 +77,24 @@ class PathRelationHypothesis:
 
         derived: list[Literal] = []
 
-        def walk(start: str, node: str, index: int, chain: list[Literal]) -> None:
+        def walk(path_start: str, node: str, index: int, chain: list[Literal]) -> None:
             if index == len(self.relations):
-                if not chain:
+                if not chain or (self.end is not None and node != self.end):
                     return
                 sources = {edge.source for edge in chain if edge.source}
                 source = next(iter(sources)) if len(sources) == 1 else None
-                derived.append(Literal(self.result, start, node, self.negated_result, source=source))
+                subject, object_ = (node, path_start) if self.swap_endpoints else (path_start, node)
+                derived.append(Literal(self.result, subject, object_, self.negated_result, source=source))
                 return
             expected = self.relations[index]
             for edge in adjacency.get(node, []):
                 if edge.predicate == expected:
-                    walk(start, edge.object, index + 1, [*chain, edge])
+                    walk(path_start, edge.object, index + 1, [*chain, edge])
 
-        for start in adjacency:
-            walk(start, start, 0, [])
+        starts = [self.start] if self.start is not None else list(adjacency)
+        for path_start in starts:
+            if path_start in adjacency:
+                walk(path_start, path_start, 0, [])
         return list(dict.fromkeys(derived))
 
 
