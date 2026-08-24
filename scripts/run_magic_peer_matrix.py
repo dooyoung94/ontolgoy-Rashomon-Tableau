@@ -9,7 +9,13 @@ import yaml
 
 from evaluate_magic_natural_language import build_rashomon_judgment
 from rashomon_tableau.deberta_world_scorer import DebertaWorldScorer
-from rashomon_tableau.openai_frontend import direct_magic_judgment, numbered_context
+from rashomon_tableau.openai_frontend import (
+    compute_matched_analysis,
+    compute_matched_finalize,
+    direct_magic_judgment,
+    extract_claims,
+    numbered_context,
+)
 from rashomon_tableau.peer_llm import client_from_environment
 
 MAGIC_BASE = "https://raw.githubusercontent.com/HYU-NLP/MAGIC/main/dataset/multi-hop"
@@ -28,12 +34,19 @@ def download_json(url: str):
 
 def usage_total(response) -> int:
     usage = response.usage
-    return int(getattr(usage, "total_tokens", 0) or (getattr(usage, "input_tokens", 0) + getattr(usage, "output_tokens", 0)))
+    return int(
+        getattr(usage, "total_tokens", 0)
+        or (getattr(usage, "input_tokens", 0) + getattr(usage, "output_tokens", 0))
+    )
 
 
 def aggregate_attempts(attempts: list[dict]) -> dict:
     positive = [x for x in attempts if x.get("conflict_detected")]
-    best = max(positive or attempts, key=lambda x: float(x.get("confidence", 0.0)), default={})
+    best = max(
+        positive or attempts,
+        key=lambda x: float(x.get("confidence", 0.0)),
+        default={},
+    )
     return {
         "conflict_detected": bool(positive),
         "locations": best.get("locations", []),
@@ -42,64 +55,147 @@ def aggregate_attempts(attempts: list[dict]) -> dict:
     }
 
 
-def run_direct_attempts(client, context1: str, context2: str, attempts: int) -> tuple[dict, int, int]:
-    outputs = []
-    calls = 0
-    tokens = 0
-    for _ in range(attempts):
-        response = direct_magic_judgment(client, context1, context2)
-        outputs.append(response.data)
-        calls += 1
-        tokens += usage_total(response)
-    return aggregate_attempts(outputs), calls, tokens
+def _prediction_view(value: dict) -> dict:
+    return {
+        "conflict_detected": bool(value.get("conflict_detected")),
+        "locations": value.get("locations", []),
+        "confidence": float(value.get("confidence", 0.0)),
+    }
 
 
-def run_compute_matched_direct(client, context1: str, context2: str, target_calls: int, target_tokens: int, max_calls: int) -> tuple[dict, int, int]:
-    outputs = []
-    calls = 0
-    tokens = 0
-    minimum_calls = min(max_calls, max(1, target_calls))
-    while calls < max_calls and (calls < minimum_calls or tokens < target_tokens):
-        response = direct_magic_judgment(client, context1, context2)
-        outputs.append(response.data)
-        calls += 1
-        tokens += usage_total(response)
-    aggregated = aggregate_attempts(outputs)
-    aggregated["budget_target_calls"] = target_calls
-    aggregated["budget_target_tokens"] = target_tokens
-    aggregated["budget_reached"] = calls >= target_calls and tokens >= target_tokens
-    aggregated["budget_capped"] = not aggregated["budget_reached"] and calls >= max_calls
-    aggregated["max_matched_calls"] = max_calls
-    return aggregated, calls, tokens
+def run_one_macro_attempt(client, context1: str, context2: str, max_hops: int, deberta) -> dict:
+    """Run one pre-registered fixed-call paired macro attempt.
 
+    Physical provider calls when DeBERTa is enabled:
+      1 Direct
+      2 Compute-Matched analysis/final
+      1 shared Rashomon claim extraction
+      1 same-LLM batch world scorer
+      0 DeBERTa provider calls
+    Total: exactly 5 logical provider calls before any transport retry.
+    """
+    direct = direct_magic_judgment(client, context1, context2)
 
-def _run_rashomon_attempts(client, context1: str, context2: str, attempts: int, max_hops: int, scorer=None) -> tuple[dict, int, int]:
-    outputs = []
-    calls = 0
-    tokens = 0
-    for _ in range(attempts):
-        r = build_rashomon_judgment(client, context1, context2, max_hops, scorer)
-        outputs.append({
-            "conflict_detected": r["conflict_detected"],
-            "locations": r["locations"],
-            "confidence": r["confidence"],
-        })
-        calls += int(r["usage"]["calls"])
-        tokens += int(r["usage"]["input_tokens"]) + int(r["usage"]["output_tokens"])
-    return aggregate_attempts(outputs), calls, tokens
+    compute_analysis = compute_matched_analysis(client, context1, context2)
+    compute_final = compute_matched_finalize(
+        client,
+        context1,
+        context2,
+        compute_analysis.data,
+    )
+
+    extracted = extract_claims(client, context1, context2)
+    rashomon_llm = build_rashomon_judgment(
+        client,
+        context1,
+        context2,
+        max_hops,
+        world_scorer=None,
+        extracted_response=extracted,
+    )
+    rashomon_deberta = None
+    if deberta is not None:
+        rashomon_deberta = build_rashomon_judgment(
+            client,
+            context1,
+            context2,
+            max_hops,
+            world_scorer=deberta,
+            extracted_response=extracted,
+        )
+
+    shared_extraction_tokens = usage_total(extracted)
+    rashomon_batch_tokens = int(rashomon_llm["usage"]["input_tokens"]) + int(
+        rashomon_llm["usage"]["output_tokens"]
+    )
+
+    return {
+        "predictions": {
+            "direct": _prediction_view(direct.data),
+            "compute_matched_direct": _prediction_view(compute_final.data),
+            "rashomon_worlds_llm_scorer": _prediction_view(rashomon_llm),
+            **(
+                {"rashomon_worlds_deberta_scorer": _prediction_view(rashomon_deberta)}
+                if rashomon_deberta is not None
+                else {}
+            ),
+        },
+        "diagnostics": {
+            "compute_first_pass": compute_analysis.data,
+            "rashomon_llm": {
+                "candidate_queries": rashomon_llm["candidate_queries"],
+                "evaluated_query_paths": rashomon_llm["evaluated_query_paths"],
+                "world_scorer": rashomon_llm["world_scorer"],
+            },
+            **(
+                {
+                    "rashomon_deberta": {
+                        "candidate_queries": rashomon_deberta["candidate_queries"],
+                        "evaluated_query_paths": rashomon_deberta["evaluated_query_paths"],
+                        "world_scorer": rashomon_deberta["world_scorer"],
+                    }
+                }
+                if rashomon_deberta is not None
+                else {}
+            ),
+        },
+        "physical_cost": {
+            "provider_calls": 5 if rashomon_deberta is not None else 5,
+            "provider_tokens": (
+                usage_total(direct)
+                + usage_total(compute_analysis)
+                + usage_total(compute_final)
+                + shared_extraction_tokens
+                + rashomon_batch_tokens
+            ),
+        },
+        "condition_cost": {
+            "direct": {
+                "logical_llm_calls": 1,
+                "llm_tokens": usage_total(direct),
+            },
+            "compute_matched_direct": {
+                "logical_llm_calls": 2,
+                "llm_tokens": usage_total(compute_analysis) + usage_total(compute_final),
+                "fixed_two_stage": True,
+            },
+            "rashomon_worlds_llm_scorer": {
+                "logical_llm_calls": 2,
+                "llm_tokens": shared_extraction_tokens + rashomon_batch_tokens,
+                "shared_extraction_physically_reused": True,
+                "batch_world_scoring": True,
+            },
+            **(
+                {
+                    "rashomon_worlds_deberta_scorer": {
+                        "logical_llm_calls": 1,
+                        "llm_tokens": shared_extraction_tokens,
+                        "shared_extraction_physically_reused": True,
+                        "deberta_scoring": True,
+                    }
+                }
+                if rashomon_deberta is not None
+                else {}
+            ),
+        },
+    }
 
 
 def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | None) -> dict:
-    model_cfg = cfg["models"][model_key]
+    model_cfg = dict(cfg["models"][model_key])
+    if args.no_retries:
+        model_cfg["max_retries"] = 0
+        model_cfg["contract_retries"] = 0
     client = client_from_environment(model_cfg)
+
     cache_path = Path(args.cache_dir) / f"{model_key}.jsonl"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     existing = {}
     if cache_path.exists():
         for line in cache_path.read_text(encoding="utf-8").splitlines():
             if line.strip():
-                row = json.loads(line)
-                existing[row["key"]] = row
+                cached = json.loads(line)
+                existing[cached["key"]] = cached
 
     records = []
     processed = 0
@@ -108,56 +204,48 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
         for row in rows:
             if args.limit and processed >= args.limit:
                 break
-            key = f"{filename}:{row.get('id')}:{model_key}:v3"
+            key = (
+                f"{filename}:{row.get('id')}:{model_key}:fixed-v1:"
+                f"a{args.attempts}:h{args.max_hops}:retry{0 if args.no_retries else 1}"
+            )
             if key in existing:
                 records.append(existing[key])
                 processed += 1
                 continue
 
             context1, context2 = row["context1"], row["context2"]
-            direct, direct_calls, direct_tokens = run_direct_attempts(client, context1, context2, args.attempts)
-
-            rashomon_llm, rashomon_llm_calls, rashomon_llm_tokens = _run_rashomon_attempts(
-                client, context1, context2, args.attempts, args.max_hops, scorer=None
-            )
-            matched, matched_calls, matched_tokens = run_compute_matched_direct(
-                client,
-                context1,
-                context2,
-                target_calls=rashomon_llm_calls,
-                target_tokens=rashomon_llm_tokens,
-                max_calls=args.max_matched_calls,
-            )
-
-            rashomon_deberta = None
-            deberta_calls = deberta_tokens = 0
-            if deberta is not None:
-                rashomon_deberta, deberta_calls, deberta_tokens = _run_rashomon_attempts(
-                    client, context1, context2, args.attempts, args.max_hops, scorer=deberta
+            macro_attempts = []
+            for _ in range(args.attempts):
+                macro_attempts.append(
+                    run_one_macro_attempt(client, context1, context2, args.max_hops, deberta)
                 )
 
+            condition_names = list(macro_attempts[0]["predictions"])
             conditions = {
-                "direct": direct,
-                "compute_matched_direct": matched,
-                "rashomon_worlds_llm_scorer": rashomon_llm,
+                condition: aggregate_attempts(
+                    [attempt["predictions"][condition] for attempt in macro_attempts]
+                )
+                for condition in condition_names
             }
-            cost = {
-                "direct": {"llm_calls": direct_calls, "llm_tokens": direct_tokens},
-                "compute_matched_direct": {
-                    "llm_calls": matched_calls,
-                    "llm_tokens": matched_tokens,
-                    "budget_reached": bool(matched.get("budget_reached")),
-                    "budget_capped": bool(matched.get("budget_capped")),
-                },
-                "rashomon_worlds_llm_scorer": {"llm_calls": rashomon_llm_calls, "llm_tokens": rashomon_llm_tokens},
-            }
-            if rashomon_deberta is not None:
-                conditions["rashomon_worlds_deberta_scorer"] = rashomon_deberta
-                cost["rashomon_worlds_deberta_scorer"] = {
-                    "llm_calls": deberta_calls,
-                    "llm_tokens": deberta_tokens,
-                    "deberta_scoring": True,
+
+            condition_cost = {}
+            for condition in condition_names:
+                entries = [attempt["condition_cost"][condition] for attempt in macro_attempts]
+                condition_cost[condition] = {
+                    "logical_llm_calls": sum(int(x["logical_llm_calls"]) for x in entries),
+                    "llm_tokens": sum(int(x["llm_tokens"]) for x in entries),
                 }
+                for field in (
+                    "fixed_two_stage",
+                    "shared_extraction_physically_reused",
+                    "batch_world_scoring",
+                    "deberta_scoring",
+                ):
+                    if any(bool(x.get(field)) for x in entries):
+                        condition_cost[condition][field] = True
+
+            physical_calls = sum(int(x["physical_cost"]["provider_calls"]) for x in macro_attempts)
+            physical_tokens = sum(int(x["physical_cost"]["provider_tokens"]) for x in macro_attempts)
 
             record = {
                 "key": key,
@@ -170,7 +258,13 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
                     "context2": numbered_context(context2),
                 },
                 "conditions": conditions,
-                "cost": cost,
+                "cost": condition_cost,
+                "physical_provider_cost": {
+                    "calls": physical_calls,
+                    "tokens": physical_tokens,
+                    "retries_disabled": bool(args.no_retries),
+                },
+                "macro_diagnostics": [attempt["diagnostics"] for attempt in macro_attempts],
                 "gold_audit_only": {
                     "original_triplet": row.get("original_triplet"),
                     "perturb_triplet": row.get("perturb_triplet"),
@@ -185,31 +279,43 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
 
     def id_rate(condition: str) -> float | None:
         available = [r for r in records if condition in r["conditions"]]
-        if condition == "compute_matched_direct":
-            available = [r for r in available if r["conditions"][condition].get("budget_reached")]
         if not available:
             return None
-        return sum(bool(r["conditions"][condition]["conflict_detected"]) for r in available) / len(available)
+        return sum(
+            bool(r["conditions"][condition]["conflict_detected"])
+            for r in available
+        ) / len(available)
 
     direct_id = id_rate("direct")
     matched_id = id_rate("compute_matched_direct")
     llm_id = id_rate("rashomon_worlds_llm_scorer")
     deberta_id = id_rate("rashomon_worlds_deberta_scorer")
-    matched_complete_n = sum(bool(r["conditions"].get("compute_matched_direct", {}).get("budget_reached")) for r in records)
+    total_physical_calls = sum(int(r["physical_provider_cost"]["calls"]) for r in records)
+    total_physical_tokens = sum(int(r["physical_provider_cost"]["tokens"]) for r in records)
+
     return {
         "model_key": model_key,
         "display_name": model_cfg["display_name"],
         "n": len(records),
-        "compute_matched_budget_complete_n": matched_complete_n,
-        "max_matched_calls_per_row": args.max_matched_calls,
         "direct_id_recall": direct_id,
         "compute_matched_id_recall": matched_id,
         "rashomon_llm_id_recall": llm_id,
         "rashomon_deberta_id_recall": deberta_id,
-        "delta_llm_vs_direct_pp": 100 * (llm_id - direct_id) if llm_id is not None and direct_id is not None else None,
-        "delta_llm_vs_compute_matched_pp": 100 * (llm_id - matched_id) if llm_id is not None and matched_id is not None else None,
-        "delta_deberta_vs_direct_pp": 100 * (deberta_id - direct_id) if deberta_id is not None and direct_id is not None else None,
-        "delta_deberta_vs_llm_pp": 100 * (deberta_id - llm_id) if deberta_id is not None and llm_id is not None else None,
+        "delta_llm_vs_direct_pp": 100 * (llm_id - direct_id)
+        if llm_id is not None and direct_id is not None
+        else None,
+        "delta_llm_vs_compute_matched_pp": 100 * (llm_id - matched_id)
+        if llm_id is not None and matched_id is not None
+        else None,
+        "delta_deberta_vs_direct_pp": 100 * (deberta_id - direct_id)
+        if deberta_id is not None and direct_id is not None
+        else None,
+        "delta_deberta_vs_llm_pp": 100 * (deberta_id - llm_id)
+        if deberta_id is not None and llm_id is not None
+        else None,
+        "physical_provider_calls": total_physical_calls,
+        "physical_provider_tokens": total_physical_tokens,
+        "expected_calls_if_complete": len(records) * args.attempts * 5,
         "loc_status": "pending blinded human scoring, matching MAGIC's manual LOC protocol",
         "cache": str(cache_path),
     }
@@ -222,6 +328,8 @@ def export_blinded_loc(cache_dir: Path, out: Path) -> None:
             if not line.strip():
                 continue
             record = json.loads(line)
+            if ":fixed-v1:" not in record.get("key", ""):
+                continue
             for condition, prediction in record["conditions"].items():
                 rows.append({
                     "blind_id": f"B{len(rows)+1:07d}",
@@ -242,9 +350,9 @@ def main():
     ap.add_argument("--models", nargs="*", default=[])
     ap.add_argument("--attempts", type=int, default=3)
     ap.add_argument("--max-hops", type=int, default=4)
-    ap.add_argument("--max-matched-calls", type=int, default=12)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--without-deberta", action="store_true")
+    ap.add_argument("--no-retries", action="store_true")
     ap.add_argument("--cache-dir", default="results/magic_peer_matrix")
     ap.add_argument("--out", default="results/magic_peer_matrix_summary.json")
     ap.add_argument("--loc-export", default="results/magic_peer_loc_blinded.json")
@@ -253,6 +361,7 @@ def main():
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
     selected = args.models or cfg.get("model_sets", {}).get(args.model_set, list(cfg["models"]))
     deberta = None if args.without_deberta else DebertaWorldScorer(cfg["discriminative_scorer"]["model"])
+
     summaries = []
     failures = []
     for key in selected:
@@ -261,16 +370,28 @@ def main():
         except Exception as exc:
             failures.append({"model_key": key, "error": str(exc)})
 
+    expected_cap = args.limit * len(selected) * args.attempts * 5 if args.limit else None
     result = {
         "benchmark": "MAGIC multi-hop natural-language paired method study",
         "model_set": args.model_set,
         "attempts_per_example": args.attempts,
-        "max_matched_calls_per_row": args.max_matched_calls,
+        "limit": args.limit,
         "models": summaries,
         "failures": failures,
-        "primary_comparison": "Rashomon scorer conditions vs same-model direct/compute-matched baselines",
-        "compute_matched_policy": "Rows that hit the hard call cap before matching the Rashomon call/token budget are marked budget_reached=false and excluded from compute-matched paired statistics.",
+        "fixed_call_policy": {
+            "direct_calls_per_attempt": 1,
+            "compute_matched_calls_per_attempt": 2,
+            "shared_rashomon_extraction_calls_per_attempt": 1,
+            "rashomon_llm_batch_score_calls_per_attempt": 1,
+            "rashomon_deberta_provider_score_calls_per_attempt": 0,
+            "physical_provider_calls_per_attempt": 5,
+            "provider_request_cap_if_no_retries": expected_cap,
+            "retries_disabled": bool(args.no_retries),
+        },
+        "primary_comparison": "Rashomon same-LLM scorer vs same-model fixed two-stage compute-matched direct baseline",
+        "candidate_space_control": "Rashomon same-LLM and DeBERTa conditions share the exact same claim extraction per macro attempt.",
         "loc_protocol": "blind human exact-localization scoring; automatic LOC is intentionally not used",
+        "metric_warning": "Released MAGIC multi-hop files used here contain conflict cases, so automated ID is conflict recall rather than official full-dataset ID accuracy.",
     }
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
