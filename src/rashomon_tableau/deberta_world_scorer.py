@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Sequence
 
 
 DEFAULT_DEBERTA_MODEL = "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
@@ -48,7 +48,6 @@ class DebertaWorldScorer:
         self.model.to(self.device)
         self.model.eval()
 
-        # Resolve labels without relying on one fixed label ordering.
         id2label = {int(k): str(v).lower() for k, v in self.model.config.id2label.items()}
         self.entail_idx = self._find_label(id2label, ("entail",))
         self.contra_idx = self._find_label(id2label, ("contrad",))
@@ -69,25 +68,50 @@ class DebertaWorldScorer:
     def _world_text(world_evidence: Iterable[str]) -> str:
         return " ".join(x.strip() for x in world_evidence if x and x.strip())
 
+    def score_many(
+        self,
+        queries: Sequence[str],
+        evidence_groups: Sequence[Iterable[str]],
+        batch_size: int = 16,
+    ) -> list[WorldNliScore]:
+        if len(queries) != len(evidence_groups):
+            raise ValueError("queries and evidence_groups must have identical lengths")
+        if not queries:
+            return []
+
+        premises = [self._world_text(x) for x in evidence_groups]
+        hypotheses = [self._query_sentence(x) for x in queries]
+        results: list[WorldNliScore] = []
+
+        for start in range(0, len(queries), batch_size):
+            end = min(len(queries), start + batch_size)
+            batch_premises = premises[start:end]
+            batch_hypotheses = hypotheses[start:end]
+            encoded = self.tokenizer(
+                batch_premises,
+                batch_hypotheses,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512,
+            )
+            encoded = {k: v.to(self.device) for k, v in encoded.items()}
+            with self.torch.no_grad():
+                logits = self.model(**encoded).logits
+                probs = self.torch.softmax(logits, dim=-1).detach().cpu().tolist()
+            for p in probs:
+                results.append(
+                    WorldNliScore(
+                        support=float(p[self.entail_idx]),
+                        contradiction=float(p[self.contra_idx]),
+                        unresolved=float(p[self.neutral_idx]),
+                    ).normalized()
+                )
+        return results
+
     def score(self, query: str, world_evidence: Iterable[str]) -> WorldNliScore:
         premise = self._world_text(world_evidence)
         hypothesis = self._query_sentence(query)
         if not premise or not hypothesis:
             return WorldNliScore(0.0, 0.0, 1.0)
-
-        encoded = self.tokenizer(
-            premise,
-            hypothesis,
-            return_tensors="pt",
-            truncation=True,
-            max_length=512,
-        )
-        encoded = {k: v.to(self.device) for k, v in encoded.items()}
-        with self.torch.no_grad():
-            logits = self.model(**encoded).logits[0]
-            probs = self.torch.softmax(logits, dim=-1).detach().cpu().tolist()
-        return WorldNliScore(
-            support=float(probs[self.entail_idx]),
-            contradiction=float(probs[self.contra_idx]),
-            unresolved=float(probs[self.neutral_idx]),
-        ).normalized()
+        return self.score_many([hypothesis], [[premise]], batch_size=1)[0]
