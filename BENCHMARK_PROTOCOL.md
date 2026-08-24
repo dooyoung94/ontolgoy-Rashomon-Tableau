@@ -1,153 +1,281 @@
-# Benchmark Protocol — Rashomon-Tableau
+# Benchmark Protocol — Rashomon Worlds
 
-이 문서는 논문의 실험 기준을 고정한다. 서로 다른 task의 숫자를 하나의 leaderboard에 섞지 않는다.
+## Purpose
 
-## 1. Research questions and datasets
+This document defines how to test the revised research claim without mixing prior metrics or creating unfair peer comparisons.
 
-| RQ | Question | Dataset | Primary metric | Direct peer comparison? |
-|---|---|---|---|---|
-| RQ1 | ontology-guided bidirectional reasoning이 q / ¬q와 multi-hop derivation을 복원하는가? | LogicNLI, FOLIO, MAGIC structured | Accuracy / Macro-F1 / status distribution | LogicNLI/FOLIO는 symbolic component comparison |
-| RQ2 | conflict가 어느 source / claim / rule / hop에서 발생했는가? | DAFNA Books, MAGIC | exact-partial-conflict Macro-F1; path/localization metrics | DAFNA claim labels direct; MAGIC는 protocol 차이 명시 |
-| RQ3 | localized evidence + source reliability가 truth recovery를 개선하는가? | DAFNA-EA Books | Exact Truth Accuracy, Author F1 | **Yes** — official DAFNA implementations |
+The central question is:
 
-## 2. DAFNA-EA Books — direct truth-discovery comparison
+> **Do multiple Tableau-consistent, provenance-weighted worlds improve multi-hop conflict localization and truth adjudication over single-world commitment?**
 
-동일한 100-book `AuthorsNamesList` gold subset을 사용한다.
+---
 
-- 100 gold books
-- 1,999 collapsed source-object claims
-- 227 sources
-- 동일 benchmark-side author normalization 적용
+## 1. Dataset Roles
 
-현재 측정값:
+### MAGIC
+Primary role: **multi-hop conflict identification, localization, and world construction**.
 
-| Method | Exact Truth Accuracy | Author F1 | Comparison status |
-|---|---:|---:|---|
-| **Rashomon-Tableau Atomic Resolution** | **61.00%** | **82.88%** | measured, this repository |
-| TruthFinder | 57.00% | 66.85% | measured, official DAFNA-EA Java |
-| AccuSim | 57.00% | 66.18% | measured, official DAFNA-EA Java |
-| 2-Estimates | 54.00% | 65.28% | measured, official DAFNA-EA Java |
-| 3-Estimates | 53.00% | 65.45% | measured, official DAFNA-EA Java |
-| Accu | 53.00% | 65.45% | measured, official DAFNA-EA Java |
-| Reliability-weighted whole claim | 45.00% | 75.24% | measured, local ablation |
-| Whole-claim majority | 44.00% | 73.57% | measured, local ablation |
+Required outputs:
 
-`LTM`은 공식 구현이 stochastic하며 동일 protocol 재실행에서 값이 크게 달라졌다. 단일 실행값은 headline table에서 제외하고 향후 repeated-run mean ± std만 보고한다.
+- official conflict ID;
+- official exact LOC;
+- candidate-world count;
+- consistent-world count;
+- gold-world recall;
+- relation-interpretation accuracy;
+- proof/provenance localization accuracy;
+- unresolved mass.
 
-### Allowed claim
+### DAFNA-EA Books
+Primary role: **truth adjudication across conflicting sources/worlds**.
 
-> On the DAFNA-EA Books AuthorsNamesList gold subset under the shared evaluation protocol, Rashomon-Tableau achieved 61% exact truth accuracy, compared with 57% for TruthFinder and AccuSim.
+Required outputs:
 
-### Not allowed
+- exact truth accuracy;
+- author F1;
+- calibration / confidence quality where possible;
+- source-only vs world-level reliability ablation.
 
-- “Rashomon-Tableau is universally better than TruthFinder.”
-- “61% is state of the art on modern knowledge-conflict reasoning.”
+### LogicNLI / FOLIO
+Secondary role only: **reasoning-engine sanity checks**.
 
-## 3. MAGIC — modern multi-hop conflict stress test
+They must not be used as headline evidence that the Possible-World method outperforms natural-language peer systems.
 
-MAGIC (Findings EMNLP 2025)는 KG 기반 inter-context conflict benchmark이며 single-hop과 multi-hop conflict를 제공한다.
+---
 
-### 3.1 Two evaluators
+## 2. Prior Baselines vs New Results
 
-1. `scripts/evaluate_magic_structured.py`
-   - released `original_triplet` / `perturb_triplet` 직접 사용
-   - legacy direct pair heuristic
-   - 기존 failure analysis를 보존하는 ablation
+The following values are historical repository baselines and must remain labeled as such:
 
-2. `scripts/evaluate_magic_bidirectional.py`
-   - `subgraph + perturb_triplet`을 evidence graph로 구성
-   - ontology closure: symmetric / inverse / hierarchy / transitive / declared relation composition
-   - forward + reverse candidate path retrieval
-   - query q와 opposing evidence를 모두 검증
-   - four states: `SUPPORTED / CONTRADICTED / BOTH / UNRESOLVED`
-   - closed-world assumption 사용 안 함
+### Prior MAGIC structured diagnostic
 
-### 3.2 Critical distinction
+| Metric | Multi-hop |
+|---|---:|
+| direct heuristic detection | 33.16% |
+| bidirectional candidate-path coverage | 68.03% |
+| strict ontology-verified contradiction | 5.44% |
 
-`graph path found`는 `conflict proved`가 아니다.
+These are three different metrics. In particular, 68.03% is **not** ID or LOC.
+
+### Prior DAFNA same-protocol result
+
+| Method | Exact Truth Accuracy | Author F1 |
+|---|---:|---:|
+| prior Rashomon atomic resolution | 61.00% | 82.88% |
+| TruthFinder | 57.00% | 66.85% |
+| AccuSim | 57.00% | 66.18% |
+
+The new Possible-World method gets a new row only after a new evaluator is executed.
+
+---
+
+## 3. MAGIC Published Peer Reference
+
+Weighted from the official N=1..4 multi-hop subgroup values and counts:
+
+| Peer | ID | LOC |
+|---|---:|---:|
+| Mixtral 8x7B | 28.21% | 9.23% |
+| Claude 3.5 Haiku | 48.81% | 34.01% |
+| o1 | 48.98% | 28.57% |
+| Llama 3.1 70B | 67.32% | 27.15% |
+| GPT-4o-mini | 78.40% | 47.28% |
+| 5-model mean | 54.34% | 29.25% |
+
+### Comparability rule
+
+Published peers use natural-language contexts. A structured-triplet Rashomon Worlds evaluator is a **separate track** unless the same text input and output protocol is reproduced.
+
+Never compare:
 
 ```text
-Candidate retrieval:
-subject -> ... -> object
-or
-object -> ... -> subject
-
-        ↓ ontology validation
-
-SUPPORTED / CONTRADICTED / BOTH / UNRESOLVED
+68.03% path coverage  vs  78.40% MAGIC ID
 ```
 
-관계가 연결되어 있다는 사실만으로 composition을 만들지 않는다. YAML에 선언된 rule만 허용한다.
+as if they were the same metric.
 
-### 3.3 Peer reference
+---
 
-MAGIC 논문의 published multi-hop scores는 natural-language context를 읽는 LLM의 ID/LOC이다. 우리 structured symbolic evaluator와 입력이 다르므로 **head-to-head ranking으로 표현하지 않는다**.
+## 4. Core Ablation
 
-Published MAGIC multi-hop ID reference:
+All new-method claims should come from this progression:
 
-| Model | N=1 | N=2 | N=3 | N=4 |
-|---|---:|---:|---:|---:|
-| Mixtral 8x7B | 23.47 | 31.61 | 38.16 | 30.00 |
-| Llama 3.1 70B | 59.52 | 78.67 | 70.00 | 73.91 |
-| Claude 3.5 Haiku | 41.00 | 44.30 | 63.75 | 86.00 |
-| GPT-4o-mini | 70.67 | 84.18 | 86.25 | 94.00 |
-| o1 | 36.00 | 58.23 | 71.25 | 62.00 |
+| ID | Variant | Relation semantics | World model | Weighting |
+|---|---|---|---|---|
+| B0 | Direct | direct claims | one | none |
+| B1 | Static Tableau | hard ontology | one | none |
+| B2 | Adaptive Relation | hard + defeasible candidates | one selected interpretation | relation confidence |
+| B3 | Possible Worlds | hard + defeasible candidates | multiple consistent worlds | uniform |
+| B4 | Rashomon Worlds | hard + defeasible candidates | multiple consistent worlds | source + relation + proof/evidence |
 
-Published MAGIC multi-hop LOC reference:
+The critical comparisons are:
 
-| Model | N=1 | N=2 | N=3 | N=4 |
-|---|---:|---:|---:|---:|
-| Mixtral 8x7B | 12.59 | 7.10 | 6.58 | 0.00 |
-| Llama 3.1 70B | 31.75 | 25.33 | 25.00 | 8.70 |
-| Claude 3.5 Haiku | 33.67 | 35.44 | 33.75 | 32.00 |
-| GPT-4o-mini | 54.67 | 47.47 | 33.75 | 24.00 |
-| o1 | 30.67 | 30.38 | 27.50 | 12.00 |
+- `B2 > B1`: uncertain relation semantics helps beyond static ontology;
+- `B3 > B2`: delaying commitment to multiple worlds helps beyond picking one candidate;
+- `B4 > B3`: provenance-aware reliability helps beyond uniform possible worlds.
 
-Source: MAGIC, Findings of EMNLP 2025, Tables 9 and 10.
+If those gains are absent, the central research hypothesis is not supported.
 
-The repository computes weighted summaries only as a descriptive reference using released subset sizes `[300, 158, 80, 50]`. Such weighted numbers are derived calculations, not metrics printed by the MAGIC paper.
+---
 
-## 4. Ablation plan
+## 5. World Metrics
 
-MAGIC multi-hop은 다음 순서로 실제 측정한다.
+### World coverage
+Fraction of examples where at least one admissible candidate world is generated.
 
-| Version | Purpose | Result |
-|---|---|---|
-| Direct pair heuristic | 기존 baseline | measured |
-| + inverse / symmetric | direction semantics | CI measurement |
-| + transitive | declared transitive relations | CI measurement |
-| + relation composition | ontology-licensed multi-hop derivation | CI measurement |
-| + bidirectional q / ¬q verification | truth state validation | CI measurement |
-| + provenance localization | rule/hop/source explanation | CI measurement |
+### Gold-world recall
+Fraction of examples where at least one generated world contains the gold-compatible relation/claim interpretation.
 
-예상값을 표에 미리 넣지 않는다. CI artifact에서 나온 실제 값만 `results/`에 고정한다.
+### Consistent-world precision
+Among generated admissible worlds, proportion matching gold-compatible semantics when such annotation can be derived fairly.
 
-## 5. FOLIO and LogicNLI
+### Relation interpretation accuracy
+Accuracy of the selected or highest-mass relation interpretation.
 
-- FOLIO 96.43%는 **지원 문법 28/204 fragment**에 대한 결과이며 full-FOLIO 성능으로 표현하지 않는다.
-- LogicNLI 98.40%는 official structured `test_logic`에서 symbolic dual-direction reasoning을 평가한 것이며 end-to-end NLP 성능으로 표현하지 않는다.
+### Truth marginal
+For query `q`:
 
-## 6. Reproducibility
-
-```bash
-pip install -e .
-python scripts/evaluate_folio_fragment.py
-python scripts/evaluate_logicnli.py
-python scripts/evaluate_truth_discovery_books.py
-python scripts/evaluate_magic_structured.py
-python scripts/evaluate_magic_bidirectional.py
-pytest -q
+```text
+P(q)
+P(not q)
+P(BOTH)
+P(UNRESOLVED)
 ```
 
-GitHub Actions는 추가로 official `qcri/DAFNA-EA` Java algorithms를 clone/build/run한다.
+These masses must sum to 1 after world normalization.
 
-## 7. Evaluation rule for publication
+### Early-commitment error
+Cases where B2 chooses the wrong interpretation but B3/B4 retains a gold-compatible world.
 
-모든 표의 각 행은 다음 중 하나를 명시한다.
+This metric directly tests the paper's delayed-commitment claim.
 
-- **Measured / same protocol**
-- **Measured / different input protocol**
-- **Published peer reference**
-- **Derived calculation from published values**
+---
 
-이 구분이 없는 숫자는 논문 결과표에 넣지 않는다.
+## 6. Relation-Hypothesis Protocol
+
+A relation hypothesis may come from:
+
+- external ontology/property metadata;
+- rule induction on a training graph;
+- development-only learned relation patterns;
+- another candidate generator.
+
+### Forbidden
+
+- hand-writing a rule after reading a test example;
+- using sample IDs or answer labels in rules;
+- promoting benchmark-specific patterns to hard ontology axioms;
+- selecting candidate rules using test LOC/ID labels.
+
+### Preferred evaluation
+
+```text
+external/train relation source
+        ↓
+induce candidate semantics
+        ↓
+freeze hypotheses / generator
+        ↓
+run MAGIC test evaluation
+```
+
+Where possible, add relation-held-out or domain-held-out experiments.
+
+---
+
+## 7. Peer Comparison Table
+
+The final paper should separate tracks instead of forcing one leaderboard.
+
+### Track A — MAGIC natural-language peer comparison
+
+| Method | Input | ID | LOC |
+|---|---|---:|---:|
+| published LLM peers | natural language | published | published |
+| Rashomon Worlds text track | natural language | measured | measured |
+
+### Track B — Structured reasoning ablation
+
+| Method | ID analogue | LOC/proof | Gold-world recall | Unresolved mass |
+|---|---:|---:|---:|---:|
+| B0 | measured | measured | — | measured |
+| B1 | measured | measured | measured | measured |
+| B2 | measured | measured | measured | measured |
+| B3 | measured | measured | measured | measured |
+| B4 | measured | measured | measured | measured |
+
+### Track C — DAFNA truth adjudication
+
+| Method | Truth Accuracy | Author F1 |
+|---|---:|---:|
+| majority / local baselines | measured | measured |
+| TruthFinder / Accu family | official same-protocol | official same-protocol |
+| prior Rashomon | historical | historical |
+| Rashomon Worlds | measured | measured |
+
+---
+
+## 8. Improvement Reporting
+
+Only report improvement between metrics with identical definitions and protocols.
+
+Allowed example:
+
+```text
+B3 MAGIC LOC = 41.0
+B4 MAGIC LOC = 46.0
+Improvement = +5.0 percentage points
+```
+
+Not allowed:
+
+```text
+old path coverage 68.03
+new ID 70.0
+improvement +1.97
+```
+
+because the metrics differ.
+
+Report both absolute percentage-point improvement and relative improvement when useful.
+
+---
+
+## 9. Reproducibility Requirements
+
+Each measured new result must record:
+
+- dataset version/source;
+- exact split;
+- relation-hypothesis source;
+- whether hypotheses are frozen before evaluation;
+- maximum world count / pruning policy;
+- scoring coefficients or weighting rule;
+- random seed where applicable;
+- code commit;
+- workflow run/artifact when executed in CI.
+
+---
+
+## 10. Current Status
+
+Implemented:
+
+- PossibleWorld model;
+- RelationHypothesis model;
+- alternative-world enumeration;
+- unresolved semantic branch;
+- Tableau consistency pruning;
+- source/relation baseline weighting;
+- truth marginalization;
+- unit tests.
+
+Not yet measured for the new method:
+
+- MAGIC official ID;
+- MAGIC official LOC;
+- MAGIC gold-world recall;
+- DAFNA Possible-World truth accuracy;
+- calibrated full B4 reliability function.
+
+Until those runs exist, historical measurements remain baseline evidence only.
