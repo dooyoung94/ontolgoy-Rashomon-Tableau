@@ -46,6 +46,12 @@ jobs:
         run: git clone --depth 1 https://github.com/qcri/DAFNA-EA.git /tmp/DAFNA-EA
       - name: Prepare identical 100-book AuthorsNamesList subset for official DAFNA
         run: python scripts/prepare_dafna_official_books.py --dafna-root /tmp/DAFNA-EA --out-root /tmp/dafna-books-subset
+      - name: Install DAFNA legacy Java-ML dependency from its vendored jar
+        working-directory: /tmp/DAFNA-EA
+        run: |
+          mvn -B org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
+            -Dfile=lib/javaml-0.1.5.jar -DgroupId=net.sourceforge \
+            -DartifactId=javaml -Dversion=0.1.5 -Dpackaging=jar
       - name: Build official DAFNA-EA
         working-directory: /tmp/DAFNA-EA
         run: mvn -B -DskipTests package
@@ -71,7 +77,6 @@ jobs:
               --confidences "$out/Confidences.csv" --out "results/dafna_official/${alg}.json"
           }
 
-          # Parameters are the defaults documented by the official repository.
           run_one TruthFinder 0.5 0.1
           run_one 2-Estimates 0.5
           run_one 3-Estimates 0.5 0.4
