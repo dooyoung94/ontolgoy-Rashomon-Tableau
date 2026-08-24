@@ -1,0 +1,41 @@
+{
+  "dataset": "LogicNLI_sim test_logic",
+  "source": "https://raw.githubusercontent.com/omnilabNLP/LogicNLI/main/dataset/LogicNLI_sim.zip",
+  "ci_run_id": 32703228023,
+  "contexts": 100,
+  "statements": 2000,
+  "gold_distribution": {
+    "entailment": 500,
+    "contradiction": 500,
+    "self_contradiction": 500,
+    "neutral": 500
+  },
+  "direct_fact_dual_check": {
+    "accuracy": 0.5055,
+    "macro_f1": 0.4288132548496351,
+    "self_contradiction_f1": 0.003992015968063872
+  },
+  "single_path_forward_reasoner": {
+    "accuracy": 0.74,
+    "macro_f1": 0.6577582998203132,
+    "entailment_f1": 0.6631299734748011,
+    "contradiction_f1": 0.98,
+    "neutral_f1": 0.9879032258064516,
+    "self_contradiction_f1": 0.0
+  },
+  "dual_proof_rashomon_style_reasoner": {
+    "accuracy": 0.984,
+    "macro_f1": 0.9840198822419721,
+    "entailment_f1": 0.988988988988989,
+    "contradiction_f1": 0.98,
+    "neutral_f1": 0.9879032258064516,
+    "self_contradiction_f1": 0.979187314172448
+  },
+  "gain_dual_vs_single_pp": {
+    "accuracy": 24.4,
+    "macro_f1": 32.62615824216589,
+    "self_contradiction_f1": 97.9187314172448
+  },
+  "semantics_note": "LogicNLI defines Paradox/self_contradiction when both s and not-s are derivable. The dual-proof decision checks both proof directions instead of stopping after one supported path.",
+  "implementation_note": "The reproducible evaluator uses LogicNLI's official structured test_logic representation. It implements forward implication/equivalence, conjunction/disjunction antecedents, universal-variable templates, named constants, and existential antecedents; disjunctive or existential consequents are conservative. This is not an end-to-end natural-language comparison with BERT/RoBERTa/XLNet."
+}
