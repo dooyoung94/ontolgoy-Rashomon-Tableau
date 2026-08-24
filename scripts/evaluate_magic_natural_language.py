@@ -74,12 +74,12 @@ def build_rashomon_judgment(
     world_scorer: DebertaWorldScorer | None = None,
     extracted_response=None,
 ) -> dict:
-    """Build Rashomon judgment with a fixed LLM-call policy.
+    """Extract query/path candidates, score them, and detect existential conflict.
 
-    If ``extracted_response`` is supplied, no extraction call is made. This lets the
-    same extracted candidate space be shared by the LLM and DeBERTa scorers.
-    same-LLM mode then adds exactly one batch-scoring call; DeBERTa adds no provider
-    call because scoring is local discriminative inference.
+    The possible-world marginal is retained as a diagnostic/ablation signal, but it
+    no longer controls the MAGIC binary decision. MAGIC asks whether at least one
+    factual conflict exists, so a single query-path pair whose contradiction score
+    dominates both support and unresolved is sufficient for a positive decision.
     """
     extracted = extracted_response or extract_claims(client, context1, context2)
     extraction_was_shared = extracted_response is not None
@@ -120,25 +120,26 @@ def build_rashomon_judgment(
 
     score_map: dict[str, tuple[float, float, float]] = {}
     if world_scorer is None:
-        batch = score_worlds_batch(client, batch_items)
-        usage["input_tokens"] += batch.usage.input_tokens
-        usage["output_tokens"] += batch.usage.output_tokens
-        usage["calls"] += 1
-        returned = batch.data.get("scores", [])
-        returned_ids = [str(x.get("id")) for x in returned]
-        expected_ids = [str(x["id"]) for x in batch_items]
-        if len(returned_ids) != len(set(returned_ids)):
-            raise RuntimeError("Batch world scorer returned duplicate ids")
-        if set(returned_ids) != set(expected_ids):
-            raise RuntimeError(
-                f"Batch world scorer id mismatch: expected={expected_ids[:20]} returned={returned_ids[:20]}"
-            )
-        for item in returned:
-            score_map[str(item["id"])] = (
-                float(item["support"]),
-                float(item["contradiction"]),
-                float(item["unresolved"]),
-            )
+        if batch_items:
+            batch = score_worlds_batch(client, batch_items)
+            usage["input_tokens"] += batch.usage.input_tokens
+            usage["output_tokens"] += batch.usage.output_tokens
+            usage["calls"] += 1
+            returned = batch.data.get("scores", [])
+            returned_ids = [str(x.get("id")) for x in returned]
+            expected_ids = [str(x["id"]) for x in batch_items]
+            if len(returned_ids) != len(set(returned_ids)):
+                raise RuntimeError("Batch world scorer returned duplicate ids")
+            if set(returned_ids) != set(expected_ids):
+                raise RuntimeError(
+                    f"Batch world scorer id mismatch: expected={expected_ids[:20]} returned={returned_ids[:20]}"
+                )
+            for item in returned:
+                score_map[str(item["id"])] = (
+                    float(item["support"]),
+                    float(item["contradiction"]),
+                    float(item["unresolved"]),
+                )
     else:
         for item in prepared:
             nli = world_scorer.score(item["query_repr"], item["evidence_repr"])
@@ -149,6 +150,8 @@ def build_rashomon_judgment(
         by_query.setdefault(item["q_index"], []).append(item)
 
     candidates: list[dict] = []
+    dominant_paths: list[dict] = []
+    all_scored_paths: list[dict] = []
     for q_index, query in enumerate(c1):
         items = by_query.get(q_index, [])
         if not items:
@@ -181,13 +184,26 @@ def build_rashomon_judgment(
                 WorldChoice(contradiction_h, f"{prefix}:contradiction", contradiction),
                 WorldChoice.unresolved(f"{prefix}:unresolved", unresolved),
             ])
-            path_meta[prefix] = {
+            meta = {
+                "id": prefix,
+                "query": literal_text(query),
+                "query_sentence_id": int(query.story or 0),
                 "direction": path.direction,
                 "sentence_ids": sorted({int(x.story) for x in path.literals if x.story is not None}),
+                "raw_scores": {
+                    "support": raw_support,
+                    "contradiction": raw_contradiction,
+                    "unresolved": raw_unresolved,
+                },
                 "scores": {"support": support, "contradiction": contradiction, "unresolved": unresolved},
                 "path": item["evidence_repr"],
             }
+            path_meta[prefix] = meta
+            all_scored_paths.append(meta)
+            if contradiction > max(support, unresolved):
+                dominant_paths.append(meta)
 
+        # Retain the previous possible-world calculation only for diagnostics.
         worlds = build_possible_worlds(c2, [choices], reasoner, {"context2": 1.0}, max_worlds=128)
         marginal = truth_marginal(worlds, query, reasoner)
         conflict_mass = marginal.contradiction + marginal.both
@@ -198,24 +214,31 @@ def build_rashomon_judgment(
             "contradiction_mass": conflict_mass,
             "unresolved_mass": marginal.unresolved,
             "world_count": len(worlds),
+            "max_path_contradiction": max((x["scores"]["contradiction"] for x in path_meta.values()), default=0.0),
             "paths": path_meta,
         })
 
-    ranked = sorted(candidates, key=lambda x: x["contradiction_mass"], reverse=True)
-    best = ranked[0] if ranked else None
-    conflict = bool(best and best["contradiction_mass"] > max(best["support_mass"], best["unresolved_mass"]))
+    ranked = sorted(candidates, key=lambda x: x["max_path_contradiction"], reverse=True)
+    best_dominant = max(dominant_paths, key=lambda x: x["scores"]["contradiction"], default=None)
+    best_any = max(all_scored_paths, key=lambda x: x["scores"]["contradiction"], default=None)
+    conflict = best_dominant is not None
+
     locations = []
-    if conflict and best:
-        locations.append({"source": "context1", "sentence_id": best["query_sentence_id"]})
-        path_items = list(best["paths"].values())
-        if path_items:
-            best_path = max(path_items, key=lambda x: x["scores"]["contradiction"])
-            locations.extend({"source": "context2", "sentence_id": x} for x in best_path["sentence_ids"])
+    if best_dominant is not None:
+        locations.append({"source": "context1", "sentence_id": best_dominant["query_sentence_id"]})
+        locations.extend(
+            {"source": "context2", "sentence_id": x}
+            for x in best_dominant["sentence_ids"]
+        )
 
     return {
         "conflict_detected": conflict,
         "locations": locations,
-        "confidence": best["contradiction_mass"] if best else 0.0,
+        "confidence": best_dominant["scores"]["contradiction"] if best_dominant else (
+            best_any["scores"]["contradiction"] if best_any else 0.0
+        ),
+        "decision_rule": "existential_dominant_path_contradiction",
+        "best_contradiction_path": best_dominant or best_any,
         "candidate_queries": len(c1),
         "evaluated_query_paths": len(prepared),
         "usage": usage,
@@ -245,7 +268,7 @@ def run(args) -> dict:
         for row in rows:
             if args.limit and processed >= args.limit:
                 break
-            key = f"{filename}:{row.get('id')}:{args.model}:{scorer_suffix}:batch-v2"
+            key = f"{filename}:{row.get('id')}:{args.model}:{scorer_suffix}:batch-v3"
             if key in existing:
                 output_rows.append(existing[key])
                 processed += 1
@@ -279,11 +302,12 @@ def run(args) -> dict:
         "n": len(output_rows),
         "model": args.model,
         "world_scorer": scorer_suffix,
+        "decision_rule": "existential_dominant_path_contradiction",
         "direct_conflict_recall": direct_id,
         "rashomon_worlds_conflict_recall": rashomon_id,
         "gain_pp": 100 * (rashomon_id - direct_id),
         "metric_warning": "All released files in this run are conflict cases, so detection is recall. LOC remains blind human-scored for peer comparison.",
-        "generation_policy": "Neither direct nor Rashomon prediction receives original_triplet or perturb_triplet. Gold structured fields are attached only after prediction for scoring/audit.",
+        "generation_policy": "Neither direct nor candidate-path prediction receives original_triplet or perturb_triplet. Gold structured fields are attached only after prediction for scoring/audit.",
     }
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
