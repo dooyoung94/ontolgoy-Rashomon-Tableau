@@ -46,12 +46,6 @@ def _strip_reasoning_wrappers(text: str) -> str:
 
 
 def _matches_schema_contract(value: Any, schema: dict[str, Any]) -> bool:
-    """Lightweight contract check used only to select the intended JSON object.
-
-    The provider is still asked for strict JSON Schema output. This check prevents
-    fallback parsing from accidentally selecting an echoed schema or another JSON
-    object that does not contain the response's required top-level fields.
-    """
     if not isinstance(value, dict):
         return False
     required = schema.get("required") or []
@@ -140,6 +134,7 @@ class OpenAICompatibleClient:
         base_url: str,
         timeout: int = 180,
         max_tokens: int | None = None,
+        schema_max_tokens: dict[str, int] | None = None,
         max_retries: int = 0,
         contract_retries: int = 0,
         retry_backoff_seconds: float = 2.0,
@@ -151,6 +146,11 @@ class OpenAICompatibleClient:
         self.url = base_url.rstrip("/") + "/chat/completions"
         self.timeout = timeout
         self.max_tokens = max_tokens
+        self.schema_max_tokens = {
+            str(key): int(value)
+            for key, value in (schema_max_tokens or {}).items()
+            if int(value) > 0
+        }
         self.max_retries = max(0, max_retries)
         self.contract_retries = max(0, contract_retries)
         self.retry_backoff_seconds = max(0.0, retry_backoff_seconds)
@@ -196,6 +196,8 @@ class OpenAICompatibleClient:
         last_finish = ""
         last_model = self.model
 
+        token_budget = self.schema_max_tokens.get(schema_name, self.max_tokens)
+
         for contract_attempt in range(self.contract_retries + 1):
             prompt = base_prompt
             if contract_attempt:
@@ -207,8 +209,8 @@ class OpenAICompatibleClient:
                 "model": self.model,
                 "messages": [{"role": "user", "content": prompt}],
             }
-            if self.max_tokens is not None:
-                payload["max_tokens"] = self.max_tokens
+            if token_budget is not None:
+                payload["max_tokens"] = token_budget
             if self.reasoning_effort:
                 payload["reasoning_effort"] = self.reasoning_effort
             if self.enforce_json_schema:
@@ -259,7 +261,8 @@ class OpenAICompatibleClient:
 
         raise RuntimeError(
             f"structured response contract failed after {self.contract_retries + 1} attempts; "
-            f"finish_reason={last_finish!r}; error={last_error}; preview={last_preview[:700]!r}"
+            f"finish_reason={last_finish!r}; token_budget={token_budget!r}; "
+            f"error={last_error}; preview={last_preview[:700]!r}"
         )
 
 
@@ -330,6 +333,7 @@ def client_from_environment(model_cfg: dict[str, Any]):
             base_url=base_url or HF_ROUTER_URL,
             timeout=int(model_cfg.get("timeout_seconds", 180)),
             max_tokens=int(model_cfg.get("max_tokens", 2048)),
+            schema_max_tokens=model_cfg.get("schema_max_tokens") or {},
             max_retries=int(model_cfg.get("max_retries", 2)),
             contract_retries=int(model_cfg.get("contract_retries", 2)),
             retry_backoff_seconds=float(model_cfg.get("retry_backoff_seconds", 2.0)),
