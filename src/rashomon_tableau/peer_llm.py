@@ -45,33 +45,60 @@ def _strip_reasoning_wrappers(text: str) -> str:
     return text.strip()
 
 
-def _extract_json(text: str) -> dict[str, Any]:
-    """Extract the first complete JSON object from a model response.
+def _matches_schema_contract(value: Any, schema: dict[str, Any]) -> bool:
+    """Lightweight contract check used only to select the intended JSON object.
 
-    Structured-output capable providers should already return valid JSON. This
-    fallback tolerates reasoning wrappers, markdown fences, and prose or a second
-    object after the first valid JSON object without silently accepting a list or
-    scalar as the contract response.
+    The provider is still asked for strict JSON Schema output. This check prevents
+    fallback parsing from accidentally selecting an echoed schema or another JSON
+    object that does not contain the response's required top-level fields.
     """
+    if not isinstance(value, dict):
+        return False
+    required = schema.get("required") or []
+    if any(key not in value for key in required):
+        return False
+    properties = schema.get("properties") or {}
+    type_checks = {
+        "array": list,
+        "object": dict,
+        "string": str,
+        "boolean": bool,
+        "number": (int, float),
+        "integer": int,
+    }
+    for key in required:
+        spec = properties.get(key) or {}
+        expected = spec.get("type")
+        py_type = type_checks.get(expected)
+        if py_type is not None and not isinstance(value.get(key), py_type):
+            return False
+    return True
+
+
+def _extract_json(text: str, schema: dict[str, Any]) -> dict[str, Any]:
+    """Extract the first complete object satisfying the requested response schema."""
     text = _strip_reasoning_wrappers(text)
     if not text:
         raise ValueError("model returned empty content")
 
     try:
         value = json.loads(text)
-        if not isinstance(value, dict):
-            raise ValueError("model returned non-object JSON")
-        return value
-    except json.JSONDecodeError as first_error:
-        decoder = json.JSONDecoder()
-        for match in re.finditer(r"\{", text):
-            try:
-                value, _end = decoder.raw_decode(text[match.start() :])
-            except json.JSONDecodeError:
-                continue
-            if isinstance(value, dict):
-                return value
-        raise first_error
+        if _matches_schema_contract(value, schema):
+            return value
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", text):
+        try:
+            value, _end = decoder.raw_decode(text[match.start() :])
+        except json.JSONDecodeError:
+            continue
+        if _matches_schema_contract(value, schema):
+            return value
+
+    required = schema.get("required") or []
+    raise ValueError(f"no JSON object matched required fields {required}")
 
 
 def _schema_response_format(schema_name: str, schema: dict[str, Any]) -> dict[str, Any]:
@@ -86,14 +113,24 @@ def _schema_response_format(schema_name: str, schema: dict[str, Any]) -> dict[st
     }
 
 
-class OpenAICompatibleClient:
-    """Provider-neutral Chat Completions adapter.
+def _content_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        chunks: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                chunks.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    chunks.append(text)
+        return "".join(chunks)
+    return ""
 
-    All calls retain the same textual JSON contract. For Hugging Face Inference
-    Providers we additionally use the standardized OpenAI-compatible JSON Schema
-    response_format for every HF model and every experimental condition, avoiding
-    model-specific parsing advantages while preventing malformed benchmark output.
-    """
+
+class OpenAICompatibleClient:
+    """Provider-neutral Chat Completions adapter with HF reliability controls."""
 
     def __init__(
         self,
@@ -104,8 +141,10 @@ class OpenAICompatibleClient:
         timeout: int = 180,
         max_tokens: int | None = None,
         max_retries: int = 0,
+        contract_retries: int = 0,
         retry_backoff_seconds: float = 2.0,
         enforce_json_schema: bool = False,
+        reasoning_effort: str | None = None,
     ):
         self.model = model
         self.api_key = api_key
@@ -113,8 +152,10 @@ class OpenAICompatibleClient:
         self.timeout = timeout
         self.max_tokens = max_tokens
         self.max_retries = max(0, max_retries)
+        self.contract_retries = max(0, contract_retries)
         self.retry_backoff_seconds = max(0.0, retry_backoff_seconds)
         self.enforce_json_schema = enforce_json_schema
+        self.reasoning_effort = reasoning_effort
 
     def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
         req = urllib.request.Request(
@@ -146,27 +187,80 @@ class OpenAICompatibleClient:
         raise last_error
 
     def structured(self, *, instructions: str, input_text: str, schema_name: str, schema: dict[str, Any]) -> JsonResponse:
-        prompt = f"{instructions}\n\n{_json_contract(schema)}\n\nINPUT\n{input_text}"
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        if self.max_tokens is not None:
-            payload["max_tokens"] = self.max_tokens
-        if self.enforce_json_schema:
-            payload["response_format"] = _schema_response_format(schema_name, schema)
+        base_prompt = f"{instructions}\n\n{_json_contract(schema)}\n\nINPUT\n{input_text}"
+        total_input = 0
+        total_output = 0
+        total_tokens = 0
+        last_error: Exception | None = None
+        last_preview = ""
+        last_finish = ""
+        last_model = self.model
 
-        raw = self._request(payload)
-        choice = (raw.get("choices") or [{}])[0]
-        content = (choice.get("message") or {}).get("content") or ""
-        data = _extract_json(content)
-        u = raw.get("usage") or {}
-        usage = Usage(
-            input_tokens=int(u.get("prompt_tokens", 0) or 0),
-            output_tokens=int(u.get("completion_tokens", 0) or 0),
-            total_tokens=int(u.get("total_tokens", 0) or 0),
+        for contract_attempt in range(self.contract_retries + 1):
+            prompt = base_prompt
+            if contract_attempt:
+                prompt += (
+                    "\n\nIMPORTANT RETRY: The previous provider response did not satisfy the JSON contract. "
+                    "Return only the requested object with every required top-level field."
+                )
+            payload: dict[str, Any] = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            if self.max_tokens is not None:
+                payload["max_tokens"] = self.max_tokens
+            if self.reasoning_effort:
+                payload["reasoning_effort"] = self.reasoning_effort
+            if self.enforce_json_schema:
+                payload["response_format"] = _schema_response_format(schema_name, schema)
+
+            raw = self._request(payload)
+            last_model = raw.get("model", self.model)
+            u = raw.get("usage") or {}
+            total_input += int(u.get("prompt_tokens", 0) or 0)
+            total_output += int(u.get("completion_tokens", 0) or 0)
+            total_tokens += int(u.get("total_tokens", 0) or 0)
+
+            choice = (raw.get("choices") or [{}])[0]
+            last_finish = str(choice.get("finish_reason") or "")
+            message = choice.get("message") or {}
+
+            parsed = message.get("parsed")
+            if _matches_schema_contract(parsed, schema):
+                return JsonResponse(
+                    data=parsed,
+                    model=last_model,
+                    usage=Usage(total_input, total_output, total_tokens or total_input + total_output),
+                )
+
+            final_text = _content_text(message.get("content"))
+            reasoning_text = _content_text(message.get("reasoning_content") or message.get("reasoning"))
+            candidate_texts = [x for x in (final_text, reasoning_text) if x.strip()]
+            last_preview = " | ".join(x[:500] for x in candidate_texts)
+
+            for text in candidate_texts:
+                try:
+                    data = _extract_json(text, schema)
+                    return JsonResponse(
+                        data=data,
+                        model=last_model,
+                        usage=Usage(total_input, total_output, total_tokens or total_input + total_output),
+                    )
+                except (ValueError, json.JSONDecodeError) as exc:
+                    last_error = exc
+
+            if not candidate_texts:
+                last_error = ValueError("model returned empty content")
+
+            if contract_attempt < self.contract_retries:
+                delay = self.retry_backoff_seconds * (2**contract_attempt)
+                if delay:
+                    time.sleep(delay)
+
+        raise RuntimeError(
+            f"structured response contract failed after {self.contract_retries + 1} attempts; "
+            f"finish_reason={last_finish!r}; error={last_error}; preview={last_preview[:700]!r}"
         )
-        return JsonResponse(data=data, model=raw.get("model", self.model), usage=usage)
 
 
 class AnthropicMessagesClient:
@@ -208,7 +302,7 @@ class AnthropicMessagesClient:
             output_tokens=int(u.get("output_tokens", 0) or 0),
             total_tokens=int(u.get("input_tokens", 0) or 0) + int(u.get("output_tokens", 0) or 0),
         )
-        return JsonResponse(data=_extract_json(text), model=raw.get("model", self.model), usage=usage)
+        return JsonResponse(data=_extract_json(text, schema), model=raw.get("model", self.model), usage=usage)
 
 
 def client_from_environment(model_cfg: dict[str, Any]):
@@ -234,11 +328,13 @@ def client_from_environment(model_cfg: dict[str, Any]):
             model=model,
             api_key=api_key,
             base_url=base_url or HF_ROUTER_URL,
-            timeout=int(model_cfg.get("timeout_seconds", 150)),
-            max_tokens=int(model_cfg.get("max_tokens", 1024)),
+            timeout=int(model_cfg.get("timeout_seconds", 180)),
+            max_tokens=int(model_cfg.get("max_tokens", 2048)),
             max_retries=int(model_cfg.get("max_retries", 2)),
+            contract_retries=int(model_cfg.get("contract_retries", 2)),
             retry_backoff_seconds=float(model_cfg.get("retry_backoff_seconds", 2.0)),
             enforce_json_schema=bool(model_cfg.get("structured_output", True)),
+            reasoning_effort=model_cfg.get("reasoning_effort"),
         )
     if execution == "openai_compatible":
         if not base_url:
