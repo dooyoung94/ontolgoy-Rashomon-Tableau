@@ -21,10 +21,11 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Compile changed benchmark code
+      - name: Compile fixed-v3 benchmark code
         run: |
           python -m py_compile \
             src/rashomon_tableau/peer_llm.py \
+            src/rashomon_tableau/deberta_world_scorer.py \
             src/rashomon_tableau/openai_frontend.py \
             scripts/evaluate_magic_natural_language.py \
             scripts/run_magic_peer_matrix.py \
@@ -40,26 +41,26 @@ jobs:
         run: |
           test -n "$HF_TOKEN" || { echo 'HF_TOKEN repository secret is missing'; exit 1; }
 
-      - name: Run corrected fixed-call 20-row paired HF MAGIC pilot
+      - name: Run fixed-v3 20-row paired HF MAGIC pilot
         run: |
           python scripts/run_magic_peer_matrix.py \
             --model-set hf_open_llms \
             --attempts 1 \
             --limit 20 \
             --no-retries \
-            --cache-dir results/magic_hf_fixed20_v2_cache \
-            --out results/magic_hf_fixed20_v2_summary.json \
-            --loc-export results/magic_hf_fixed20_v2_loc_blinded.json
+            --cache-dir results/magic_hf_fixed20_v3_cache \
+            --out results/magic_hf_fixed20_v3_summary.json \
+            --loc-export results/magic_hf_fixed20_v3_loc_blinded.json
 
       - name: Analyze paired method effects
         if: always()
         run: |
-          if ls results/magic_hf_fixed20_v2_cache/*.jsonl >/dev/null 2>&1; then
+          if ls results/magic_hf_fixed20_v3_cache/*.jsonl >/dev/null 2>&1; then
             python scripts/analyze_magic_peer_matrix.py \
-              --cache-dir results/magic_hf_fixed20_v2_cache \
-              --out results/magic_hf_fixed20_v2_paired_stats.json
+              --cache-dir results/magic_hf_fixed20_v3_cache \
+              --out results/magic_hf_fixed20_v3_paired_stats.json
           else
-            echo '{"models":{},"note":"No completed fixed-call rows to analyze."}' > results/magic_hf_fixed20_v2_paired_stats.json
+            echo '{"models":{},"note":"No completed fixed-call rows to analyze."}' > results/magic_hf_fixed20_v3_paired_stats.json
           fi
 
       - name: Validate fixed logical-call budget and row completion
@@ -68,16 +69,15 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-          path = Path('results/magic_hf_fixed20_v2_summary.json')
+          path = Path('results/magic_hf_fixed20_v3_summary.json')
           if not path.exists():
               raise SystemExit('Summary was not created.')
           data = json.loads(path.read_text())
           policy = data.get('fixed_call_policy', {})
           print(json.dumps(policy, indent=2))
           print('Top-level failures:', data.get('failures', []))
-          cap = policy.get('logical_provider_call_cap')
-          if cap != 300:
-              raise SystemExit(f'Unexpected logical provider call cap: {cap}; expected 300')
+          if policy.get('logical_provider_call_cap') != 300:
+              raise SystemExit(f"Unexpected logical provider call cap: {policy.get('logical_provider_call_cap')}; expected 300")
           incomplete = []
           for model in data.get('models', []):
               print(
@@ -94,13 +94,13 @@ jobs:
               raise SystemExit(f'Incomplete fixed20 models: {incomplete}; top-level failures={data.get("failures", [])}')
           PY
 
-      - name: Upload corrected fixed-call 20-row pilot results
+      - name: Upload fixed-v3 20-row pilot results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: magic-hf-fixed-call-pilot-20-v2
+          name: magic-hf-fixed-call-pilot-20-v3
           path: |
-            results/magic_hf_fixed20_v2_summary.json
-            results/magic_hf_fixed20_v2_paired_stats.json
-            results/magic_hf_fixed20_v2_loc_blinded.json
-            results/magic_hf_fixed20_v2_cache/*.jsonl
+            results/magic_hf_fixed20_v3_summary.json
+            results/magic_hf_fixed20_v3_paired_stats.json
+            results/magic_hf_fixed20_v3_loc_blinded.json
+            results/magic_hf_fixed20_v3_cache/*.jsonl
