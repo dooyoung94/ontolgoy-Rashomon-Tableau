@@ -6,15 +6,16 @@ on:
       model_set:
         description: 'Model set from config/magic_peer_model_matrix.yaml'
         required: true
-        default: current_available
+        default: hf_open_llms
         type: choice
         options:
+          - hf_open_llms
           - current_available
           - historical_magic_peers
       limit:
-        description: 'Rows to run; 0 = all 588'
+        description: 'Rows to run; recommended 20 pilot, 100 stability, 0 full 588'
         required: true
-        default: '0'
+        default: '20'
         type: string
       attempts:
         description: 'Independent attempts per MAGIC example'
@@ -28,6 +29,7 @@ jobs:
     permissions:
       contents: read
     env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
@@ -50,6 +52,13 @@ jobs:
         run: |
           pip install -e .
           pip install 'transformers>=4.50,<5' 'torch>=2.2' sentencepiece
+      - name: Validate selected credential
+        shell: bash
+        run: |
+          if [ '${{ inputs.model_set }}' = 'hf_open_llms' ] && [ -z "$HF_TOKEN" ]; then
+            echo 'HF_TOKEN secret is required for hf_open_llms.'
+            exit 2
+          fi
       - name: Run paired MAGIC model matrix
         run: |
           python scripts/run_magic_peer_matrix.py \
