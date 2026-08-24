@@ -10,6 +10,15 @@ from typing import Any
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini-2026-03-17")
 API_URL = os.getenv("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses")
 
+LOCATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "source": {"type": "string", "enum": ["context1", "context2"]},
+        "sentence_id": {"type": "integer", "minimum": 0},
+    },
+    "required": ["source", "sentence_id"],
+    "additionalProperties": False,
+}
 
 CLAIM_EXTRACTION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -36,29 +45,38 @@ CLAIM_EXTRACTION_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-
 DIRECT_MAGIC_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "conflict_detected": {"type": "boolean"},
-        "locations": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "source": {"type": "string", "enum": ["context1", "context2"]},
-                    "sentence_id": {"type": "integer", "minimum": 0},
-                },
-                "required": ["source", "sentence_id"],
-                "additionalProperties": False,
-            },
-        },
+        "locations": {"type": "array", "items": LOCATION_SCHEMA},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
     },
     "required": ["conflict_detected", "locations", "confidence"],
     "additionalProperties": False,
 }
 
+COMPUTE_ANALYSIS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "candidate_conflicts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "locations": {"type": "array", "items": LOCATION_SCHEMA},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["summary", "locations", "confidence"],
+                "additionalProperties": False,
+            },
+        },
+        "analysis_summary": {"type": "string"},
+    },
+    "required": ["candidate_conflicts", "analysis_summary"],
+    "additionalProperties": False,
+}
 
 WORLD_SCORE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -68,6 +86,28 @@ WORLD_SCORE_SCHEMA: dict[str, Any] = {
         "unresolved": {"type": "number", "minimum": 0, "maximum": 1},
     },
     "required": ["support", "contradiction", "unresolved"],
+    "additionalProperties": False,
+}
+
+BATCH_WORLD_SCORE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "scores": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "support": {"type": "number", "minimum": 0, "maximum": 1},
+                    "contradiction": {"type": "number", "minimum": 0, "maximum": 1},
+                    "unresolved": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["id", "support", "contradiction", "unresolved"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["scores"],
     "additionalProperties": False,
 }
 
@@ -87,11 +127,7 @@ class StructuredResponse:
 
 
 class OpenAIResponsesClient:
-    """Minimal Responses API client with JSON-schema Structured Outputs.
-
-    The benchmark deliberately keeps this wrapper small so the evaluation can pin
-    the model snapshot and log exact token usage without depending on SDK behavior.
-    """
+    """Minimal Responses API client with JSON-schema Structured Outputs."""
 
     def __init__(self, api_key: str | None = None, model: str = DEFAULT_MODEL, timeout: int = 120):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
@@ -106,14 +142,7 @@ class OpenAIResponsesClient:
             "instructions": instructions,
             "input": input_text,
             "store": False,
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": schema_name,
-                    "schema": schema,
-                    "strict": True,
-                }
-            },
+            "text": {"format": {"type": "json_schema", "name": schema_name, "schema": schema, "strict": True}},
         }
         request = urllib.request.Request(
             API_URL,
@@ -155,41 +184,74 @@ def _extract_output_text(raw: dict[str, Any]) -> str:
 
 
 def numbered_context(context: str) -> str:
-    """Deterministically split MAGIC prose into sentence-addressable text.
-
-    This is intentionally simple; LOC evaluation stores the exact numbered text fed
-    to both the direct baseline and the Rashomon extraction pipeline.
-    """
     import re
 
     sentences = [x.strip() for x in re.split(r"(?<=[.!?])\s+", context.strip()) if x.strip()]
     return "\n".join(f"[{i}] {sentence}" for i, sentence in enumerate(sentences))
 
 
+def _contexts_prompt(context1: str, context2: str) -> str:
+    return f"CONTEXT1\n{numbered_context(context1)}\n\nCONTEXT2\n{numbered_context(context2)}"
+
+
 def extract_claims(client: OpenAIResponsesClient, context1: str, context2: str) -> StructuredResponse:
-    prompt = f"CONTEXT1\n{numbered_context(context1)}\n\nCONTEXT2\n{numbered_context(context2)}"
     return client.structured(
         instructions=(
             "Extract only atomic factual relational claims explicitly stated in the two contexts. "
             "Preserve source and sentence_id exactly. Normalize relation names to short lower-case phrases. "
             "Do not infer missing facts, resolve conflicts, or decide which source is true."
         ),
-        input_text=prompt,
+        input_text=_contexts_prompt(context1, context2),
         schema_name="magic_claim_extraction",
         schema=CLAIM_EXTRACTION_SCHEMA,
     )
 
 
 def direct_magic_judgment(client: OpenAIResponsesClient, context1: str, context2: str) -> StructuredResponse:
-    prompt = f"CONTEXT1\n{numbered_context(context1)}\n\nCONTEXT2\n{numbered_context(context2)}"
     return client.structured(
         instructions=(
             "Determine whether the two contexts contain at least one factual conflict. "
             "If there is a conflict, return all sentence locations needed to localize it. "
             "A conflict may be multi-hop or implicit. Use only the supplied contexts."
         ),
-        input_text=prompt,
+        input_text=_contexts_prompt(context1, context2),
         schema_name="magic_direct_judgment",
+        schema=DIRECT_MAGIC_SCHEMA,
+    )
+
+
+def compute_matched_analysis(client: OpenAIResponsesClient, context1: str, context2: str) -> StructuredResponse:
+    """First of exactly two calls in the fixed-call compute-matched baseline."""
+    return client.structured(
+        instructions=(
+            "Analyze the two contexts for possible factual conflicts, including multi-hop or implicit conflicts. "
+            "List plausible candidate conflicts and their sentence locations, but do not force a final binary decision. "
+            "Use only the supplied contexts. This is an analysis pass for a second final-decision pass."
+        ),
+        input_text=_contexts_prompt(context1, context2),
+        schema_name="magic_compute_analysis",
+        schema=COMPUTE_ANALYSIS_SCHEMA,
+    )
+
+
+def compute_matched_finalize(
+    client: OpenAIResponsesClient,
+    context1: str,
+    context2: str,
+    analysis: dict[str, Any],
+) -> StructuredResponse:
+    """Second of exactly two calls in the fixed-call compute-matched baseline."""
+    input_text = (
+        f"{_contexts_prompt(context1, context2)}\n\nFIRST-PASS ANALYSIS\n"
+        f"{json.dumps(analysis, ensure_ascii=False)}"
+    )
+    return client.structured(
+        instructions=(
+            "Make the final factual-conflict decision from the original contexts and the supplied first-pass analysis. "
+            "Return all sentence locations needed to localize any detected conflict. Do not add facts not present in the contexts."
+        ),
+        input_text=input_text,
+        schema_name="magic_compute_final",
         schema=DIRECT_MAGIC_SCHEMA,
     )
 
@@ -210,4 +272,22 @@ def score_world_bidirectionally(
         input_text=f"QUERY\n{query}\n\nWORLD EVIDENCE\n{evidence}",
         schema_name="rashomon_world_score",
         schema=WORLD_SCORE_SCHEMA,
+    )
+
+
+def score_worlds_batch(client: OpenAIResponsesClient, items: list[dict[str, Any]]) -> StructuredResponse:
+    """Score all candidate query-path worlds in one LLM call.
+
+    Each item must contain a stable id, query string, and world_evidence list. The
+    caller verifies that every requested id is returned exactly once.
+    """
+    return client.structured(
+        instructions=(
+            "For every supplied candidate possible world, score the evidence against its query in three mutually exclusive "
+            "directions: support, contradiction, unresolved. Consider the entire multi-hop evidence for each item independently. "
+            "Return exactly one score object for every input id and preserve each id exactly. Scores must be in [0,1]."
+        ),
+        input_text=json.dumps({"items": items}, ensure_ascii=False),
+        schema_name="rashomon_world_batch_score",
+        schema=BATCH_WORLD_SCORE_SCHEMA,
     )
