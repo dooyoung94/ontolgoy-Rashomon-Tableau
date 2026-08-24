@@ -27,19 +27,25 @@ jobs:
         shell: bash
         run: |
           test -n "$HF_TOKEN" || { echo 'HF_TOKEN repository secret is missing'; exit 1; }
-      - name: Run bounded HF contract smoke test
+      - name: Run bounded HF contract smoke test (GPT-OSS, Qwen3, Llama 3.3)
         run: |
           python scripts/smoke_hf_contracts.py \
             --model-set hf_open_llms \
             --out results/hf_contract_smoke.json
       - name: Show bounded request policy
+        if: always()
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          data = json.loads(Path('results/hf_contract_smoke.json').read_text())
+          path = Path('results/hf_contract_smoke.json')
+          if not path.exists():
+              print('Smoke result was not created.')
+              raise SystemExit(0)
+          data = json.loads(path.read_text())
           print('Hard provider request cap:', data['hard_provider_request_cap'])
           print('Retries enabled:', data['retries_enabled'])
+          print('Task budgets:', data.get('task_budgets'))
           for model in data['models']:
               print(model['model_key'], model['successful_calls'], '/ 3', 'all_ok=', model['all_contracts_ok'])
           PY
