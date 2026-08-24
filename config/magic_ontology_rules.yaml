@@ -1,17 +1,25 @@
 # Conservative relation semantics for the MAGIC structured benchmark.
-# These rules are domain semantics, not benchmark-answer templates.
-# If a relation is not listed here, the tableau does not invent a reverse or composition rule.
+# These are reusable relation semantics, not sample IDs or benchmark-answer templates.
+# If a relation is not listed here, the Tableau does not invent reverse/composition rules.
 
 symmetric:
   - shares border with
   - sibling
   - spouse
+  - equivalent to
+  - distinct from
+  - connects with
+  - territory overlaps
+  - territory disjoint with
+  - disjoint from
 
 inverse:
   contains: part of
   part of: contains
   parent: child
   child: parent
+  followed by: follows
+  follows: followed by
 
 hierarchy:
   father:
@@ -27,6 +35,7 @@ transitive:
   - subclass of
   - part of
   - located in the administrative territorial entity
+  - equivalent to
 
 composition:
   - left: instance of
@@ -39,9 +48,18 @@ composition:
     right: located in the administrative territorial entity
     result: located in the administrative territorial entity
 
-# Only explicit semantic incompatibilities should be declared.
-# Relation replacement alone is NOT treated as contradiction here.
-incompatible: []
+  # Equality/substitution semantics: if x≈y and y is distinct from z, x is distinct from z.
+  - left: equivalent to
+    right: distinct from
+    result: distinct from
+  - left: distinct from
+    right: equivalent to
+    result: distinct from
 
-# Avoid assuming functional relations unless the ontology guarantees them.
+# Only relation pairs with a generally interpretable opposing meaning are declared.
+incompatible:
+  - [equivalent to, distinct from]
+  - [territory overlaps, territory disjoint with]
+
+# Avoid assuming functionality unless the domain guarantees it.
 exclusive: []
