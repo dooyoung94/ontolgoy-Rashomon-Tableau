@@ -17,12 +17,10 @@ def load_records(cache_dir: Path) -> dict[str, list[dict]]:
 
 
 def exact_mcnemar_p(n01: int, n10: int) -> float:
-    """Two-sided exact McNemar/binomial p-value for discordant pairs."""
     n = n01 + n10
     if n == 0:
         return 1.0
     k = min(n01, n10)
-    # two-sided exact binomial with p=.5
     cumulative = sum(math.comb(n, i) for i in range(k + 1)) / (2 ** n)
     return min(1.0, 2.0 * cumulative)
 
@@ -43,11 +41,26 @@ def bootstrap_delta(a: list[int], b: list[int], samples: int = 10000, seed: int 
     return {"delta_pp": observed, "ci95_low_pp": lo, "ci95_high_pp": hi}
 
 
+def _eligible(row: dict, baseline: str, treatment: str) -> bool:
+    cond = row.get("conditions", {})
+    if baseline not in cond or treatment not in cond:
+        return False
+    if baseline == "compute_matched_direct":
+        return bool(cond[baseline].get("budget_reached"))
+    if treatment == "compute_matched_direct":
+        return bool(cond[treatment].get("budget_reached"))
+    return True
+
+
 def paired_condition(rows: list[dict], baseline: str, treatment: str) -> dict | None:
     pairs = []
+    excluded_budget_mismatch = 0
     for row in rows:
         cond = row.get("conditions", {})
         if baseline not in cond or treatment not in cond:
+            continue
+        if not _eligible(row, baseline, treatment):
+            excluded_budget_mismatch += 1
             continue
         pairs.append((int(bool(cond[baseline].get("conflict_detected"))), int(bool(cond[treatment].get("conflict_detected")))))
     if not pairs:
@@ -58,6 +71,7 @@ def paired_condition(rows: list[dict], baseline: str, treatment: str) -> dict | 
     n10 = sum(x == 1 and y == 0 for x, y in pairs)
     return {
         "n": len(pairs),
+        "excluded_budget_mismatch": excluded_budget_mismatch,
         "baseline_rate": sum(a) / len(a),
         "treatment_rate": sum(b) / len(b),
         "discordant_baseline0_treatment1": n01,
@@ -80,22 +94,22 @@ def main() -> None:
         "deberta_vs_direct": ("direct", "rashomon_worlds_deberta_scorer"),
         "deberta_vs_llm": ("rashomon_worlds_llm_scorer", "rashomon_worlds_deberta_scorer"),
     }
-    result = {"metric": "MAGIC conflict identification on released conflict rows (paired recall diagnostic)", "models": {}}
+    result = {
+        "metric": "MAGIC conflict identification on released conflict rows (paired recall diagnostic)",
+        "compute_matched_policy": "Pairs with budget_reached=false are excluded from compute-matched comparisons.",
+        "models": {},
+    }
     for model, rows in model_rows.items():
         result["models"][model] = {
             name: paired_condition(rows, base, treat)
             for name, (base, treat) in comparisons.items()
         }
 
-    # Aggregate is descriptive only: concatenate examples across model runs while retaining paired outcomes.
     aggregate = {}
     for name, (base, treat) in comparisons.items():
         pooled = []
         for rows in model_rows.values():
-            for row in rows:
-                cond = row.get("conditions", {})
-                if base in cond and treat in cond:
-                    pooled.append(row)
+            pooled.extend(rows)
         aggregate[name] = paired_condition(pooled, base, treat)
     result["aggregate_descriptive"] = aggregate
     result["interpretation"] = (
