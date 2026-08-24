@@ -1,18 +1,20 @@
-# Rashomon-Tableau: Perspective-Aware Neuro-Symbolic Contradiction Reasoning over Multi-Perspective Detective Narratives
+# Rashomon-Tableau: Perspective-Indexed Satisfiability Reasoning for Multi-View Contradiction Detection and Multi-Proof Explanation
 
-## 라쇼몽-태블로: 다중 관점 탐정 서사에서의 관점 인식형 뉴로-심볼릭 모순 추론
+## 라쇼몽-태블로: 다중 관점 모순 탐지를 위한 관점 인덱스 기반 만족가능성 추론과 복수 증명 설명
 
 ---
 
 ## 초록
 
-다중 관점 자연어 서사에서는 동일 사건이나 인물 관계가 서로 다른 화자의 관점에서 상이하게 기술될 수 있다. 그러나 관점 간 서술 차이는 곧바로 논리적 모순을 의미하지 않는다. 기존 Natural Language Inference(NLI) 기반 모순 탐지는 주로 문장 쌍의 의미적 불일치를 판별하며, 그래프 기반 추론 방법은 지식그래프에서 정답을 지지하는 관계 경로를 탐색하는 데 초점을 둔다. 이러한 방법은 관점별 세계를 분리해 유지하면서 각 세계의 논리적 양립 가능성을 판정하거나, 온톨로지에 의해 간접적으로 유도되는 implicit contradiction을 설명 가능한 증명 경로로 제시하는 데 한계가 있다.
+자연어 추론 시스템은 여러 문장이나 지식 조각 사이의 모순을 판별할 때 흔히 모든 정보를 하나의 지식베이스로 병합하거나, 문장 쌍을 Natural Language Inference(NLI) 문제로 변환한다. 그러나 서로 다른 화자, 문서, 시점, 관측원 또는 에이전트가 제공한 정보를 하나의 지식베이스로 조기에 병합하면 **모순이 존재한다는 사실은 검출할 수 있어도 그 모순이 한 관점 내부에서 발생한 것인지, 서로 독립적으로 일관적인 두 관점 사이에서 발생한 것인지 구분하기 어렵다.** 또한 NLI 기반 모델은 표면 문장 간 모순에는 강하지만 관계의 역관계, 계층 관계, 대칭성 등의 온톨로지 규칙을 따라 간접적으로 발생하는 implicit contradiction을 검증 가능한 논리 경로로 설명하기 어렵다.
 
-본 연구는 이를 해결하기 위해 **Rashomon-Tableau**를 제안한다. 제안 방법은 CONAN 탐정 서사의 각 인물 관점을 독립적인 ABox로 표현하고, 공통 관계 Ontology를 TBox로 구성한다. 이후 Ontology closure를 통해 inverse, hierarchy, symmetry 등 관계 의미를 확장하고, lightweight relational Tableau를 이용해 각 관점 및 관점 간 결합 지식베이스의 satisfiability를 검사한다. 개별 관점은 satisfiable하지만 두 관점을 결합했을 때 unsatisfiable한 경우를 inter-perspective contradiction으로 정의하고, 관점 간 정보가 다르지만 동시에 참일 수 있는 경우를 perspective divergence로 구분한다. 또한 모순 발생 시 Minimal Unsatisfiable Subset(MUS)을 추출하고, 하나의 최적 설명만 선택하지 않고 동등하거나 유사하게 타당한 복수의 증명 경로를 Rashomon explanation set으로 유지한다.
+본 연구는 이러한 문제를 해결하기 위해 **Rashomon-Tableau**를 제안한다. 핵심은 특정 탐정 서사 데이터셋에 특화된 모델이 아니라, 기존 Tableau satisfiability reasoning에 **Perspective Index**를 도입하는 것이다. 각 관점 `P_i`의 명제 집합을 독립 ABox `A_i`로 유지하고, 공통 Ontology/TBox `T`를 적용한 뒤 `SAT(T∪A_i)`, `SAT(T∪A_j)`, `SAT(T∪A_i∪A_j)`를 단계적으로 검사한다. 이를 통해 단순한 정보 차이인 **Divergence**, 하나의 관점 자체가 모순인 **Intra-Perspective Contradiction**, 개별 관점은 일관적이지만 결합 시 모순인 **Inter-Perspective Contradiction**을 분리한다. 모순이 발생하면 Minimal Unsatisfiable Subset(MUS)을 계산하고, 하나의 proof만 반환하는 대신 여러 독립적 또는 거의 동등한 최소 증명을 **Rashomon Explanation Set**으로 보존한다.
 
-예비 controlled verification에서는 CONAN Gold relation으로부터 생성한 80개 사례를 대상으로 explicit contradiction, hierarchy-based implicit contradiction, inverse-based implicit contradiction, consistent, divergence를 평가하였다. 현재 구현은 Accuracy 1.000, Macro-F1 1.000, Implicit Contradiction Recall 1.000을 기록하였다. 단, 이 결과는 동일한 온톨로지 의미론으로 생성된 controlled benchmark에 대한 **reasoner correctness 검증값**이며 자연 서사 일반화 성능으로 해석하지 않는다. 향후 human-annotated CONAN perspective benchmark와 함께 SNLI, MultiNLI, ANLI, LogicNLI, FOLIO, FEVER, EX-FEVER 및 AVeriTeC를 보조 실험 데이터셋으로 활용해 자연어 모순 탐지, 논리 추론, 다중 증거 설명가능성을 교차 검증할 예정이다.
+동일한 논리 규칙과 80개 controlled scope-ablation 사례에서 기존 merged-ABox Tableau는 4-way `Consistent / Divergence / Intra / Inter` 분류에서 Accuracy 0.750, Macro-F1 0.667을 기록한 반면, Perspective-Indexed Tableau는 Accuracy 1.000, Macro-F1 1.000을 기록하여 각각 **+25.0 percentage points**, **+33.3 percentage points** 개선되었다. 이 차이는 일반 SAT 판정 능력의 향상이 아니라 **모순의 발생 범위를 보존하는 능력의 향상**이다. 별도의 20개 multi-clash explanation 사례에서는 단일 proof 반환 방식의 최소 모순 설명 coverage가 0.500인 반면 Rashomon explanation enumeration은 1.000으로 **+50.0 percentage points** 향상되었다. 한편 기존 논리 추론 연구에서도 뉴로심볼릭 접근은 순수 LLM 대비 일관된 개선을 보고한다. Logic-LM은 5개 논리 benchmark 평균에서 standard prompting 대비 39.2%, CoT 대비 18.4% 향상을 보고했으며, LTRAG는 FOLIO에서 GPT-4o Standard 73.63%와 CoT 78.02% 대비 80.77%, AR-LSAT에서 40.26%와 43.72% 대비 56.71%를 기록하였다. 본 연구는 이러한 뉴로심볼릭 추론 흐름을 **다중 관점의 논리적 양립 가능성, 모순 범위 추적, 복수 proof 설명** 문제로 확장한다.
 
-**주요어:** Rashomon Effect, Tableau Algorithm, Ontology Reasoning, Contradiction Detection, Multi-Perspective Narrative, Neuro-Symbolic AI, CONAN, Explainable AI
+CONAN은 본 방법론의 multi-perspective 특성을 검증하기 위한 대표 데이터셋으로 사용하며, 방법 자체는 탐정 서사에 한정되지 않는다. LogicNLI, FOLIO, ProofWriter, AR-LSAT, FEVER 계열과 같은 논리/NLI/fact-verification benchmark로 확장할 수 있도록 데이터 어댑터와 평가 프로토콜을 설계한다.
+
+**주요어:** Tableau Algorithm, Perspective-Aware Reasoning, Satisfiability, Ontology, Contradiction Detection, Rashomon Effect, Minimal Unsatisfiable Subset, Neuro-Symbolic AI, Explainable AI
 
 ---
 
@@ -20,146 +22,148 @@
 
 ## 1.1 연구 배경
 
-자연어 기반 지식 추론에서는 하나의 사건이나 관계가 서로 다른 화자에 의해 다르게 서술되는 상황이 빈번하게 발생한다. 특히 탐정 서사, 법률 진술, 뉴스 보도, 회의 기록, 정책 논쟁과 같이 여러 이해관계자의 관점이 동시에 존재하는 환경에서는 동일한 대상에 대해 서로 다른 정보가 제공될 수 있다.
+현실의 지식은 하나의 일관된 출처에서만 생성되지 않는다. 뉴스 기사, 법률 진술, 회의 기록, 장애 분석 로그, 의료 기록, 다중 에이전트 시스템, 탐정 서사와 같은 환경에서는 동일 대상에 대해 여러 관측원과 화자가 서로 다른 정보를 제공한다. 따라서 모순 탐지 문제에서 중요한 것은 단순히 `A`와 `¬A`를 찾는 것이 아니라 **어떤 관점의 어떤 명제들이 결합될 때 모순이 발생하는지**를 보존하는 것이다.
 
-이때 중요한 문제는 **정보의 차이와 논리적 모순을 구분하는 것**이다. 예를 들어 한 화자가 `John likes Mary`라고 말하고 다른 화자가 `John works with Susan`이라고 말하는 경우 두 서술은 서로 다르지만 동시에 참일 수 있다. 반면 한 관점에서 `Mary is Tom's daughter`라고 서술하고 다른 관점에서 `Mary is not Tom's child`라고 서술한다면 `DaughterOf ⊑ ChildOf`라는 온톨로지 규칙을 통해 간접적인 모순이 발생한다.
+기존 접근은 크게 두 방향으로 나뉜다.
 
-기존 NLI 기반 접근은 문장 쌍의 entailment, neutral, contradiction을 분류하는 데 효과적이지만, 여러 관계 규칙을 따라 추론한 후 나타나는 implicit contradiction이나 관점별 세계의 독립성을 명시적으로 다루기 어렵다. 반대로 ToG와 같은 그래프 기반 추론은 지식그래프에서 질문에 답하기 위한 관계 경로 탐색에 강점을 가지지만, 그래프 경로 자체의 존재보다 **여러 명제 집합이 동시에 참일 수 있는지**를 판정하는 문제와는 목표가 다르다.
+첫째, NLI 기반 접근은 premise-hypothesis pair를 entailment, neutral, contradiction으로 분류한다. SNLI, MultiNLI, ANLI는 이 접근의 대표 benchmark다. 이러한 모델은 자연어 표현의 다양성을 처리하는 데 강하지만, 논리 규칙에 의해 여러 단계를 거쳐 발생하는 implicit contradiction과 proof-level explanation에는 한계가 있다.
 
-## 1.2 문제 정의
+둘째, symbolic 또는 neuro-symbolic 접근은 자연어를 논리 표현으로 변환한 후 theorem prover 또는 constraint solver를 사용한다. Logic-LM, LINC, LTRAG, Logic-Thinker 등은 FOLIO, ProofWriter, AR-LSAT 등에서 순수 prompting보다 높은 성능을 보고했다. 그러나 이들 연구의 핵심 문제는 주로 **하나의 문제 인스턴스 안에서 정답을 도출하는 것**이다. 서로 다른 출처/관점의 지식베이스를 독립적으로 유지한 뒤 모순의 발생 범위를 분류하는 문제는 별도의 축이다.
 
-본 연구의 핵심 문제는 다음과 같다.
+본 연구는 기존 Tableau의 SAT/UNSAT 판단 능력을 유지하면서 **Perspective Index**를 추가한다. 따라서 제안 방법의 핵심 주장은 “Tableau 자체보다 더 강력한 SAT solver를 만들었다”가 아니다. 오히려 다음 세 가지다.
+
+1. **Perspective Separation**으로 기존 merged-KB가 잃어버리는 모순의 발생 범위를 보존한다.
+2. **Ontology-mediated Tableau**로 explicit뿐 아니라 implicit contradiction을 검증한다.
+3. **Rashomon Explanation Set**으로 하나의 proof를 선택할 때 손실되는 대안적 최소 설명을 보존한다.
+
+## 1.2 핵심 문제 정의
+
+본 연구의 출발점은 다음 문장이다.
 
 ```text
-Different Perspective ≠ Contradiction
+Different information ≠ Contradiction
+Contradiction existence ≠ Contradiction scope
+One valid proof ≠ All valid explanations
 ```
 
-본 연구는 다중 관점 서사를 다음 네 범주로 구분한다.
+따라서 단순 binary contradiction을 다음처럼 확장한다.
 
-1. **Consistent**: 동일하거나 양립 가능한 사실
-2. **Perspective Divergence**: 서로 다른 정보를 제공하지만 동시에 참일 수 있음
-3. **Intra-Perspective Contradiction**: 하나의 관점 내부에서 논리적 충돌 발생
-4. **Inter-Perspective Contradiction**: 각 관점은 독립적으로 일관적이나 결합 시 충돌 발생
+| 상태 | 의미 |
+|---|---|
+| Consistent | 두 관점이 동일하거나 논리적으로 양립 가능 |
+| Divergence | 서로 다른 정보를 제공하지만 동시에 참일 수 있음 |
+| Intra-Perspective Contradiction | 적어도 하나의 관점 자체가 UNSAT |
+| Inter-Perspective Contradiction | 각 관점은 SAT이나 결합된 지식베이스가 UNSAT |
 
 ## 1.3 연구 질문
 
-- **RQ1.** LLM은 다중 관점 자연어 서사를 논리 명제로 얼마나 정확하게 변환할 수 있는가?
-- **RQ2.** 개별 관점의 내부 모순과 관점 간 모순을 Tableau 기반 satisfiability 검사로 구분할 수 있는가?
-- **RQ3.** NLI 기반 pairwise contradiction과 비교했을 때 Ontology + Tableau 기반 논리 추론 방법이 implicit contradiction을 더 잘 탐지하는가?
-- **RQ4.** 모순의 논리 경로와 최소 충돌 집합을 제공함으로써 설명가능성을 향상시킬 수 있는가?
+- **RQ1. Autoformalization:** 자연어를 ontology-compatible proposition으로 얼마나 정확히 변환할 수 있는가?
+- **RQ2. Perspective Scope:** Perspective-Indexed Tableau는 기존 merged-ABox Tableau보다 `Intra / Inter / Divergence / Consistent`를 더 정확히 구분하는가?
+- **RQ3. Implicit Contradiction:** Ontology closure와 Tableau를 결합하면 NLI/LLM direct judge보다 간접 논리 모순을 안정적으로 검출할 수 있는가?
+- **RQ4. Explanation Multiplicity:** Rashomon explanation set은 single-proof 방식보다 유효한 최소 모순 설명 coverage를 향상시키는가?
+- **RQ5. Cross-Dataset Generality:** 제안한 관점-인덱스 추론 구조를 서사 데이터 외의 FOL/NLI/fact-verification benchmark에도 적용할 수 있는가?
 
 ## 1.4 연구 기여
 
-- 관점 차이와 논리적 모순을 분리하는 **Perspective-Aware Contradiction Definition** 제안
-- Ontology implication 기반 **implicit contradiction** 탐색
-- Tableau satisfiability 기반 **검증 가능한 clash** 제공
-- MUS와 복수 proof path를 결합한 **Rashomon Explanation Set** 제안
-- CONAN 기반 재현 가능한 명제화/추론 평가 파이프라인 제공
-- NLI, FOL, Fact Verification 계열 benchmark를 활용한 외부 타당성 검증 설계
+본 연구의 기여는 다음과 같다.
+
+1. **Perspective-Indexed Tableau**: 관점별 ABox를 유지하면서 local SAT와 joint SAT를 분리 검사하는 추론 구조.
+2. **Contradiction Scope Classification**: contradiction existence를 넘어 intra/inter scope를 정의하고 정량 평가.
+3. **Ontology-mediated Implicit Contradiction**: inverse, hierarchy, symmetry, incompatibility 등의 관계 의미를 통한 간접 clash 검출.
+4. **Rashomon Explanation Set**: MUS 기반으로 복수의 최소 또는 근사 최소 증명을 보존하는 설명 구조.
+5. **Controlled Ablation Protocol**: merged Tableau, perspective Tableau, Rashomon-Tableau의 기여를 분리해 평가.
+6. **Cross-Dataset Evaluation Framework**: CONAN을 하나의 사례로 사용하되 LogicNLI, FOLIO, ProofWriter, AR-LSAT, FEVER 계열로 확장 가능한 평가 설계.
 
 ---
 
-# 2. 관련 연구
+# 2. 관련 연구 및 기존 성능
 
-## 2.1 자연어 추론과 모순 탐지
+## 2.1 NLI 기반 모순 탐지
 
-SNLI는 대규모 자연어 추론 데이터셋을 제공하며 entailment, neutral, contradiction의 3-class 분류를 표준화한 대표 benchmark이다. 이후 MultiNLI는 10개의 서로 다른 장르를 포함해 도메인 일반화와 cross-genre reasoning을 평가하도록 확장되었다. ANLI는 human-and-model-in-the-loop adversarial 수집 방식으로 기존 NLI 모델의 취약점을 적극적으로 드러내도록 설계되었다.
+LogicNLI는 모델의 first-order logical reasoning을 진단하기 위해 구축된 benchmark다. 공개 결과에서 RoBERTa는 Test-A Accuracy 68.3%, robustness Test-R 80.4%, generalization Test-G 49.9%를 기록했다. BERT는 각각 55.9%, 66.0%, 31.6%, XLNet은 65.4%, 78.9%, 43.0%를 기록했다. 특히 RoBERTa조차 generalization에서 49.9%에 머무른 것은 학습 기반 NLI 모델이 논리 구조의 분포 변화에 민감할 수 있음을 보여준다.
 
-이러한 데이터셋은 본 연구에서 Pairwise NLI baseline을 구축하는 데 유용하지만, 기본 단위가 `premise-hypothesis pair`라는 점에서 다중 관점 세계와 ontology-mediated contradiction을 직접 모델링하지는 않는다.
+### LogicNLI 공개 결과
 
-## 2.2 논리 추론 benchmark
+| Model | Test-A Accuracy | Test-R Robustness | Test-G Generalization |
+|---|---:|---:|---:|
+| BERT | 55.9 | 66.0 | 31.6 |
+| RoBERTa | **68.3** | **80.4** | **49.9** |
+| XLNet | 65.4 | 78.9 | 43.0 |
 
-LogicNLI는 first-order logic(FOL) 추론 능력을 진단하기 위해 구축된 NLI-style benchmark이며 accuracy, robustness, generalization, interpretability 관점에서 모델의 논리 능력을 분석한다. FOLIO는 자연어 premise와 FOL annotation을 동시에 제공하며, 1,430개의 conclusion example과 487개의 premise set을 포함한다. FOL 표현의 논리적 정합성을 inference engine으로 검증한다는 점에서 본 연구의 `Natural Language → Logical Proposition → Tableau` 구조와 직접적인 관련이 있다.
+출처: Tian et al., *Diagnosing the First-Order Logical Reasoning Ability Through LogicNLI*, EMNLP 2021.
 
-LogicBench는 명제논리, 일차논리, 비단조논리에 걸친 25개 추론 패턴을 체계적으로 평가하며 LLM이 복잡한 추론과 부정(negation)에서 어려움을 보인다는 결과를 보고한다. 최근 FOL-Traces는 프로그램적으로 검증된 대규모 first-order logic reasoning trace를 제공하여 추론 과정 자체의 정확성을 평가한다.
+이 결과는 본 연구의 성능과 직접 동일 조건에서 비교한 것이 아니다. 본 연구에서는 이를 **학습 기반 logical NLI의 기준점**으로 사용하고, 추후 LogicNLI adapter를 통해 동일 데이터에서 직접 비교해야 한다.
 
-본 연구는 이들과 달리 논리 추론 자체뿐 아니라 **관점별 ABox 분리와 cross-perspective satisfiability**를 핵심 문제로 설정한다.
+## 2.2 Neuro-Symbolic Logical Reasoning
 
-## 2.3 Fact Verification과 증거 기반 모순
+Logic-LM은 LLM을 semantic parser로 사용하고 symbolic solver에 추론을 위임한다. 저자들은 ProofWriter, PrOntoQA, FOLIO, LogicalDeduction, AR-LSAT의 5개 benchmark 평균에서 standard prompting 대비 **39.2%**, CoT prompting 대비 **18.4%**의 성능 향상을 보고했다.
 
-FEVER는 Wikipedia 기반 claim을 Supported, Refuted, NotEnoughInfo로 분류하고 판단에 필요한 evidence sentence를 함께 제공한다. 이는 claim-evidence 수준에서 contradiction과 근거를 동시에 평가할 수 있다는 점에서 본 연구의 설명가능성 평가에 유용하다.
+이는 “LLM의 자연어 이해 + 결정적 symbolic reasoning”이라는 구조가 논리 문제에서 유효하다는 강한 근거다. Rashomon-Tableau도 동일한 큰 흐름에 속하지만, 차이는 symbolic solver의 목적이 최종 answer selection만이 아니라 **perspective-local consistency와 cross-perspective consistency를 분리해서 검증**한다는 데 있다.
 
-EX-FEVER는 2-hop과 3-hop 추론을 요구하는 60,000개 이상의 claim을 제공해 multi-hop explainable fact verification을 평가한다. AVeriTeC는 실제 fact-checker가 검증한 real-world claim에 대해 웹 증거를 검색하고 veracity를 판정하는 benchmark로, closed dataset을 넘어 실제 환경에서 evidence quality와 claim verification을 함께 평가한다.
+## 2.3 FOLIO와 AR-LSAT에서의 공개 성능 비교
 
-본 연구에서는 FEVER 계열 데이터를 `관점 A = claim`, `관점 B = evidence-derived proposition` 형태로 변환해 contradiction proof와 evidence faithfulness를 검증할 수 있다.
+LTRAG 논문의 Table 1은 FOLIO와 AR-LSAT에서 Standard, CoT, LINC, Logic-LM, LTRAG를 비교한다. GPT-4o 기준 FOLIO에서는 Standard 73.63%, CoT 78.02%, LTRAG 80.77%를 기록한다. 같은 표에 인용된 기존 GPT-4 기반 Logic-LM은 78.92%, LINC는 72.50%다. AR-LSAT에서는 GPT-4o Standard 40.26%, CoT 43.72%, LTRAG 56.71%이며, 기존 Logic-LM 결과는 43.04%다.
 
-## 2.4 그래프 기반 추론
+### Published logical reasoning results
 
-ToG(Think-on-Graph)는 LLM이 Knowledge Graph의 관계와 엔티티를 반복적으로 탐색하며 질문에 답하기 위한 유망한 reasoning path를 선택한다. 이 방식의 핵심은 `answer-supporting path search`이며, 본 연구가 다루는 `logical compatibility test`와는 목적이 다르다.
+| Dataset | Method | Accuracy (%) | Source status |
+|---|---|---:|---|
+| FOLIO | GPT-4o Standard | 73.63 | LTRAG Table 1 |
+| FOLIO | GPT-4o CoT | 78.02 | LTRAG Table 1 |
+| FOLIO | LINC | 72.50 | imported by LTRAG from original paper |
+| FOLIO | Logic-LM | 78.92 | imported by LTRAG from original paper |
+| FOLIO | **LTRAG** | **80.77** | LTRAG Table 1 |
+| AR-LSAT | GPT-4o Standard | 40.26 | LTRAG Table 1 |
+| AR-LSAT | GPT-4o CoT | 43.72 | LTRAG Table 1 |
+| AR-LSAT | Logic-LM | 43.04 | imported by LTRAG from original paper |
+| AR-LSAT | **LTRAG** | **56.71** | LTRAG Table 1 |
 
-본 연구는 그래프 경로가 존재하는가를 묻지 않고 다음을 묻는다.
+이 표에서 LTRAG는 FOLIO에서 GPT-4o Standard 대비 **+7.14 pp**, CoT 대비 **+2.75 pp** 향상되며, AR-LSAT에서는 Standard 대비 **+16.45 pp**, CoT 대비 **+12.99 pp** 향상된다.
 
-```text
-Can all propositions from multiple perspectives be true at the same time?
-```
+본 연구에서 이 수치를 제시하는 이유는 Rashomon-Tableau가 이미 이 결과를 능가했다고 주장하기 위해서가 아니다. 오히려 **symbolic solver를 결합하면 복잡한 논리 추론에서 순수 LLM보다 개선될 수 있다는 기존 실험적 근거**를 제시하고, 그 다음 연구 공백으로 “다중 관점과 contradiction scope”를 제안하기 위함이다.
 
-즉 graph traversal이 아니라 satisfiability와 clash를 핵심 연산으로 한다.
+## 2.4 ProofWriter/FOLIO의 추가 공개 결과
 
-## 2.5 설명가능성과 Rashomon 관점
+Logic-Thinker는 여러 logical benchmark에서 다음과 같은 결과를 보고한다.
 
-NILE은 NLI 모델이 label뿐 아니라 natural-language explanation을 생성하도록 하고 explanation faithfulness를 명시적으로 평가한다. 본 연구는 explanation을 자연어 rationale에만 의존하지 않고, ontology rule과 Tableau clash, MUS, derivation path를 통해 검증 가능한 구조로 표현한다.
+| Method | ProofWriter | FOLIO |
+|---|---:|---:|
+| GPT-4 | 52.67 | 69.11 |
+| GPT-CoT | 68.11 | 70.58 |
+| Logic-LM | 79.66 | 78.92 |
+| LINC | 98.30 | 72.50 |
+| SymbolCoT | 82.50 | 83.33 |
+| **Logic-Thinker** | **100.00** | 80.10 |
 
-Rashomon 관점은 하나의 관측에 대해 복수의 유사하게 타당한 설명 또는 모델이 존재할 수 있음을 강조한다. 본 연구는 이를 contradiction explanation으로 확장해 하나의 대표 proof만 고르는 대신, 일정 기준 내에서 타당한 여러 최소/근사 최소 proof path를 함께 보존한다.
+출처: *Logic-Thinker: Teaching Large Language Models to Think more Logically*, Findings of EMNLP 2025.
 
----
+이 결과에서도 dataset에 따라 가장 좋은 접근이 달라진다. ProofWriter에서는 LINC와 Logic-Thinker가 매우 높지만 FOLIO에서는 SymbolCoT가 더 높다. 즉 **하나의 reasoning architecture가 모든 논리 데이터에서 항상 최고라고 볼 수 없으며**, 본 연구도 cross-dataset 실험이 필수적이다.
 
-# 3. 연구 방법
+## 2.5 기존 Tableau와 본 연구의 차이
 
-## 3.1 전체 구조
-
-```text
-CONAN Multi-Perspective Narrative
-        ↓
-Perspective Separation
-        ↓
-LLM / Gold Proposition Extraction
-        ↓
-Perspective-specific ABoxes
-        ↓
-Ontology Closure
-        ↓
-Intra / Cross-Perspective Tableau
-        ↓
-SAT / UNSAT
-        ↓
-Consistent / Divergence / Contradiction
-        ↓
-MUS
-        ↓
-Rashomon Explanation Set
-```
-
-## 3.2 관점별 지식베이스
-
-관점 집합을 다음과 같이 정의한다.
+전통적인 Tableau는 하나의 knowledge base `K`에 대해 satisfiability를 판단한다.
 
 ```text
-P = {P1, P2, ..., Pm}
+Tableau(K) -> SAT or UNSAT
 ```
 
-각 관점 `P_i`의 명제 집합은
+다중 관점 정보가 `A_i`, `A_j`로 주어졌을 때 단순 병합하면
 
 ```text
-A_i = {phi_i1, phi_i2, ..., phi_in}
+Tableau(T ∪ A_i ∪ A_j)
 ```
 
-이며 공통 온톨로지 TBox를 `T`라 하면
+만 검사하게 된다. 이 경우 union이 UNSAT이라는 사실은 알 수 있지만, 다음 두 경우를 구분하지 못한다.
+
+### Case A: Intra contradiction
 
 ```text
-K_i = T ∪ A_i
+SAT(T ∪ A_i) = 0
+SAT(T ∪ A_j) = 1
+SAT(T ∪ A_i ∪ A_j) = 0
 ```
 
-이다.
-
-## 3.3 내부 모순
-
-```text
-C_intra(P_i) = 1 - SAT(T ∪ A_i)
-```
-
-`SAT(T ∪ A_i)=0`이면 한 관점 내부에서 이미 충돌이 발생한 것이다.
-
-## 3.4 관점 간 모순
+### Case B: Inter contradiction
 
 ```text
 SAT(T ∪ A_i) = 1
@@ -167,466 +171,558 @@ SAT(T ∪ A_j) = 1
 SAT(T ∪ A_i ∪ A_j) = 0
 ```
 
-이면
+두 경우 모두 merged Tableau의 최종 출력은 `UNSAT`이다. 따라서 본 연구의 novelty는 SAT solver 자체의 논리 완전성을 개선한 것이 아니라, **reasoning context를 perspective-indexed form으로 확장하여 UNSAT의 발생 범위를 추적**하는 것이다.
+
+---
+
+# 3. 제안 방법: Perspective-Indexed Tableau
+
+## 3.1 관점별 지식베이스
+
+관점 집합을
 
 ```text
-C_inter(P_i,P_j)=1
+P = {P_1, P_2, ..., P_m}
 ```
 
-로 정의한다.
+이라 하고, 각 관점의 명제 집합을
 
-## 3.5 Divergence
+```text
+A_i = {phi_i1, phi_i2, ..., phi_in}
+```
+
+으로 정의한다.
+
+공통 ontology를 `T`라 하면 각 관점 KB는
+
+```text
+K_i = T ∪ A_i
+```
+
+이다.
+
+핵심은 처음부터
+
+```text
+A_1 ∪ A_2 ∪ ... ∪ A_m
+```
+
+으로 병합하지 않는 것이다.
+
+## 3.2 Intra-Perspective Contradiction
+
+```text
+C_intra(P_i) = 1 - SAT(T ∪ A_i)
+```
+
+`SAT(T∪A_i)=0`이면 그 모순은 외부 관점과 결합하기 전부터 존재한다.
+
+## 3.3 Inter-Perspective Contradiction
+
+```text
+C_inter(P_i,P_j)
+=
+SAT(T∪A_i)
+· SAT(T∪A_j)
+· [1 - SAT(T∪A_i∪A_j)]
+```
+
+즉 각 관점은 독립적으로 일관적이지만 함께 참일 수 없는 경우다.
+
+## 3.4 Divergence
 
 ```text
 A_i != A_j
-SAT(T ∪ A_i ∪ A_j) = 1
+AND
+SAT(T∪A_i∪A_j)=1
 ```
 
-이면 두 관점은 서로 다르지만 동시에 참일 수 있으므로 contradiction이 아니라 divergence로 분류한다.
+이면 contradiction이 아니라 divergence로 분류한다.
 
-## 3.6 Implicit Contradiction
+## 3.5 Ontology-mediated Implicit Contradiction
 
-직접적인 `phi`, `NOT phi` pair가 없더라도
+직접적인 동일 predicate의 positive/negative pair가 없어도
 
 ```text
 T ∪ A_i |= phi
-T ∪ A_j |= NOT phi
+T ∪ A_j |= ¬phi
 ```
 
-이면 implicit contradiction으로 정의한다.
+이면 implicit contradiction이다.
 
-## 3.7 Ontology Rule
+현재 PoC는 다음 관계 규칙을 지원한다.
 
-현재 PoC는 다음 관계 규칙을 사용한다.
-
-- Symmetry
-- Inverse
-- Hierarchy
-- Incompatible relation
-- Exclusive / functional relation
+- inverse
+- hierarchy
+- symmetry
+- incompatible relation pair
+- exclusive relation
 
 예:
 
 ```text
-DaughterOf(x,y) -> ChildOf(x,y)
-HusbandOf(x,y) -> WifeOf(y,x)
+father_of_x(A,B)
+father_of_x ⊑ parent_of_x
+¬parent_of_x(A,B)
+
+→ parent_of_x(A,B)
+→ CLASH
 ```
 
-## 3.8 Tableau 판정
-
-Ontology closure 이후 다음 clash를 검사한다.
-
-- Positive literal vs negated literal
-- Incompatible relation pair
-- Exclusive relation violation
-- Hierarchy / inverse / symmetry로 유도된 implicit clash
-
-## 3.9 MUS와 Rashomon Explanation Set
-
-UNSAT이 발생하면 최소 충돌 집합을 추출한다.
+또는
 
 ```text
-MUS_ij
-= min {M subset A_i ∪ A_j | SAT(T ∪ M)=0}
+host_of_x(A,B)
+host_of_x inverse guest_of_x
+¬guest_of_x(B,A)
+
+→ guest_of_x(B,A)
+→ CLASH
 ```
 
-모순 `c`를 설명하는 경로 집합을 `Pi(c)`라 할 때
+---
+
+# 4. Rashomon Explanation Set
+
+## 4.1 문제: 하나의 proof만 반환할 때의 설명 손실
+
+하나의 UNSAT knowledge base에는 서로 독립적인 여러 최소 모순 집합이 존재할 수 있다.
+
+예를 들어
+
+```text
+MUS_1 = {
+  father_of_x(P,C),
+  ¬parent_of_x(P,C)
+}
+
+MUS_2 = {
+  host_of_x(H,G),
+  ¬guest_of_x(G,H)
+}
+```
+
+가 동시에 존재할 수 있다.
+
+기존 single-proof 출력은 하나를 찾는 순간 종료할 수 있다. 이는 contradiction existence에는 충분하지만 “왜 모순인가?”에 대한 가능한 설명을 일부 버린다.
+
+## 4.2 Minimal Unsatisfiable Subset
+
+```text
+MUS(K)
+=
+min_{⊆}
+{M ⊆ K : SAT(T∪M)=0}
+```
+
+## 4.3 Rashomon Explanation Set
+
+모순 `c`를 증명하는 설명 경로들의 집합을
+
+```text
+Pi(c) = {pi_1, ..., pi_k}
+```
+
+라고 한다.
+
+최고 점수와 충분히 가까운 증명을
 
 ```text
 R_epsilon(c)
-= {pi | pi proves c, Score(pi) >= Score(pi*) - epsilon}
+=
+{pi : pi ⊢ contradiction,
+      Score(pi) >= Score(pi*) - epsilon}
 ```
 
-으로 정의해 하나의 설명만 선택하지 않는다.
+로 보존한다.
+
+이때 Rashomon의 역할은 classification label을 바꾸는 것이 아니라 **설명의 다양성과 coverage를 유지하는 것**이다.
 
 ---
 
-# 4. 실험 데이터셋
+# 5. 데이터셋의 역할: CONAN은 사례이며 방법은 일반적이다
 
-## 4.1 Primary Dataset: CONAN
+본 연구에서 CONAN은 연구 대상 자체가 아니라 **여러 인물 관점이 명시적으로 분리되어 있다는 장점 때문에 선택한 multi-perspective validation dataset**이다.
 
-본 연구의 핵심 데이터셋은 CONAN이다. CONAN은 동일 이야기 안에서 등장인물별 서사와 관계 라벨을 제공하므로 perspective-specific ABox를 구축하기에 적합하다.
+방법론을 데이터셋에 따라 다음처럼 매핑할 수 있다.
 
-사용 구조:
+| Dataset | 원래 목적 | Perspective/Tableau 적용 |
+|---|---|---|
+| CONAN | 관계 추출, 다중 인물 서사 | character별 ABox, cross-character contradiction |
+| LogicNLI | FOL logical NLI | premise groups를 perspective/context로 분리해 logical clash 검증 |
+| FOLIO | NL + FOL reasoning | Gold FOL을 직접 Tableau 입력, autoformalization 오류 분리 평가 |
+| ProofWriter | synthetic rule reasoning | proof correctness 및 implicit contradiction stress test |
+| AR-LSAT | analytical constraint reasoning | competing constraint sets의 satisfiability 비교 |
+| SNLI/MultiNLI/ANLI | pairwise NLI | neural contradiction baseline |
+| FEVER/EX-FEVER | claim verification | claim vs evidence-source perspective, evidence proof evaluation |
+| AVeriTeC | real-world fact checking | 출처별 evidence context를 perspective로 유지 |
 
-```text
-data/english/data_final/<story>/txt/<character>.txt
-data/english/label/<story>/<character>.json
-```
+따라서 논문의 핵심 claim은 다음이다.
 
-관계 라벨은 다음 형태로 명제화한다.
-
-```text
-Subject -> [Object, Relation]
-→ Relation(Subject, Object)
-```
-
-## 4.2 추가 비교/보조 데이터셋
-
-| Dataset | 원 연구 목적 | 규모/특징 | 본 연구에서의 역할 | 연계 RQ |
-|---|---|---|---|---|
-| **SNLI** | NLI | 570K+ premise-hypothesis pairs | Pairwise contradiction baseline | RQ3 |
-| **MultiNLI** | Multi-genre NLI | 433K examples, 10 genres | 장르 변화에 대한 NLI generalization | RQ3 |
-| **ANLI** | Adversarial NLI | Human-model adversarial collection | 어려운 contradiction baseline | RQ3 |
-| **LogicNLI** | FOL reasoning diagnosis | NLI-style logical reasoning | logical consistency / implicit contradiction 검증 | RQ1, RQ3 |
-| **FOLIO** | NL + FOL reasoning | 1,430 conclusions, 487 premise sets | NL→FOL 명제화 + logical proof 검증 | RQ1, RQ3, RQ4 |
-| **LogicBench** | Systematic logical reasoning | 25 logical reasoning patterns | negation/conditional/inference rule robustness | RQ3 |
-| **FEVER** | Fact verification | 185,445 claims + evidence | Refuted claim을 evidence-based contradiction으로 변환 | RQ3, RQ4 |
-| **EX-FEVER** | Multi-hop explainable fact verification | 60K+ claims, 2-hop/3-hop | 다중 단계 모순 경로와 설명 평가 | RQ3, RQ4 |
-| **AVeriTeC** | Real-world claim verification | Web evidence + real fact-check claims | 실제 환경 외부 타당성 검증 | RQ3, RQ4 |
-| **FOL-Traces** | Verified FOL reasoning traces | Programmatically verified traces | Tableau derivation path correctness 비교 | RQ4 |
-
-### 권장 우선순위
-
-논문 본 실험에서 모든 데이터셋을 동시에 사용하는 것은 범위가 지나치게 커질 수 있다. 따라서 다음 순서를 권장한다.
-
-```text
-Primary:
-CONAN
-
-Core External Validation:
-FOLIO + LogicNLI + FEVER
-
-Strong NLI Baseline:
-ANLI or MultiNLI
-
-Explainability Extension:
-EX-FEVER
-
-Real-world Extension:
-AVeriTeC
-```
-
-가장 현실적인 본 논문 구성은 다음 5개 데이터셋이다.
-
-```text
-CONAN + FOLIO + LogicNLI + ANLI + FEVER
-```
-
-- CONAN: 관점 효과
-- FOLIO: NL→Logic 변환
-- LogicNLI: 논리 추론
-- ANLI: 강한 NLI contradiction baseline
-- FEVER: evidence 기반 contradiction / explanation
+> **Perspective-indexed satisfiability reasoning은 source-attributed multi-view knowledge가 존재하는 모든 domain에 적용 가능하며, CONAN은 그 중 하나의 실험 데이터셋이다.**
 
 ---
 
-# 5. 실험 설계
+# 6. 실험 설계
 
-## 5.1 RQ1: 자연어 명제 변환
+## 6.1 Experiment 1: Controlled Reasoner Correctness
 
-### CONAN
+목적: ontology closure와 SAT/UNSAT 구현 검증.
 
-```text
-Character Narrative
-→ LLM Proposition Extraction
-→ CONAN Gold Triple
-```
+CONAN Gold relation에서 생성된 80개 controlled 사례:
 
-평가:
+- Explicit contradiction: 20
+- Hierarchy implicit contradiction: 10
+- Inverse implicit contradiction: 10
+- Consistent: 20
+- Divergence: 20
 
-- Triple Precision
-- Triple Recall
-- Triple F1
+현재 Rashomon-Tableau reasoner는 이 benchmark에서 Accuracy 1.000, Macro-F1 1.000, Implicit Contradiction Recall 1.000을 기록한다.
 
-### FOLIO 보조 평가
+이 결과는 자연어 일반화 성능이 아니라 **symbolic reasoner correctness**다.
 
-FOLIO의 NL-FOL pair를 이용해 다음을 추가로 평가한다.
+## 6.2 Experiment 2: 기존 Tableau 대비 Perspective Scope Ablation
 
-- Predicate identification
-- Argument alignment
-- Polarity / negation accuracy
-- Logical form exact match
+### 비교 방법
 
-이를 통해 CONAN 관계 라벨만으로 평가하기 어려운 복잡 논리식 변환 능력을 보완한다.
+- **Vanilla merged-ABox Tableau**: `SAT(T∪A_i∪A_j)`만 검사
+- **Perspective Tableau**: local SAT `A_i`, `A_j` 후 union SAT 검사
+- **Rashomon-Tableau**: Perspective Tableau와 동일한 판정 + multi-proof explanation
 
-## 5.2 RQ2: 내부/관점 간 모순
-
-CONAN에서 각 perspective ABox를 분리해 다음 세 번의 검사를 수행한다.
+4개 클래스 각각 20개, 총 80개 controlled 사례를 구성한다.
 
 ```text
-SAT(T ∪ A_i)
-SAT(T ∪ A_j)
-SAT(T ∪ A_i ∪ A_j)
+Consistent: 20
+Divergence: 20
+Intra contradiction: 20
+Inter contradiction: 20
 ```
-
-## 5.3 RQ3: NLI 대비 implicit contradiction
-
-비교 모델:
-
-- Pairwise NLI
-- LLM Direct Judge
-- Ontology Rule Only
-- Vanilla Tableau
-- Perspective-separated Tableau
-- Rashomon-Tableau
-
-평가 데이터:
-
-- CONAN annotated contradiction benchmark
-- ANLI contradiction subset
-- LogicNLI
-- FOLIO
-- FEVER Refuted subset
-
-핵심 지표:
-
-- Accuracy
-- Macro-F1
-- Explicit Contradiction Recall
-- Implicit Contradiction Recall
-- Negation-sensitive Accuracy
-
-## 5.4 RQ4: 설명가능성
-
-데이터:
-
-- CONAN
-- FOLIO
-- FEVER
-- EX-FEVER
-
-평가:
-
-- Proof Validity
-- Evidence Faithfulness
-- Path Completeness
-- MUS Minimality
-- Alternative Explanation Coverage
-- Human Evaluation
-
-EX-FEVER의 2-hop/3-hop 구조를 이용하면 `단일 clash`가 아니라 `다단계 derivation path`의 설명 품질을 평가할 수 있다.
-
----
-
-# 6. Baseline 및 Ablation
-
-## 6.1 Baseline
-
-```text
-B1. Pairwise NLI
-B2. LLM Direct Contradiction Judge
-B3. Ontology Rule Only
-B4. Vanilla Merged-ABox Tableau
-B5. Perspective-separated Tableau
-B6. Rashomon-Tableau
-```
-
-## 6.2 Ablation
-
-```text
-Tableau
-  vs
-Tableau + Ontology
-  vs
-Tableau + Ontology + Perspective Separation
-  vs
-Tableau + Ontology + Perspective Separation + Rashomon
-```
-
-이를 통해 각각 다음 효과를 분리한다.
-
-- Ontology inference contribution
-- Perspective separation contribution
-- MUS contribution
-- Rashomon multiple-explanation contribution
-
----
-
-# 7. 예비 실험 결과
-
-## 7.1 Controlled Verification
-
-현재 구현의 correctness를 확인하기 위해 CONAN Gold relation으로 controlled case를 구성하였다.
-
-### 설정
-
-- Story: `655-The Mysterious Case of Zhangdong Town (6 people)`
-- Sample perspectives: `Xiting`, `Yang Minxi`
-- Seed: `42`
-- Total cases: `80`
-
-### 사례 구성
-
-| Subtype | Cases |
-|---|---:|
-| Explicit contradiction | 20 |
-| Hierarchy implicit contradiction | 10 |
-| Inverse implicit contradiction | 10 |
-| Consistent | 20 |
-| Divergence | 20 |
 
 ### 결과
 
-| Metric | Score |
+| Method | Accuracy | Macro-F1 | Δ Accuracy vs Vanilla | Δ Macro-F1 vs Vanilla |
+|---|---:|---:|---:|---:|
+| Vanilla merged Tableau | 0.750 | 0.667 | - | - |
+| **Perspective Tableau** | **1.000** | **1.000** | **+25.0 pp** | **+33.3 pp** |
+| **Rashomon-Tableau** | **1.000** | **1.000** | **+25.0 pp** | **+33.3 pp** |
+
+### 해석
+
+이 결과는 “Perspective Tableau의 SAT solver가 Vanilla Tableau보다 더 강력하다”는 의미가 아니다.
+
+Vanilla merged Tableau도 contradiction 자체는 발견한다. 그러나 이미 병합된 KB만 보면 intra contradiction과 inter contradiction의 provenance를 잃는다. 따라서 개선되는 것은
+
+```text
+Generic SAT accuracy          X
+Contradiction scope accuracy  O
+```
+
+이다.
+
+구체적으로 Vanilla baseline은 모든 UNSAT union을 inter contradiction으로 귀속하기 때문에 `Intra` 20개를 모두 오분류한다. Perspective Tableau는 local satisfiability를 먼저 검사하여 이를 복원한다.
+
+## 6.3 Experiment 3: Rashomon Explanation Ablation
+
+20개 사례 각각에 독립적인 최소 모순 2개를 구성한다.
+
+```text
+MUS A: hierarchy-mediated clash
+MUS B: inverse-mediated clash
+```
+
+총 Gold minimal explanations = 40이다.
+
+### 결과
+
+| Explanation Method | Minimal Explanation Coverage |
 |---|---:|
-| Accuracy | **1.000** |
-| Macro-F1 | **1.000** |
-| Implicit Contradiction Recall | **1.000** |
+| Single best/first proof | 0.500 |
+| **Rashomon explanation set** | **1.000** |
+| Improvement | **+50.0 pp** |
 
-Subtype별 Accuracy도 모두 1.000이었다.
+이 결과도 classification 성능 향상이 아니다. 같은 contradiction label에 대해 **유효한 대안적 설명을 얼마나 보존하는지**의 차이다.
 
-## 7.2 결과 해석의 제한
+## 6.4 Experiment 4: Natural Multi-Perspective Benchmark
 
-이 결과는 자연어 일반화 성능이 아니다. Controlled benchmark는 CONAN Gold proposition에 Ontology 규칙을 적용해 생성한 사례이므로, 동일한 의미론을 사용하는 Tableau reasoner가 올바르게 구현되었는지 확인하는 **unit/functional correctness evaluation**에 가깝다.
-
-따라서 다음 주장을 해서는 안 된다.
+CONAN character pair에서 자동 후보를 추출하고 사람 annotator가 다음을 라벨링한다.
 
 ```text
-Rashomon-Tableau achieves 100% contradiction detection accuracy on natural narratives.
+consistent
+divergence
+intra_contradiction
+inter_contradiction
+unknown / insufficient evidence
 ```
 
-대신 다음과 같이 기술해야 한다.
+비교군:
+
+1. Pairwise NLI
+2. LLM Direct Judge
+3. Vanilla merged Tableau
+4. Perspective Tableau
+5. Rashomon-Tableau
+
+평가:
+
+- Accuracy
+- Macro-F1
+- Intra F1
+- Inter F1
+- Divergence F1
+- Implicit contradiction recall
+- Proof validity
+- Evidence faithfulness
+- Explanation coverage
+
+## 6.5 Experiment 5: Cross-Dataset Logical Generalization
+
+향후 동일 adapter interface로 다음 benchmark를 실행한다.
+
+### LogicNLI
+
+- 목적: neural NLI 대비 symbolic logical inference
+- 주요 비교: RoBERTa Test-A 68.3, Test-G 49.9
+
+### FOLIO
+
+- 목적: 자연어 autoformalization과 FOL inference 분리
+- published reference range: Standard GPT-4o 73.63, CoT 78.02, Logic-LM 78.92, LTRAG 80.77
+
+### ProofWriter
+
+- 목적: rule depth 증가에 따른 implicit inference 검증
+- published reference: GPT-4 52.67, GPT-CoT 68.11, Logic-LM 79.66, LINC 98.30, Logic-Thinker 100.00
+
+### AR-LSAT
+
+- 목적: constraint-dense reasoning
+- published reference: GPT-4o Standard 40.26, CoT 43.72, Logic-LM 43.04, LTRAG 56.71
+
+### FEVER / EX-FEVER
+
+- 목적: claim-evidence contradiction + multi-hop explanation
+- 본 연구에서는 evidence source별 named context를 perspective index로 매핑한다.
+
+---
+
+# 7. 종합 결과 비교
+
+## 7.1 우리 방법 내부 ablation
+
+| 평가 축 | Vanilla Tableau | Perspective Tableau | Rashomon-Tableau |
+|---|---:|---:|---:|
+| SAT/UNSAT existence | O | O | O |
+| Divergence 구분 | 부분 가능 | O | O |
+| Intra vs Inter scope | X | **O** | **O** |
+| Scope Accuracy | 75.0% | **100.0%** | **100.0%** |
+| Scope Macro-F1 | 66.7% | **100.0%** | **100.0%** |
+| Multi-MUS explanation | X | 기본적으로 single | **O** |
+| Explanation Coverage | 50.0%* | 50.0%* | **100.0%** |
+
+`*` single-proof baseline under the controlled two-MUS explanation benchmark.
+
+## 7.2 기존 모델 공개 성능과의 위치
+
+아래 표는 **동일 데이터에서 본 방법을 직접 실행한 결과가 아니라 관련 연구의 published benchmark results**다. 따라서 숫자 자체를 우리 방법과 직접 우열 비교하면 안 된다. 본 연구가 해결하려는 문제의 위치를 보여주기 위한 참고다.
+
+| Dataset | Neural / Prompt Baseline | Neuro-Symbolic / Symbolic | Published Gain |
+|---|---|---|---|
+| Logic-LM 5-dataset avg. | Standard prompting | Logic-LM | +39.2% reported |
+| Logic-LM 5-dataset avg. | CoT | Logic-LM | +18.4% reported |
+| FOLIO | GPT-4o Standard 73.63 | LTRAG 80.77 | +7.14 pp |
+| FOLIO | GPT-4o CoT 78.02 | LTRAG 80.77 | +2.75 pp |
+| AR-LSAT | GPT-4o Standard 40.26 | LTRAG 56.71 | +16.45 pp |
+| AR-LSAT | GPT-4o CoT 43.72 | LTRAG 56.71 | +12.99 pp |
+| ProofWriter | GPT-4 52.67 | Logic-Thinker 100.00 | +47.33 pp |
+| ProofWriter | GPT-CoT 68.11 | Logic-Thinker 100.00 | +31.89 pp |
+
+이 공개 결과들이 반복해서 보여주는 것은 **논리 구조가 명확한 문제에서는 symbolic verification을 결합했을 때 순수 생성형 추론보다 개선될 가능성이 크다**는 점이다.
+
+Rashomon-Tableau의 차별점은 이 성능 향상 흐름을 단순 answer accuracy가 아니라 다음으로 확장하는 데 있다.
 
 ```text
-The current controlled evaluation verifies that the implemented reasoner
-correctly handles explicit, hierarchy-mediated, inverse-mediated contradictions,
-consistency, and divergence under the encoded ontology semantics.
+Answer correctness
+        ↓
+Logical satisfiability
+        ↓
+Perspective-aware contradiction scope
+        ↓
+Multiple valid contradiction explanations
 ```
-
-자연 서사 성능은 human-annotated benchmark 및 외부 데이터셋 실험 이후 별도로 보고해야 한다.
 
 ---
 
 # 8. 논의
 
-## 8.1 NLI와의 차이
+## 8.1 본 연구의 실제 차별점
 
-NLI는 기본적으로 `premise → hypothesis` 관계를 분류한다. 반면 본 연구는 여러 관점의 명제 집합 전체를 하나의 논리 세계로 보고 satisfiability를 검사한다.
+본 연구의 가장 중요한 차별점은 CONAN도, 탐정 서사도 아니다.
+
+### 차별점 1: Tableau의 입력 구조
+
+기존:
 
 ```text
-NLI:
-P(contradiction | premise, hypothesis)
-
-Rashomon-Tableau:
-SAT(T ∪ A_i ∪ A_j) ?
+K = T ∪ A_1 ∪ ... ∪ A_m
+Tableau(K)
 ```
 
-따라서 결과가 확률 score가 아니라 논리적 `SAT/UNSAT`와 clash 경로라는 점이 다르다.
+제안:
+
+```text
+Tableau(T ∪ A_1)
+Tableau(T ∪ A_2)
+...
+Tableau(T ∪ A_i ∪ A_j)
+```
+
+즉 **perspective provenance를 추론 과정 끝까지 유지**한다.
+
+### 차별점 2: Divergence와 Contradiction 분리
+
+두 관점의 명제가 다르다는 이유만으로 contradiction으로 보지 않는다.
+
+```text
+Different + Joint SAT = Divergence
+Different + Local SAT + Joint UNSAT = Inter Contradiction
+Local UNSAT = Intra Contradiction
+```
+
+### 차별점 3: 단일 proof 강제 선택 방지
+
+하나의 원인을 설명하는 여러 최소 충돌 경로가 존재할 수 있다. 본 연구에서는 이를 제거하지 않고 explanation set으로 보존한다.
 
 ## 8.2 ToG와의 차이
 
-ToG는 답을 지지하는 경로를 탐색한다.
+ToG가 묻는 질문:
 
 ```text
-pi* = argmax P(pi | q, G)
+Which graph path is useful for answering q?
 ```
 
-본 연구는 답 경로가 아니라 관점의 동시 만족 가능성을 검사한다.
+Rashomon-Tableau가 묻는 질문:
 
 ```text
-SAT(T ∪ A_i ∪ A_j)
+Can these attributed sets of propositions coexist?
+If not, where does inconsistency arise and what minimal proofs establish it?
 ```
 
-즉 graph search와 logical compatibility test의 차이이다.
-
-## 8.3 Rashomon의 역할
-
-일반적인 Tableau는 모순 여부를 판정할 수 있지만, 동일한 contradiction에 대해 복수의 최소/근사 최소 설명이 존재할 수 있다. 본 연구는 이를 제거하지 않고 explanation set으로 유지한다.
-
-이 구조는 다음 두 가지 효과를 기대한다.
-
-- 특정 proof path 하나에 대한 과도한 의존 감소
-- 사용자에게 대안적 원인/설명 경로 제공
-
-## 8.4 데이터셋 확장의 의미
-
-CONAN만 사용하면 탐정 서사와 인물 관계라는 특정 도메인에 결과가 종속될 수 있다. 따라서 외부 데이터셋을 다음과 같이 역할별로 분리해 검증하는 것이 중요하다.
+ToG-like retrieval은 향후 large-scale KG에서 relevant subgraph를 줄이는 front-end로 결합할 수 있다.
 
 ```text
-CONAN   → Perspective reasoning
-FOLIO   → NL-to-FOL / deductive reasoning
-LogicNLI→ Formal logical consistency
-ANLI    → Adversarial contradiction
-FEVER   → Evidence-backed contradiction
-EX-FEVER→ Multi-hop explanation
-AVeriTeC→ Real-world verification
+Graph Retrieval / ToG
+        ↓
+Relevant perspective subgraph
+        ↓
+Perspective-Indexed Tableau
+        ↓
+SAT / UNSAT / MUS
 ```
 
-이렇게 하면 단일 데이터셋 성능이 아니라 방법론의 각 구성 요소를 독립적으로 검증할 수 있다.
+따라서 두 접근은 반드시 경쟁 관계가 아니라 retrieval과 verification의 역할 분리가 가능하다.
+
+## 8.3 적용 가능 도메인
+
+Perspective는 사람의 “관점”에만 한정되지 않는다.
+
+```text
+Person perspective
+Document source
+News outlet
+Sensor
+Log source
+Database snapshot
+Time window
+Agent
+Model hypothesis
+```
+
+모두 `context index`로 일반화할 수 있다.
+
+따라서 최종적으로는 **Perspective-Indexed Tableau**보다 더 일반적인 용어인 **Context-Indexed Tableau Reasoning**으로 확장 가능하다.
 
 ---
 
 # 9. 한계
 
-현재 연구의 주요 한계는 다음과 같다.
+첫째, 현재 구현은 full OWL-DL Tableau가 아니라 binary relation을 중심으로 한 lightweight relational Tableau다. existential restriction, disjunction, cardinality, qualified restriction 등은 지원하지 않는다.
 
-1. 현재 Tableau는 full OWL-DL reasoner가 아니라 binary relation 중심 lightweight reasoner이다.
-2. 현재 Ontology rule은 수작업으로 정의된 관계 규칙을 포함한다.
-3. CONAN은 원래 contradiction benchmark가 아니므로 human annotation이 추가로 필요하다.
-4. Controlled score 1.000은 자연어 generalization 성능이 아니다.
-5. Rashomon explanation quality에 대한 인간 평가가 아직 수행되지 않았다.
-6. LLM proposition extraction error가 downstream Tableau result에 직접 영향을 줄 수 있다.
+둘째, +25.0 pp와 +33.3 pp의 scope 성능 개선은 controlled ablation 결과다. 자연어에서 자동 추출한 proposition error가 포함되면 성능은 낮아질 수 있다.
 
-향후 OWLReady2, Pellet, HermiT 등의 reasoner와 비교하고, ontology induction 자동화 및 confidence-aware proposition handling을 추가할 필요가 있다.
+셋째, Rashomon explanation coverage +50.0 pp 역시 두 개의 독립 MUS를 의도적으로 포함한 controlled benchmark다. 자연 데이터에서 실제 대안 proof 분포가 어떻게 되는지 별도 평가가 필요하다.
+
+넷째, FOLIO, LogicNLI, ProofWriter, AR-LSAT 표의 수치는 기존 논문에서 인용한 published results이며 현재 Rashomon-Tableau를 해당 benchmark에서 실행한 결과가 아니다. 향후 adapter 구현 후 동일 split과 동일 metric에서 직접 비교해야 한다.
+
+다섯째, 자연어 autoformalization의 정확도가 전체 시스템의 상한을 결정할 수 있다. Logic-LM 계열 연구 역시 real-world FOLIO/AR-LSAT에서 executable logical form 생성이 synthetic benchmark보다 어렵다고 보고했다.
 
 ---
 
 # 10. 결론
 
-본 연구는 다중 관점 자연어 서사에서 단순한 정보 차이와 실제 논리적 모순을 구분하기 위한 **Rashomon-Tableau** 프레임워크를 제안하였다. 핵심은 각 관점을 독립적인 ABox로 유지하고, 공통 Ontology에 기반한 의미 확장 이후 Tableau satisfiability 검사를 수행하는 것이다.
+본 연구는 Tableau 기반 모순 추론에서 단순한 `SAT/UNSAT` 판정만으로는 다중 출처 지식의 구조를 충분히 설명할 수 없다는 문제에서 출발하였다.
 
-이를 통해 각 관점 자체는 일관적이지만 결합할 경우에만 발생하는 inter-perspective contradiction을 명시적으로 정의할 수 있으며, hierarchy나 inverse rule을 거쳐 발생하는 implicit contradiction도 탐색할 수 있다. 또한 MUS와 Rashomon explanation set을 활용해 하나의 설명 경로만 제시하지 않고 여러 타당한 논리 경로를 보존한다.
-
-예비 controlled verification에서 explicit, hierarchy implicit, inverse implicit contradiction과 consistent/divergence 사례를 모두 정확히 처리함을 확인하였다. 다음 단계에서는 human-annotated CONAN benchmark와 함께 FOLIO, LogicNLI, ANLI, FEVER, EX-FEVER를 이용해 실제 자연어 환경에서의 정확도, implicit contradiction 탐지력, explanation faithfulness를 평가해야 한다.
-
-본 연구의 최종 목표는 단순히 `contradiction 여부`를 분류하는 것이 아니라 다음 질문에 답하는 것이다.
+제안한 Rashomon-Tableau는 각 정보 출처를 Perspective Index로 유지하여 다음 세 가지 질문을 분리한다.
 
 ```text
-Can these perspectives coexist?
-If not, why not?
-And are there multiple equally valid ways to explain the inconsistency?
+1. Is each perspective internally satisfiable?
+2. Can multiple perspectives coexist?
+3. If not, how many minimal valid explanations exist?
 ```
+
+controlled scope ablation에서 기존 merged-ABox Tableau는 Accuracy 75.0%, Macro-F1 66.7%였으나 Perspective Tableau는 각각 100.0%, 100.0%로 향상되었다. 이는 **+25.0 pp Accuracy, +33.3 pp Macro-F1** 개선이다. 또한 multi-clash explanation benchmark에서 single-proof coverage 50.0% 대비 Rashomon explanation set은 100.0%를 기록하여 **+50.0 pp explanation coverage**를 보였다.
+
+그러나 이 수치의 의미를 정확히 제한해야 한다. 본 연구는 기존 Tableau보다 더 강한 SAT solver를 주장하는 것이 아니다. 개선되는 것은 **perspective provenance가 필요한 contradiction-scope classification과 multi-proof explanation**이다.
+
+Logic-LM, LINC, LTRAG, Logic-Thinker 등 기존 연구가 FOLIO, ProofWriter, AR-LSAT에서 보여준 symbolic reasoning의 성능 향상을 고려하면, 본 연구의 다음 핵심 단계는 Perspective-Indexed Tableau를 CONAN뿐 아니라 LogicNLI, FOLIO, ProofWriter, FEVER 계열에 직접 적용하여 동일 조건에서 cross-dataset generalization을 검증하는 것이다.
+
+본 연구의 최종 주장은 다음 한 문장으로 요약된다.
+
+> **모순을 탐지하는 것만으로는 충분하지 않다. 어떤 관점에서 모순이 발생했는지, 서로 다른 관점이 함께 참일 수 있는지, 그리고 그 모순을 설명하는 복수의 최소 증명이 무엇인지까지 보존해야 한다.**
 
 ---
 
-# 11. 참고문헌
+# 참고문헌
 
-1. Bowman, S. R., Angeli, G., Potts, C., & Manning, C. D. (2015). **A Large Annotated Corpus for Learning Natural Language Inference.** EMNLP 2015. https://aclanthology.org/D15-1075/
-2. Williams, A., Nangia, N., & Bowman, S. R. (2018). **A Broad-Coverage Challenge Corpus for Sentence Understanding through Inference.** NAACL 2018. https://aclanthology.org/N18-1101/
-3. Nie, Y., Williams, A., Dinan, E., Bansal, M., Weston, J., & Kiela, D. (2020). **Adversarial NLI: A New Benchmark for Natural Language Understanding.** ACL 2020. https://aclanthology.org/2020.acl-main.441/
-4. Tian, J., Li, Y., Chen, W., Xiao, L., He, H., & Jin, Y. (2021). **Diagnosing the First-Order Logical Reasoning Ability Through LogicNLI.** EMNLP 2021. https://aclanthology.org/2021.emnlp-main.303/
-5. Han, S. et al. (2024). **FOLIO: Natural Language Reasoning with First-Order Logic.** EMNLP 2024. https://aclanthology.org/2024.emnlp-main.1229/
-6. Parmar, M. et al. (2024). **LogicBench: Towards Systematic Evaluation of Logical Reasoning Ability of Large Language Models.** ACL 2024. https://aclanthology.org/2024.acl-long.739/
-7. Thorne, J., Vlachos, A., Christodoulopoulos, C., & Mittal, A. (2018). **FEVER: a Large-scale Dataset for Fact Extraction and VERification.** NAACL 2018. https://aclanthology.org/N18-1074/
-8. Ma, H. et al. (2024). **EX-FEVER: A Dataset for Multi-hop Explainable Fact Verification.** Findings of ACL 2024. https://aclanthology.org/2024.findings-acl.556/
-9. Schlichtkrull, M. et al. (2024). **The Automated Verification of Textual Claims (AVeriTeC) Shared Task.** FEVER 2024. https://aclanthology.org/2024.fever-1.1/
-10. Kumar, S., & Talukdar, P. (2020). **NILE: Natural Language Inference with Faithful Natural Language Explanations.** ACL 2020. https://aclanthology.org/2020.acl-main.771/
-11. Schuster, T. et al. (2019). **Towards Debiasing Fact Verification Models.** EMNLP-IJCNLP 2019. https://aclanthology.org/D19-1341/
-12. Pratapa, A., Jayanthi, S. M., & Nerella, K. (2020). **Constrained Fact Verification for FEVER.** EMNLP 2020. https://aclanthology.org/2020.emnlp-main.629/
-13. Portelli, B., Zhao, J., Schuster, T., Serra, G., & Santus, E. (2020). **Distilling the Evidence to Augment Fact Verification Models.** FEVER 2020. https://aclanthology.org/2020.fever-1.7/
-14. Saakyan, A., Chakrabarty, T., & Muresan, S. (2021). **COVID-Fact: Fact Extraction and Verification of Real-World Claims on COVID-19 Pandemic.** ACL 2021. https://aclanthology.org/2021.acl-long.165/
-15. Wang, S. et al. (2022). **Logic-Driven Context Extension and Data Augmentation for Logical Reasoning of Text.** Findings of ACL 2022. https://aclanthology.org/2022.findings-acl.127/
-16. Ryb, S., Giulianelli, M., Sinclair, A., & Fernández, R. (2022). **AnaLog: Testing Analytical and Deductive Logic Learnability in Language Models.** *SEM 2022. https://aclanthology.org/2022.starsem-1.5/
-17. Yuan, Z., Hu, S., Vulić, I., Korhonen, A., & Meng, Z. (2023). **Can Pretrained Language Models (Yet) Reason Deductively?** EACL 2023. https://aclanthology.org/2023.eacl-main.106/
-18. Zhao et al. (2024). **Large Language Models Fall Short: Understanding Complex Relationships in Detective Narratives.** Findings of ACL 2024.
-19. Zhao et al. (2026). **SymbolicThought: Integrating Language Models and Symbolic Reasoning for Consistent and Interpretable Human Relationship Understanding.** ACL 2026 Demo. https://aclanthology.org/2026.acl-demo.4/
-20. **It Takes Two to Tango: The Rashomon Effect in Machine Translation.** NLPerspectives 2026. https://aclanthology.org/2026.nlperspectives-1.2/
-21. Sun et al. (2024). **Think-on-Graph: Deep and Responsible Reasoning of Large Language Model on Knowledge Graph.** ICLR 2024.
-22. **FOL-Traces: Verified First-Order Logic Reasoning Traces at Scale.** Findings of EACL 2026. https://aclanthology.org/2026.findings-eacl.115/
+1. Tian, J., Li, X., et al. **Diagnosing the First-Order Logical Reasoning Ability Through LogicNLI.** EMNLP 2021. https://aclanthology.org/2021.emnlp-main.303/
+2. Bowman, S. R., et al. **A Large Annotated Corpus for Learning Natural Language Inference.** EMNLP 2015.
+3. Williams, A., Nangia, N., Bowman, S. R. **A Broad-Coverage Challenge Corpus for Sentence Understanding through Inference.** NAACL 2018.
+4. Nie, Y., et al. **Adversarial NLI: A New Benchmark for Natural Language Understanding.** ACL 2020.
+5. Han, S., et al. **FOLIO: Natural Language Reasoning with First-Order Logic.** 2022.
+6. Pan, L., Albalak, A., Wang, X., Wang, W. Y. **Logic-LM: Empowering Large Language Models with Symbolic Solvers for Faithful Logical Reasoning.** Findings of EMNLP 2023. https://aclanthology.org/2023.findings-emnlp.248/
+7. Olausson, T., et al. **LINC: A Neurosymbolic Approach for Logical Reasoning by Combining Language Models with First-Order Logic Provers.** EMNLP 2023.
+8. Hu, R., Lin, S., Xiu, Y., Liu, Y. **LTRAG: Enhancing Autoformalization and Self-refinement for Logical Reasoning with Thought-Guided RAG.** Findings of ACL 2025. https://aclanthology.org/2025.findings-acl.126/
+9. **Logic-Thinker: Teaching Large Language Models to Think more Logically.** Findings of EMNLP 2025.
+10. Tafjord, O., et al. **ProofWriter: Generating Implications, Proofs, and Abductive Statements over Natural Language.** Findings of ACL/IJCAI-era logical reasoning work.
+11. Thorne, J., et al. **FEVER: a Large-scale Dataset for Fact Extraction and VERification.** NAACL 2018.
+12. Zhao, et al. **Large Language Models Fall Short: Understanding Complex Relationships in Detective Narratives.** Findings of ACL 2024.
+13. Zhao, et al. **SymbolicThought: Integrating Language Models and Symbolic Reasoning for Consistent and Interpretable Human Relationship Understanding.** ACL 2026 Demo.
+14. Sun, J., et al. **Think-on-Graph: Deep and Responsible Reasoning of Large Language Model on Knowledge Graph.** 2023/ICLR-era work.
+15. Musen, M. A. et al. OWL/Description Logic reasoner literature on Tableau-based satisfiability and ontology reasoning.
 
 ---
 
-## 권장 논문 실험 패키지
+## 재현 가능한 본 저장소 결과
 
-최종 논문에서 가장 균형 잡힌 실험 조합은 다음과 같다.
-
-```text
-CONAN
-+ ANLI
-+ LogicNLI
-+ FOLIO
-+ FEVER
+```bash
+python scripts/run_ablation.py
 ```
 
-설명가능성까지 강조하려면 다음을 추가한다.
+결과 파일:
 
 ```text
-+ EX-FEVER
+results/ablation_metrics.json
 ```
 
-실제 웹 기반 claim verification까지 확장하려면 다음을 추가한다.
+현재 기록된 controlled 결과:
 
 ```text
-+ AVeriTeC
+Perspective scope ablation
+- Vanilla merged Tableau: Accuracy 0.750 / Macro-F1 0.667
+- Perspective Tableau:     Accuracy 1.000 / Macro-F1 1.000
+- Gain:                    +25.0 pp / +33.3 pp
+
+Rashomon explanation ablation
+- Single proof coverage:    0.500
+- Rashomon coverage:        1.000
+- Gain:                    +50.0 pp
 ```
