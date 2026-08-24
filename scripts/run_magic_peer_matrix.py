@@ -58,7 +58,7 @@ def run_compute_matched_direct(client, context1: str, context2: str, target_call
     outputs = []
     calls = 0
     tokens = 0
-    minimum_calls = max(1, target_calls)
+    minimum_calls = min(max_calls, max(1, target_calls))
     while calls < max_calls and (calls < minimum_calls or tokens < target_tokens):
         response = direct_magic_judgment(client, context1, context2)
         outputs.append(response.data)
@@ -68,6 +68,8 @@ def run_compute_matched_direct(client, context1: str, context2: str, target_call
     aggregated["budget_target_calls"] = target_calls
     aggregated["budget_target_tokens"] = target_tokens
     aggregated["budget_reached"] = calls >= target_calls and tokens >= target_tokens
+    aggregated["budget_capped"] = not aggregated["budget_reached"] and calls >= max_calls
+    aggregated["max_matched_calls"] = max_calls
     return aggregated, calls, tokens
 
 
@@ -106,7 +108,7 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
         for row in rows:
             if args.limit and processed >= args.limit:
                 break
-            key = f"{filename}:{row.get('id')}:{model_key}:v2"
+            key = f"{filename}:{row.get('id')}:{model_key}:v3"
             if key in existing:
                 records.append(existing[key])
                 processed += 1
@@ -141,7 +143,12 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
             }
             cost = {
                 "direct": {"llm_calls": direct_calls, "llm_tokens": direct_tokens},
-                "compute_matched_direct": {"llm_calls": matched_calls, "llm_tokens": matched_tokens},
+                "compute_matched_direct": {
+                    "llm_calls": matched_calls,
+                    "llm_tokens": matched_tokens,
+                    "budget_reached": bool(matched.get("budget_reached")),
+                    "budget_capped": bool(matched.get("budget_capped")),
+                },
                 "rashomon_worlds_llm_scorer": {"llm_calls": rashomon_llm_calls, "llm_tokens": rashomon_llm_tokens},
             }
             if rashomon_deberta is not None:
@@ -178,6 +185,8 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
 
     def id_rate(condition: str) -> float | None:
         available = [r for r in records if condition in r["conditions"]]
+        if condition == "compute_matched_direct":
+            available = [r for r in available if r["conditions"][condition].get("budget_reached")]
         if not available:
             return None
         return sum(bool(r["conditions"][condition]["conflict_detected"]) for r in available) / len(available)
@@ -186,10 +195,13 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
     matched_id = id_rate("compute_matched_direct")
     llm_id = id_rate("rashomon_worlds_llm_scorer")
     deberta_id = id_rate("rashomon_worlds_deberta_scorer")
+    matched_complete_n = sum(bool(r["conditions"].get("compute_matched_direct", {}).get("budget_reached")) for r in records)
     return {
         "model_key": model_key,
         "display_name": model_cfg["display_name"],
         "n": len(records),
+        "compute_matched_budget_complete_n": matched_complete_n,
+        "max_matched_calls_per_row": args.max_matched_calls,
         "direct_id_recall": direct_id,
         "compute_matched_id_recall": matched_id,
         "rashomon_llm_id_recall": llm_id,
@@ -230,7 +242,7 @@ def main():
     ap.add_argument("--models", nargs="*", default=[])
     ap.add_argument("--attempts", type=int, default=3)
     ap.add_argument("--max-hops", type=int, default=4)
-    ap.add_argument("--max-matched-calls", type=int, default=128)
+    ap.add_argument("--max-matched-calls", type=int, default=12)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--without-deberta", action="store_true")
     ap.add_argument("--cache-dir", default="results/magic_peer_matrix")
@@ -253,9 +265,11 @@ def main():
         "benchmark": "MAGIC multi-hop natural-language paired method study",
         "model_set": args.model_set,
         "attempts_per_example": args.attempts,
+        "max_matched_calls_per_row": args.max_matched_calls,
         "models": summaries,
         "failures": failures,
         "primary_comparison": "Rashomon scorer conditions vs same-model direct/compute-matched baselines",
+        "compute_matched_policy": "Rows that hit the hard call cap before matching the Rashomon call/token budget are marked budget_reached=false and excluded from compute-matched paired statistics.",
         "loc_protocol": "blind human exact-localization scoring; automatic LOC is intentionally not used",
     }
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
