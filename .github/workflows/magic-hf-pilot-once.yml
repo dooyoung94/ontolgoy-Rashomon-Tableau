@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           test -n "$HF_TOKEN" || { echo 'HF_TOKEN repository secret is missing'; exit 1; }
-      - name: Run 3-row HF parser diagnostic via Novita
+      - name: Run 3-row HF contract diagnostic via Novita
         run: |
           python scripts/run_magic_peer_matrix.py \
             --model-set hf_open_llms \
