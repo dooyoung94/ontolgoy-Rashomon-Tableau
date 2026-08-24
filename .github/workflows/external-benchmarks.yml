@@ -1,0 +1,38 @@
+name: External Benchmarks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/rashomon_tableau/**'
+      - 'scripts/evaluate_folio_fragment.py'
+      - 'scripts/run_ablation.py'
+      - '.github/workflows/external-benchmarks.yml'
+      - 'config/ontology_rules.yaml'
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e .
+      - name: Run controlled ablations
+        run: python scripts/run_ablation.py
+      - name: Run official FOLIO validation fragment benchmark
+        run: python scripts/evaluate_folio_fragment.py
+      - name: Run tests
+        run: |
+          pip install pytest
+          pytest -q
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            results/ablation_metrics.json
+            results/folio_fragment_metrics.json
