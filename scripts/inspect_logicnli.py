@@ -22,3 +22,5 @@ with zipfile.ZipFile(io.BytesIO(data)) as z:
                 print(name, 'ERR', repr(e))
             if name.lower().endswith(('.json','.jsonl')):
                 break
+
+# CI trigger marker only.
