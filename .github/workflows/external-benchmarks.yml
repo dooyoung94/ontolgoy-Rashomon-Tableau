@@ -9,6 +9,14 @@ on:
       - 'scripts/run_ablation.py'
       - '.github/workflows/external-benchmarks.yml'
       - 'config/ontology_rules.yaml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/rashomon_tableau/**'
+      - 'scripts/evaluate_folio_fragment.py'
+      - 'scripts/run_ablation.py'
+      - '.github/workflows/external-benchmarks.yml'
+      - 'config/ontology_rules.yaml'
   workflow_dispatch:
 
 jobs:
