@@ -69,7 +69,14 @@ jobs:
             alg="$1"; shift
             out="/tmp/dafna-runs/${alg}"
             mkdir -p "$out"
+            # DAFNA writes Trustworthiness.csv and Confidences.csv before an obsolete
+            # Weka XML decision-tree post-processing step. On modern Java that optional
+            # post-processing can throw NoSuchMethodError; the voter outputs are complete.
+            set +e
             java -jar "$JAR" "$alg" "$CLAIMS" "$GOLD" "$out" 0.001 0.8 1.0 0.4 "$@"
+            rc=$?
+            set -e
+            test -s "$out/Confidences.csv" || { echo "DAFNA $alg produced no Confidences.csv (rc=$rc)"; exit 1; }
             python scripts/evaluate_dafna_official_outputs.py \
               --algorithm "$alg" --claims "$CLAIM_FILE" --gold "$GOLD_FILE" \
               --confidences "$out/Confidences.csv" --out "results/dafna_official/${alg}.json"
