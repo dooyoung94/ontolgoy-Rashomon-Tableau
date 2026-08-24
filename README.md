@@ -1,180 +1,239 @@
-# Rashomon-Tableau
+# Rashomon Worlds
 
-## Ontology-Guided Bidirectional Tableau for Provenance-Aware Multi-Hop Truth Adjudication
+## Provenance-Aware Possible-World Reasoning for Multi-Hop Conflict and Truth Adjudication
 
-> 서로 상충하는 source를 먼저 버리거나 합치지 않고, **forward/reverse multi-hop candidate를 찾은 뒤 ontology가 허용한 관계만 q / opposing evidence 양방향으로 검증하고, 그 provenance를 source reliability와 결합해 truth를 판정할 수 있는가?**
+> **Research thesis**  
+> When multi-hop evidence is conflicting and relation semantics are incomplete, committing early to a single interpretation loses viable explanations. This project preserves mutually incompatible but internally consistent interpretations as weighted possible worlds, verifies each world logically, and adjudicates truth by marginalizing source, relation, evidence, and proof reliability across worlds.
 
-## Architecture
+---
+
+## What is new in this research direction?
+
+This repository previously focused on an **Ontology-Guided Bidirectional Tableau**. That work is now treated as a **prior baseline**, not the final research claim.
+
+The new core object is a **PossibleWorld**:
 
 ```text
-Multiple Sources
-      ↓
-Atomic Claims
-      ↓
-Ontology / Knowledge Graph
-      ↓
-Forward + Reverse Candidate Paths
-      ↓
-Ontology-Guided Bidirectional Tableau
-      ↓
-SUPPORTED / CONTRADICTED / BOTH / UNRESOLVED
-      ↓
-Source → Claim → Rule → Derived Claim → Conflict Provenance
-      ↓
-Source Reliability + Proposition Support
-      ↓
-Truth Adjudication + Confidence
+Conflicting Provenanced Claims
+            ↓
+    Multi-hop Derivations
+            ↓
+ Uncertain Relation Semantics
+            ↓
+   Candidate Interpretations
+            ↓
+┌───────────┼───────────┐
+▼           ▼           ▼
+World 1   World 2    World K
+ SAT        SAT         SAT
+│           │           │
+└────── Tableau ────────┘
+            ↓
+ Reliability-Weighted World Adjudication
+            ↓
+ P(q) / P(¬q) / P(unresolved)
 ```
 
-**원칙:** `Graph path != Truth / Conflict / Causality`.  
-Inverse, symmetric, hierarchy, transitive, relation-composition은 명시적 ontology rule이 있을 때만 적용한다.
+A world contains:
 
-이 구조는 RCA에서도 동일하게 해석할 수 있다. Reverse path는 upstream cause candidate, forward path는 impact candidate이며 Tableau는 각 hypothesis의 support / contradiction을 검증한다.
+```text
+W = {claims, sources, relation interpretations, derivations/proofs}
+```
+
+and is retained only when:
+
+```text
+Tableau(W) = SAT
+```
+
+Relation composition is **not forced into the hard ontology**. A composition may instead be represented as a defeasible `RelationHypothesis` and can differ across worlds.
 
 ---
 
-# Research Questions
+# Central Research Question
 
-1. **RQ1 — Ontology-Guided Bidirectional Reasoning**: direct matching이 놓치는 multi-hop support/conflict를 복원·검증할 수 있는가?
-2. **RQ2 — Provenance-Aware Conflict Localization**: 어느 source / claim / relation / hop에서 conflict가 발생하는가?
-3. **RQ3 — Truth Adjudication**: localized conflict evidence + source reliability가 gold truth recovery를 개선하는가?
+> **Does preserving multiple internally consistent worlds and ranking them with provenance-aware reliability improve multi-hop conflict localization and truth adjudication compared with early single-world commitment?**
+
+### H1 — World construction
+Adaptive relation interpretations should recover valid multi-hop explanations that a static ontology leaves unresolved.
+
+### H2 — Delayed commitment
+Multiple consistent worlds should reduce false early decisions compared with selecting one relation interpretation or one proof path immediately.
+
+### H3 — World-level truth adjudication
+Combining source reliability, relation reliability, evidence support, and proof consistency at the world level should improve gold truth recovery over majority vote, source-only reliability, or single-proof scoring.
 
 ---
 
-# Validated Results
+# Core Implementation
 
-## 1. DAFNA-EA Books — same-protocol truth discovery
+New module:
 
-100 gold books / 1,999 source-object claims / 227 sources.
+```text
+src/rashomon_tableau/possible_worlds.py
+```
 
-| Method | Exact Truth Accuracy | Author F1 | Status |
-|---|---:|---:|---|
-| **Rashomon-Tableau Atomic Resolution** | **61.00%** | **82.88%** | measured |
-| TruthFinder | 57.00% | 66.85% | official DAFNA-EA measured |
-| AccuSim | 57.00% | 66.18% | official DAFNA-EA measured |
-| 2-Estimates | 54.00% | 65.28% | official DAFNA-EA measured |
-| 3-Estimates | 53.00% | 65.45% | official DAFNA-EA measured |
-| Accu | 53.00% | 65.45% | official DAFNA-EA measured |
+Main abstractions:
 
-`LTM`은 stochastic official implementation이라 repeated-run mean ± std 전까지 headline에서 제외한다.
+- `RelationHypothesis`: defeasible two-hop relation interpretation; not a hard ontology axiom.
+- `WorldChoice`: one candidate semantic choice for an uncertainty slot, including an explicit unresolved choice.
+- `PossibleWorld`: claims + derived claims + semantic choices + provenance reliability.
+- `build_possible_worlds(...)`: enumerates candidate worlds and prunes Tableau-inconsistent worlds.
+- `truth_marginal(...)`: computes probability mass over `SUPPORTED / CONTRADICTED / BOTH / UNRESOLVED` across weighted worlds.
 
-## 2. LogicNLI — dual-direction proof
+Current baseline world weighting is intentionally simple and ablatable:
 
-| Method | Accuracy | Macro-F1 | Paradox F1 |
-|---|---:|---:|---:|
-| Single-path Forward | 74.00% | 65.78% | 0.00% |
-| **Dual-Direction Proof Check** | **98.40%** | **98.40%** | **97.92%** |
+```text
+world_weight ∝ relation_support × source_support
+```
 
-Structured symbolic evaluation이다.
+The scoring function is a research variable, not a fixed theorem.
 
-## 3. FOLIO — supported fragment only
+---
 
-현재 grammar coverage: 28/204 validation examples.
+# Dataset Roles
 
-| Method | Accuracy | Macro-F1 |
-|---|---:|---:|
-| Forward Horn | 75.00% | 74.18% |
-| Semantic Clause Tableau | **96.43%** | **96.33%** |
+## MAGIC — Multi-hop conflict / localization
 
-Full-FOLIO 성능으로 표현하지 않는다.
+**Purpose in the new paper:**
 
-## 4. MAGIC — actual multi-hop validation
+> Can the method construct and rank the correct conflicting worlds and localize the evidence responsible for the conflict?
 
-Validated workflow: **32720349460**  
-Artifact: **9517514860**
+Planned primary metrics:
 
-| Track | Single-hop | Multi-hop | 의미 |
-|---|---:|---:|---|
-| Legacy direct heuristic | 97.56% | 33.16% | permissive relation-replacement cue |
-| **Bidirectional candidate-path coverage** | **61.38%** | **68.03%** | forward/reverse path 존재; **정확도 아님** |
-| **Ontology-verified contradiction** | **42.68%** | **5.44%** | 명시적 ontology semantics로 실제 contradiction 증명 |
+- official MAGIC **ID**
+- official MAGIC **LOC**
+- world coverage
+- gold-world recall
+- relation-interpretation accuracy
+- proof/provenance localization
 
-Multi-hop detail:
+### Published MAGIC peer reference
 
-| MAGIC subset | N | Direct heuristic | Candidate path | Verified contradiction |
-|---|---:|---:|---:|---:|
-| 1 conflict | 300 | 27.00% | 57.33% | 1.33% |
-| 2 conflicts | 158 | 41.14% | 73.42% | 10.76% |
-| 3 conflicts | 80 | 37.50% | 82.50% | 7.50% |
-| 4 conflicts | 50 | 38.00% | 92.00% | 10.00% |
-| **Weighted** | **588** | **33.16%** | **68.03%** | **5.44%** |
+Weighted from the published N=1..4 multi-hop tables using the official subset counts:
 
-### Interpretation
-
-- 양방향 graph 탐색으로 **후보 경로 누락은 크게 완화**됐다.
-- 그러나 path가 있다고 conflict가 되는 것은 아니다.
-- 보수적 ontology로 실제 contradiction까지 닫히는 비율은 아직 낮다.
-- 따라서 다음 병목은 graph traversal보다 **relation semantics / ontology coverage**다.
-
-MAGIC published peers는 natural-language context를 읽고 ID/LOC를 평가한다. 현재 우리 evaluator는 released structured triplet을 사용하므로 직접 head-to-head ranking하지 않는다.
-
-Published N별 값을 공식 subset size로 가중한 참고값(논문 직접 표기 metric이 아니라 파생 계산):
-
-| Published peer | Weighted ID* | Weighted LOC* |
+| Peer | ID | LOC |
 |---|---:|---:|
 | Mixtral 8x7B | 28.21% | 9.23% |
 | Claude 3.5 Haiku | 48.81% | 34.01% |
 | o1 | 48.98% | 28.57% |
 | Llama 3.1 70B | 67.32% | 27.15% |
-| GPT-4o-mini | 78.40% | 47.28% |
+| GPT-4o-mini | **78.40%** | **47.28%** |
 | **5-model mean** | **54.34%** | **29.25%** |
 
-`*` 참고용 published-value aggregation이며 **68.03% candidate coverage / 5.44% formal contradiction과 직접 비교하지 않는다**.
+These peers read natural-language contexts. The new Possible-World track must therefore either reproduce the same input protocol or be reported as a separate structured track.
 
-Measured output: [`results/magic_bidirectional_tableau_metrics.json`](./results/magic_bidirectional_tableau_metrics.json)
+## DAFNA-EA Books — Truth adjudication
+
+**Purpose in the new paper:**
+
+> Once competing worlds exist, does world-level reliability recover the gold truth better than truth-discovery baselines?
+
+Existing same-protocol prior baseline:
+
+| Prior method | Exact Truth Accuracy | Author F1 |
+|---|---:|---:|
+| Previous Rashomon atomic resolution | **61.00%** | **82.88%** |
+| TruthFinder | 57.00% | 66.85% |
+| AccuSim | 57.00% | 66.18% |
+| 2-Estimates | 54.00% | 65.28% |
+| 3-Estimates | 53.00% | 65.45% |
+| Accu | 53.00% | 65.45% |
+
+**Important:** 61.00% is a previous-method result. It is not claimed as a Possible-World result until the new evaluator is run.
+
+## LogicNLI / FOLIO
+
+These are retained only as **reasoning-engine sanity checks**, not headline peer benchmarks for the new research claim.
 
 ---
 
-# Repository
+# Why the old approach became insufficient
+
+Prior measured MAGIC structured results were:
+
+| Prior component | Multi-hop |
+|---|---:|
+| direct heuristic detection | 33.16% |
+| bidirectional candidate-path coverage | 68.03% |
+| strict ontology-verified contradiction | 5.44% |
+
+Interpretation:
+
+- path discovery was not the main bottleneck;
+- static relation semantics could not justify most discovered paths;
+- forcing every ambiguous relation path into one hard ontology produces too many `UNRESOLVED` cases;
+- therefore uncertain relation interpretation is now modeled as a **world variable** rather than immediately promoted to an ontology axiom.
+
+These numbers are **prior baseline diagnostics**, not the new method's result.
+
+---
+
+# Experimental Comparison Required for the New Paper
+
+The main ablation should be one coherent progression:
+
+| Variant | Relation semantics | Worlds | Reliability | MAGIC ID/LOC | DAFNA Truth |
+|---|---|---|---|---|---|
+| B0 Direct | direct only | single | none | measure | measure |
+| B1 Static Tableau | hard ontology | single | none | measure | measure |
+| B2 Adaptive relation | hard + defeasible candidates | single | relation | measure | measure |
+| B3 Possible worlds | hard + defeasible candidates | **multiple** | uniform | measure | measure |
+| **B4 Rashomon Worlds** | hard + defeasible candidates | **multiple** | **source + relation + proof** | **target** | **target** |
+
+The paper's strongest empirical claim is valid only if **B4 improves over B1–B3 on the same data and protocol**.
+
+---
+
+# Research Boundary
+
+This work does **not** claim that:
+
+- possible-world semantics is new;
+- Tableau reasoning is new;
+- rule mining is new;
+- knowledge graphs are new;
+- source reliability is new.
+
+The intended contribution is their focused combination for this specific problem:
+
+> **source-provenanced conflicting multi-hop claims + uncertain relation interpretations + Tableau-consistent worlds + reliability-weighted truth marginalization.**
+
+Any rule miner, external ontology, embedding model, or LLM is a candidate-generator implementation detail unless an experiment specifically studies it.
+
+---
+
+# Repository Structure
 
 ```text
-README.md
-RESEARCH_PAPER.md
-BENCHMARK_PROTOCOL.md
-
-config/
-├── ontology_rules.yaml
-└── magic_ontology_rules.yaml
+README.md                 # new research overview
+RESEARCH_PAPER.md         # manuscript aligned to possible-world thesis
+BENCHMARK_PROTOCOL.md     # fair dataset / metric / peer comparison protocol
 
 src/rashomon_tableau/
-├── ontology.py
-├── graph_paths.py
-├── tableau.py
-├── truth_resolution.py
-└── ...
+├── possible_worlds.py    # NEW research core
+├── tableau.py            # logical world verifier
+├── ontology.py           # hard semantics / prior reasoning support
+├── graph_paths.py        # candidate derivation support
+└── ...                   # prior baselines and utilities
 
-scripts/
-├── evaluate_folio_fragment.py
-├── evaluate_logicnli.py
-├── evaluate_truth_discovery_books.py
-├── evaluate_magic_structured.py
-└── evaluate_magic_bidirectional.py
+tests/
+├── test_possible_worlds.py
+└── test_reasoner.py
 
-results/
-└── measured benchmark outputs
+results/                  # measured results; prior results remain traceable
 ```
 
 ---
 
-# Reproduce
+# Status
 
-```bash
-pip install -e .
-python scripts/evaluate_folio_fragment.py
-python scripts/evaluate_logicnli.py
-python scripts/evaluate_truth_discovery_books.py
-python scripts/evaluate_magic_structured.py
-python scripts/evaluate_magic_bidirectional.py
-pytest -q
-```
+- Possible-world core: **implemented**
+- uncertain relation hypotheses: **implemented**
+- Tableau consistency pruning: **implemented**
+- source/relation weighted world normalization: **implemented baseline**
+- truth marginal over worlds: **implemented**
+- MAGIC official ID/LOC for the new method: **not measured yet**
+- DAFNA new possible-world evaluator: **not measured yet**
 
-GitHub Actions는 official `qcri/DAFNA-EA` Java algorithms까지 clone/build/run한다.
-
----
-
-# Documentation
-
-- **[`RESEARCH_PAPER.md`](./RESEARCH_PAPER.md)** — 논문 본문
-- **[`BENCHMARK_PROTOCOL.md`](./BENCHMARK_PROTOCOL.md)** — dataset / metric / peer / fair-comparison 규칙
-
-상위 연구 문서는 위 두 파일과 README만 유지하며, 측정 결과는 `results/` 아래에 둔다.
+No projected performance number is reported as a measured result.
