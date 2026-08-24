@@ -2,196 +2,176 @@
 
 ## Provenance-Aware Possible-World Reasoning for Multi-Hop Conflict and Truth Adjudication
 
-> **Research thesis:** When multi-hop evidence conflicts and relation semantics are incomplete, committing early to one interpretation can discard viable explanations. Rashomon Worlds preserves incompatible but internally consistent interpretations as possible worlds, verifies each world logically, and then adjudicates truth across worlds using provenance-aware reliability.
-
-## Core model
+> **Thesis:** when multi-hop evidence conflicts and relation semantics are incomplete, committing early to one interpretation can discard viable explanations. Rashomon Worlds preserves incompatible but internally consistent interpretations as possible worlds, then adjudicates across them using provenance and reliability.
 
 ```text
-Conflicting Provenanced Claims
-            ↓
-     Multi-hop Candidates
-            ↓
- Uncertain Relation Semantics
-            ↓
-┌───────────┼───────────┐
-▼           ▼           ▼
-World 1   World 2    World K
- SAT        SAT         SAT
-│           │           │
-└────── Tableau ────────┘
-            ↓
- Reliability-Weighted World Adjudication
-            ↓
- P(q) / P(¬q) / P(unresolved)
+Conflicting Claims
+      ↓
+Multi-hop Candidates
+      ↓
+Uncertain Relation Interpretations
+      ↓
+┌──────────┼──────────┐
+World 1  World 2   World K
+  SAT       SAT       SAT
+└────── Tableau ──────┘
+      ↓
+World Reliability / Posterior
+      ↓
+Truth Adjudication
 ```
 
-A world is represented as:
+A world is `W = {claims, sources, relation interpretations, derivations/proofs}`. Uncertain relation composition is a defeasible world variable, not automatically a hard ontology axiom.
 
-```text
-W = {claims, sources, relation interpretations, derivations/proofs}
-```
+## Research hypotheses
 
-and is retained only when `Tableau(W) = SAT`. Relation composition is not automatically promoted to a hard ontology axiom; uncertain compositions are represented as defeasible `RelationHypothesis` / `PathRelationHypothesis` choices that may differ between worlds.
-
-## Central research question
-
-> **Does preserving multiple internally consistent worlds, then ranking them with provenance-aware reliability, improve multi-hop conflict localization and truth adjudication compared with early single-world commitment?**
-
-- **H1 — World construction:** uncertain relation interpretations recover valid multi-hop explanations that static ontology rules leave unresolved.
-- **H2 — Delayed commitment:** retaining multiple consistent worlds avoids losing viable conflict explanations through early commitment.
-- **H3 — World adjudication:** source + relation + proof reliability can select the correct world/truth better than majority, source-only, or single-proof scoring.
+- **H1 — World construction:** possible worlds should preserve valid multi-hop explanations that static ontology reasoning leaves unresolved.
+- **H2 — Delayed commitment:** retaining alternatives should avoid losing viable explanations through early single-world selection.
+- **H3 — World adjudication:** marginalizing source reliability over competing worlds should improve truth recovery over early MAP commitment and source-only/atomic baselines.
 
 ---
 
-# First measured experiment — MAGIC multi-hop structured track
+# Measured result 1 — MAGIC multi-hop structured track
 
-Validated on all released MAGIC multi-hop conflict rows:
-
-- **588 rows**
-- **1,056 query-level conflicts**
-- workflow run: **32725453943**
-- artifact: **9519356207**
-
-Important protocol boundary: these released files are conflict cases, so the structured conflict numbers below are **recall**, not full MAGIC ID accuracy. `structured exact LOC` is our strict provenance diagnostic: every `original_triplet[i]` must be matched to a conflicting retained path covering its paired `perturb_triplet[i]`. It is **not** the published natural-language MAGIC LOC metric.
+Validated on **588 conflict rows / 1,056 query-level conflicts**.
 
 | Variant | Row conflict recall | Query conflict recall | Gold-world query recall | Structured row exact LOC |
 |---|---:|---:|---:|---:|
-| **B1 Static Tableau** | **5.44%** | 4.45% | — | — |
-| **B2 Early-commit single world** | **29.93%** | 22.63% | — | — |
-| **B3 Possible-world retention** | — | — | **39.39%** | **29.42%** |
-| **B4 Weighted possible worlds** | **22.79%** | 16.86% | — | **7.14%** |
+| B1 Static Tableau | **5.44%** | 4.45% | — | — |
+| B2 Early-commit single world | **29.93%** | 22.63% | — | — |
+| B3 Possible-world retention | — | — | **39.39%** | **29.42%** |
+| B4 Weakly weighted worlds | **22.79%** | 16.86% | — | **7.14%** |
 
-Additional complexity measurements:
+Complexity: **1.46 candidate paths/query**, **4.10 retained worlds/query**, **7.36 worlds/row**.
 
-- mean candidate paths per query: **1.46**
-- mean retained worlds per query: **4.10**
-- mean retained worlds per row: **7.36**
+Interpretation:
+
+- H1 receives positive evidence: possible worlds retain substantially more gold conflict explanations than static Tableau can formally close.
+- H2 is supported as a *retention* claim: viable explanations survive rather than being eliminated by one early interpretation.
+- MAGIC also exposes a negative result: weak lexical/equal-source weighting does **not** select the right world reliably. B4 is below B2 on row conflict recall.
+- Therefore world generation and world ranking are separate research problems.
+
+**Metric boundary:** the released structured multi-hop files used here are conflict cases, so these conflict values are recall, not published MAGIC ID accuracy. `structured exact LOC` is an internal provenance diagnostic based on paired `original_triplet[i] ↔ perturb_triplet[i]`; it is not the paper's natural-language LOC metric.
 
 Measured summary: [`results/magic_possible_worlds_summary.json`](./results/magic_possible_worlds_summary.json)
 
-### What the result actually says
+Published natural-language MAGIC peer reference remains a separate track:
 
-The result is **not** “multiverse automatically beats everything.” It separates two problems that the previous design mixed together:
-
-1. **World generation works better than static proof closure.** B3 can preserve an exact paired gold conflict explanation for **39.39% of query conflicts**, while static Tableau directly verifies only **4.45%** at query level.
-2. **World ranking is currently the bottleneck.** With only a weak fixed lexical relation prior and equal source reliability, B4 selects conflict on **22.79%** of rows and exact paired localization on only **7.14%**.
-3. **Naive weighting is not enough.** B4 is below B2's **29.93%** row conflict recall. Therefore H3 is **not yet supported** by MAGIC. This negative result is retained rather than tuned away.
-4. MAGIC does not provide meaningful source-reliability variation for this structured track. Therefore the next adjudication experiment belongs on a truth-discovery dataset such as DAFNA, while MAGIC remains the primary world-construction/localization diagnostic.
-
-The empirical decomposition is now:
-
-```text
-candidate discovery
-      ↓
-world construction / gold-world retention
-      ↓
-world ranking
-      ↓
-truth adjudication
-```
-
-The current experiment shows that the largest immediate gap is **gold world retained (39.39%) → correctly selected/localized (7.14% exact row LOC)**, not simply graph path discovery.
-
----
-
-# Published MAGIC peer reference
-
-Published peers read natural-language contexts and are evaluated with official ID/LOC. Their weighted multi-hop values are reference-only and must not be directly ranked against our structured diagnostics.
-
-| Published peer | Weighted ID | Weighted LOC |
+| Peer | Weighted ID | Weighted LOC |
 |---|---:|---:|
 | Mixtral 8x7B | 28.21% | 9.23% |
 | Claude 3.5 Haiku | 48.81% | 34.01% |
 | o1 | 48.98% | 28.57% |
 | Llama 3.1 70B | 67.32% | 27.15% |
 | GPT-4o-mini | **78.40%** | **47.28%** |
-| **5-model mean** | **54.34%** | **29.25%** |
+| 5-model mean | **54.34%** | **29.25%** |
 
-A fair peer-comparable experiment still requires the same natural-language input/output protocol. The current structured exact LOC should not be described as official MAGIC LOC.
+Do not directly rank those natural-language ID/LOC numbers against the structured diagnostics above.
 
 ---
 
-# Prior research baseline
+# Measured result 2 — DAFNA-EA Books truth adjudication
 
-The repository previously focused on an ontology-guided bidirectional Tableau. That work is retained as prior baseline, not the final research claim.
+Same 100-book `AuthorsNamesList` gold subset, **1,999 collapsed source-object claims / 227 sources**, with shared benchmark-side person normalization. Gold truth is never used for candidate-world generation, world scoring, or source-reliability updates.
 
-Prior MAGIC structured multi-hop diagnostics:
+Candidate generation contains the gold truth world for **93.00%** of books, with **27.94 candidate worlds/book** on average.
 
-| Prior component | Result |
+| Method | Exact Truth Accuracy | Author F1 |
+|---|---:|---:|
+| **Rashomon Worlds — Marginal Reliability** | **62.00%** | **84.13%** |
+| Rashomon Worlds — Hard Commit | 61.00% | 84.04% |
+| Prior Atomic Resolution | 61.00% | 82.88% |
+| Rashomon Worlds — Uniform | 58.00% | 80.38% |
+| TruthFinder — official DAFNA-EA | 57.00% | 66.85% |
+| AccuSim — official DAFNA-EA | 57.00% | 66.18% |
+| 2-Estimates — official DAFNA-EA | 54.00% | 65.28% |
+| 3-Estimates — official DAFNA-EA | 53.00% | 65.45% |
+| Accu — official DAFNA-EA | 53.00% | 65.45% |
+
+Measured gains for the proposed marginal method:
+
+- vs prior Atomic: **+1.00 pp exact**, **+1.25 pp Author F1**
+- vs hard early commitment: **+1.00 pp exact**, **+0.08 pp Author F1**
+- vs official TruthFinder: **+5.00 pp exact**
+- vs official AccuSim: **+5.00 pp exact**
+
+This is modest, not a large-effect result. It is the first direct evidence for H3: **updating source reliability over the posterior of multiple worlds slightly outperforms updating against only the current MAP world**.
+
+The main remaining bottleneck is visible in the gap **93% gold-world coverage → 62% exact selection**. The next improvement target is ranking/calibration, not simply generating more worlds.
+
+Measured summary: [`results/dafna_possible_worlds_summary.json`](./results/dafna_possible_worlds_summary.json)
+
+---
+
+# What the two datasets jointly establish
+
+```text
+MAGIC
+  candidate/path uncertainty
+      ↓
+  world construction
+      ↓
+  gold explanation retention
+
+DAFNA
+  competing truth worlds
+      ↓
+  source reliability
+      ↓
+  marginal world adjudication
+```
+
+The current evidence therefore supports a narrower and cleaner paper claim:
+
+> **Possible worlds improve preservation of plausible multi-hop conflict explanations, and posterior-aware reliability gives a small but measurable truth-adjudication gain over early commitment. The dominant remaining problem is selecting the correct world from a high-coverage candidate set.**
+
+This is intentionally different from claiming that “Ontology + KG + Tableau + reliability” as a technology stack is novel.
+
+---
+
+# Prior baseline
+
+The repository's earlier ontology-guided bidirectional Tableau is retained only as prior work/diagnostic:
+
+| Prior MAGIC component | Multi-hop |
 |---|---:|
-| Direct heuristic detection | 33.16% |
+| Direct heuristic | 33.16% |
 | Bidirectional candidate-path coverage | 68.03% |
 | Strict ontology-verified contradiction | 5.44% |
 
-The 68.03% value is candidate path coverage, **not accuracy**. The 5.44% strict contradiction value motivated treating uncertain relation interpretation as a world variable instead of continually hardcoding ontology composition rules.
+`68.03%` is candidate-path coverage, not accuracy. The large gap between path discovery and formal closure motivated treating uncertain relation semantics as alternative worlds instead of hardcoding more composition rules.
 
 ---
 
-# Dataset roles in the new paper
-
-## MAGIC — world construction and localization
-
-Primary questions:
-
-- Is the correct conflicting explanation present among retained worlds?
-- Are all query-specific gold perturb paths localized?
-- How quickly does the number of possible worlds grow with conflict count?
-- Can a non-leaking relation-semantic model improve world ranking?
-
-## DAFNA-EA Books — world-level truth adjudication
-
-Primary question:
-
-> Once competing worlds are available, does real source reliability improve gold truth recovery?
-
-Existing prior same-protocol result:
-
-| Prior method | Exact Truth Accuracy | Author F1 |
-|---|---:|---:|
-| Previous Rashomon atomic resolution | **61.00%** | **82.88%** |
-| TruthFinder | 57.00% | 66.85% |
-| AccuSim | 57.00% | 66.18% |
-| 2-Estimates | 54.00% | 65.28% |
-| 3-Estimates | 53.00% | 65.45% |
-| Accu | 53.00% | 65.45% |
-
-The 61.00% value is a prior-method result. It is not claimed as a Rashomon Worlds result until the new world-level DAFNA evaluator is executed.
-
-LogicNLI and FOLIO remain reasoning-engine sanity checks rather than headline peer benchmarks.
-
----
-
-# Implementation
-
-Core files:
+# Core implementation
 
 ```text
 src/rashomon_tableau/possible_worlds.py
-    RelationHypothesis
-    PathRelationHypothesis
-    WorldChoice
-    PossibleWorld
-    build_possible_worlds(...)
-    truth_marginal(...)
+  RelationHypothesis
+  PathRelationHypothesis
+  WorldChoice
+  PossibleWorld
+  build_possible_worlds(...)
+  truth_marginal(...)
+
+src/rashomon_tableau/truth_worlds.py
+  TruthWorld
+  candidate_truth_worlds(...)
+  score_worlds(...)
+  possible_world_truth_resolution(...)
 
 scripts/evaluate_magic_possible_worlds.py
-    B1/B2/B3/B4 MAGIC multi-hop ablation
+scripts/evaluate_dafna_possible_worlds.py
 ```
 
-Current world weighting is deliberately simple and ablatable:
-
-```text
-world_weight ∝ relation_support × source_support
-```
-
-The first MAGIC experiment uses equal source reliability and a fixed, broad lexical prior over relation names. No row IDs, `rel_id` labels, gold conflict labels, or sample-specific composition rules are used to score candidate relation interpretations. Gold perturb groups are used only after prediction for localization evaluation.
+DAFNA candidate truth worlds are generated from observed author sets plus bounded combinations of source-supported atomic authors. Three ranking modes are evaluated on the identical candidate space: uniform, hard/MAP reliability, and marginal/posterior reliability.
 
 ---
 
 # Research boundary
 
-This work does not claim that possible-world semantics, Tableau, knowledge graphs, rule mining, or source reliability are new independently. The intended contribution is the focused framework and empirical decomposition:
+This work does **not** claim possible-world semantics, Tableau reasoning, knowledge graphs, rule mining, or source reliability are individually new. The contribution under evaluation is their problem-specific integration:
 
-> **source-provenanced conflicting multi-hop claims + uncertain relation interpretations + Tableau-consistent possible worlds + reliability-weighted world/truth adjudication.**
+> **source-provenanced conflicting multi-hop claims + uncertain relation interpretations + Tableau-consistent possible worlds + posterior-aware reliability for truth adjudication.**
 
-The strongest final claim remains conditional on the next experiments: improve non-leaking world ranking and validate world-level truth adjudication with real source reliability.
+The next scientifically useful step is not benchmark-specific rule tuning. It is a non-leaking world-ranking model using frozen external relation semantics and calibrated provenance/reliability, followed by a natural-language MAGIC track under the published ID/LOC protocol.
