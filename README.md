@@ -27,7 +27,7 @@ A world is `W = {claims, sources, relation interpretations, derivations/proofs}`
 
 - **H1 — World construction:** possible worlds should preserve valid multi-hop explanations that static ontology reasoning leaves unresolved.
 - **H2 — Delayed commitment:** retaining alternatives should avoid losing viable explanations through early single-world selection.
-- **H3 — World adjudication:** marginalizing source reliability over competing worlds should improve truth recovery over early MAP commitment and source-only/atomic baselines.
+- **H3 — World adjudication:** a stronger world scorer / posterior reliability model should recover the correct explanation or truth more reliably than weak early commitment.
 
 ---
 
@@ -40,20 +40,25 @@ Validated on **588 conflict rows / 1,056 query-level conflicts**.
 | B1 Static Tableau | **5.44%** | 4.45% | — | — |
 | B2 Early-commit single world | **29.93%** | 22.63% | — | — |
 | B3 Possible-world retention | — | — | **39.39%** | **29.42%** |
-| B4 Weakly weighted worlds | **22.79%** | 16.86% | — | **7.14%** |
+| B4 Weak lexical weighting | **22.79%** | **16.86%** | — | **7.14%** |
+| **B5 Rashomon + DeBERTa-v3 world scorer** | **41.50%** | **31.53%** | — | **15.48%** |
 
-Complexity: **1.46 candidate paths/query**, **4.10 retained worlds/query**, **7.36 worlds/row**.
+DeBERTa-v3 selected the paired gold conflict path for **22.06%** of query conflicts. Relative to the identical candidate-world pipeline with the weak lexical scorer, changing only the ranking/scoring layer produced:
 
-Interpretation:
+- row conflict recall: **22.79% → 41.50% (+18.70 pp)**
+- query conflict recall: **16.86% → 31.53% (+14.68 pp)**
+- structured exact localization: **7.14% → 15.48% (+8.33 pp)**
 
-- H1 receives positive evidence: possible worlds retain substantially more gold conflict explanations than static Tableau can formally close.
-- H2 is supported as a *retention* claim: viable explanations survive rather than being eliminated by one early interpretation.
-- MAGIC also exposes a negative result: weak lexical/equal-source weighting does **not** select the right world reliably. B4 is below B2 on row conflict recall.
-- Therefore world generation and world ranking are separate research problems.
+This is direct evidence that the earlier world-selection layer was a real bottleneck: candidate-world generation is held fixed while a stronger discriminative scorer substantially improves which worlds are selected.
 
-**Metric boundary:** the released structured multi-hop files used here are conflict cases, so these conflict values are recall, not published MAGIC ID accuracy. `structured exact LOC` is an internal provenance diagnostic based on paired `original_triplet[i] ↔ perturb_triplet[i]`; it is not the paper's natural-language LOC metric.
+Complexity remains approximately **1.46 candidate paths/query** and **4.09 retained worlds/query**.
 
-Measured summary: [`results/magic_possible_worlds_summary.json`](./results/magic_possible_worlds_summary.json)
+**Metric boundary:** the released structured multi-hop files used here are conflict cases, so these conflict values are recall, not published MAGIC ID accuracy. `structured exact LOC` is an internal provenance diagnostic based on paired `original_triplet[i] ↔ perturb_triplet[i]`; it is not the paper's natural-language human-scored LOC metric.
+
+Measured summaries:
+
+- [`results/magic_possible_worlds_summary.json`](./results/magic_possible_worlds_summary.json)
+- [`results/magic_deberta_worlds_summary.json`](./results/magic_deberta_worlds_summary.json)
 
 Published natural-language MAGIC peer reference remains a separate track:
 
@@ -88,44 +93,95 @@ Candidate generation contains the gold truth world for **93.00%** of books, with
 | 3-Estimates — official DAFNA-EA | 53.00% | 65.45% |
 | Accu — official DAFNA-EA | 53.00% | 65.45% |
 
-Measured gains for the proposed marginal method:
+Measured gains for the marginal method:
 
 - vs prior Atomic: **+1.00 pp exact**, **+1.25 pp Author F1**
 - vs hard early commitment: **+1.00 pp exact**, **+0.08 pp Author F1**
 - vs official TruthFinder: **+5.00 pp exact**
 - vs official AccuSim: **+5.00 pp exact**
 
-This is modest, not a large-effect result. It is the first direct evidence for H3: **updating source reliability over the posterior of multiple worlds slightly outperforms updating against only the current MAP world**.
-
-The main remaining bottleneck is visible in the gap **93% gold-world coverage → 62% exact selection**. The next improvement target is ranking/calibration, not simply generating more worlds.
+The main DAFNA bottleneck remains visible in **93% gold-world coverage → 62% exact selection**. As with MAGIC, the evidence points to world ranking/calibration rather than simply generating more worlds.
 
 Measured summary: [`results/dafna_possible_worlds_summary.json`](./results/dafna_possible_worlds_summary.json)
 
 ---
 
-# What the two datasets jointly establish
+# Natural-language MAGIC method-effect study
+
+The next direct peer-comparable experiment uses the original MAGIC natural-language contexts. The research question is not which LLM is strongest; it is whether the **same base LLM** improves after adding Rashomon Worlds.
+
+For every model, the runner compares:
+
+1. `Direct`
+2. `Compute-Matched Direct`
+3. `Rashomon Worlds + same-LLM world scorer`
+4. `Rashomon Worlds + DeBERTa-v3 world scorer`
+
+`Compute-Matched Direct` is the main control for the fact that the Rashomon pipeline may use more LLM calls/tokens. Gold MAGIC triplets and localization labels are unavailable to every prediction condition and are attached only after prediction for audit/evaluation.
+
+### Current 2026 model track
+
+- GPT-5.5
+- GPT-5.4 mini
+- Claude Sonnet 5
+- Mistral Small 4
+- Llama 3.3 70B Instruct
+
+### Historical MAGIC reproduction track
+
+- Mixtral 8x7B
+- Llama 3.1 70B
+- Claude 3.5 Haiku
+- GPT-4o-mini
+- o1
+
+Historical and current models are reported in separate tables. Retired historical checkpoints are never silently replaced by newer family members.
+
+Natural-language LOC follows MAGIC's manual/blinded scoring design. The repository exports blinded sentence-level predictions rather than inventing an automatic LOC judge.
+
+Runner and configuration:
 
 ```text
-MAGIC
-  candidate/path uncertainty
+scripts/run_magic_peer_matrix.py
+config/magic_peer_model_matrix.yaml
+config/magic_peer_env.example
+.github/workflows/magic-live-model-matrix.yml
+```
+
+No multi-model live result is claimed until the corresponding provider credentials/endpoints are supplied and the paired runs are executed.
+
+---
+
+# What the experiments jointly establish
+
+```text
+MAGIC structured
+  candidate worlds retained
       ↓
-  world construction
+  world scorer quality
       ↓
-  gold explanation retention
+  conflict / localization selection
 
 DAFNA
   competing truth worlds
       ↓
-  source reliability
+  source reliability posterior
       ↓
-  marginal world adjudication
+  final truth adjudication
+
+MAGIC natural language (next live track)
+  same base LLM
+      ↓
+  Direct vs Compute-Matched vs Rashomon
+      ↓
+  model-agnostic method effect
 ```
 
-The current evidence therefore supports a narrower and cleaner paper claim:
+The current evidence supports a narrower paper claim:
 
-> **Possible worlds improve preservation of plausible multi-hop conflict explanations, and posterior-aware reliability gives a small but measurable truth-adjudication gain over early commitment. The dominant remaining problem is selecting the correct world from a high-coverage candidate set.**
+> **Possible worlds preserve viable multi-hop explanations that static reasoning misses, and final performance is strongly controlled by world ranking. A discriminative DeBERTa-v3 scorer materially improves structured MAGIC selection, while posterior-aware reliability gives a smaller but measurable truth-adjudication gain on DAFNA.**
 
-This is intentionally different from claiming that “Ontology + KG + Tableau + reliability” as a technology stack is novel.
+The remaining direct peer question is whether the same advantage persists across multiple LLMs on MAGIC's natural-language ID/LOC protocol.
 
 ---
 
@@ -154,24 +210,27 @@ src/rashomon_tableau/possible_worlds.py
   build_possible_worlds(...)
   truth_marginal(...)
 
-src/rashomon_tableau/truth_worlds.py
-  TruthWorld
-  candidate_truth_worlds(...)
-  score_worlds(...)
-  possible_world_truth_resolution(...)
+src/rashomon_tableau/deberta_world_scorer.py
+  DebertaWorldScorer
+  WorldNliScore
+
+src/rashomon_tableau/peer_llm.py
+  provider-neutral LLM adapters
 
 scripts/evaluate_magic_possible_worlds.py
+scripts/evaluate_magic_deberta_worlds.py
 scripts/evaluate_dafna_possible_worlds.py
+scripts/run_magic_peer_matrix.py
 ```
-
-DAFNA candidate truth worlds are generated from observed author sets plus bounded combinations of source-supported atomic authors. Three ranking modes are evaluated on the identical candidate space: uniform, hard/MAP reliability, and marginal/posterior reliability.
 
 ---
 
 # Research boundary
 
-This work does **not** claim possible-world semantics, Tableau reasoning, knowledge graphs, rule mining, or source reliability are individually new. The contribution under evaluation is their problem-specific integration:
+This work does **not** claim possible-world semantics, Tableau reasoning, DeBERTa, knowledge graphs, or source reliability are individually new. DeBERTa is an interchangeable world-ranking component, not a separate novelty claim.
 
-> **source-provenanced conflicting multi-hop claims + uncertain relation interpretations + Tableau-consistent possible worlds + posterior-aware reliability for truth adjudication.**
+The contribution under evaluation is the problem-specific framework:
 
-The next scientifically useful step is not benchmark-specific rule tuning. It is a non-leaking world-ranking model using frozen external relation semantics and calibrated provenance/reliability, followed by a natural-language MAGIC track under the published ID/LOC protocol.
+> **source-provenanced conflicting multi-hop claims + uncertain relation interpretations + Tableau-consistent possible worlds + explicit world scoring/posterior adjudication.**
+
+Everything else is evaluated as a component or implementation choice under controlled ablations.
