@@ -96,6 +96,7 @@ jobs:
         run: |
           python scripts/merge_truth_discovery_comparison.py \
             --ours results/truth_discovery_books_metrics.json \
+            --worlds results/dafna_possible_worlds_metrics.json \
             --official-dir results/dafna_official \
             --out-json results/dafna_official_comparison.json \
             --out-md results/dafna_official_comparison.md
