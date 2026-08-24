@@ -8,9 +8,11 @@ Provider is pinned together with the model so reruns do not silently switch back
 
 | Key | Model | HF provider |
 |---|---|---|
-| `hf_gpt_oss_120b` | `openai/gpt-oss-120b` | Fireworks AI |
-| `hf_qwen3_235b` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | DeepInfra |
-| `hf_deepseek_r1_0528` | `deepseek-ai/DeepSeek-R1-0528` | DeepInfra |
+| `hf_gpt_oss_120b` | `openai/gpt-oss-120b` | Novita |
+| `hf_qwen3_235b` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | Novita |
+| `hf_llama_3_3_70b` | `meta-llama/Llama-3.3-70B-Instruct` | Together |
+
+DeepSeek-R1-0528 was removed from the active HF matrix after bounded smoke tests repeatedly returned provider-side 504/429 errors. The replacement Llama 3.3 70B route is pinned to Together because Hugging Face currently reports structured-output support for that provider/model combination.
 
 The runtime uses Hugging Face's OpenAI-compatible router:
 
@@ -28,17 +30,31 @@ HF_TOKEN
 
 The benchmark never writes the token to an artifact.
 
-## Run order
+## Bounded smoke test
 
-Use **Actions → MAGIC Live Model Matrix → Run workflow**.
+Before any benchmark pilot, run the bounded contract smoke test. It performs exactly three provider requests per base model with client retries disabled:
 
-Recommended progression:
+1. Direct conflict JSON contract
+2. Claim-extraction JSON contract
+3. World-score JSON contract
 
-1. `model_set=hf_open_llms`, `limit=20`, `attempts=3`
-2. `model_set=hf_open_llms`, `limit=100`, `attempts=3`
-3. `model_set=hf_open_llms`, `limit=0`, `attempts=3` for all 588 MAGIC multi-hop rows
+For the three-model HF set the hard cap is therefore **9 provider requests total**. The smoke test is engineering validation only and is never reported as a MAGIC benchmark result.
 
-Do not make a headline claim from the pilot runs. Only the full 588-row run is used for final reporting.
+Task-specific output budgets are used because claim extraction is materially longer than direct judgment or world scoring:
+
+- Direct: 1024 output tokens
+- Claim extraction: 4096 output tokens
+- World score: 768 output tokens
+
+## Benchmark run order
+
+After the bounded smoke test succeeds, use staged experiments rather than jumping directly to all 588 rows:
+
+1. 20-row pilot for method/cost validation
+2. 100-row intermediate run for statistical and runtime stability
+3. Full 588-row run for final reporting
+
+The final paper protocol uses three macro attempts per example. Pilot attempts may be reduced during engineering validation, but pilot numbers are not headline results.
 
 ## Per-model conditions
 
@@ -50,6 +66,8 @@ Every base model is evaluated on the same contexts under four conditions:
 4. `Rashomon Worlds + DeBERTa-v3 scorer`
 
 The main method effect is paired within the same base model. Gold `original_triplet`, `perturb_triplet`, IDs and localization labels are evaluation-only.
+
+Compute-Matched Direct is bounded. A sample whose compute budget cannot be matched within the configured hard cap is marked `budget_reached=false` and excluded from the compute-matched paired comparison rather than silently using an unmatched sample.
 
 ## Outputs
 
