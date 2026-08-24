@@ -7,7 +7,6 @@ from evaluate_magic_possible_worlds import (
     FILES,
     MAGIC_BASE,
     download_json,
-    fact_key,
     flatten,
     make_hypothesis,
     merge_paths,
@@ -41,14 +40,24 @@ def evaluate_query_deberta(
     closure_paths = bidirectional_candidate_paths(closure, query.subject, query.object, max_hops=max_hops)
     paths = merge_paths(raw_paths, closure_paths)[:12]
 
+    if not paths:
+        return {
+            "conflict": False,
+            "gold_loc": False,
+            "path_count": 0,
+            "world_count": 0,
+            "marginal": {"support": 0.0, "contradiction": 0.0, "unresolved": 1.0, "both": 0.0},
+            "path_scores": [],
+        }
+
+    query_text = literal_text(query)
+    evidence_groups = [[literal_text(edge) for edge in path.literals] for path in paths]
+    scores = scorer.score_many([query_text] * len(paths), evidence_groups, batch_size=min(12, len(paths)))
+
     choices: list[WorldChoice] = []
     choice_gold: dict[str, bool] = {}
-    query_text = literal_text(query)
     path_scores: list[dict] = []
-
-    for idx, path in enumerate(paths):
-        evidence = [literal_text(edge) for edge in path.literals]
-        score = scorer.score(query_text, evidence)
+    for idx, (path, evidence, score) in enumerate(zip(paths, evidence_groups, scores)):
         support_h = make_hypothesis(path, query, idx, "support", score.support)
         contradiction_h = make_hypothesis(path, query, idx, "contradiction", score.contradiction)
         support_label = f"path-{idx}:support"
@@ -61,22 +70,12 @@ def evaluate_query_deberta(
         ])
         choice_gold[contradiction_label] = path_covers_gold(path, gold_perturb)
         path_scores.append({
-            "path": [literal_text(x) for x in path.literals],
+            "path": evidence,
             "support": score.support,
             "contradiction": score.contradiction,
             "unresolved": score.unresolved,
             "gold_path": choice_gold[contradiction_label],
         })
-
-    if not choices:
-        return {
-            "conflict": False,
-            "gold_loc": False,
-            "path_count": 0,
-            "world_count": 0,
-            "marginal": {"support": 0.0, "contradiction": 0.0, "unresolved": 1.0, "both": 0.0},
-            "path_scores": [],
-        }
 
     worlds = build_possible_worlds(
         facts,
