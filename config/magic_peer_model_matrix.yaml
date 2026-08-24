@@ -1,5 +1,5 @@
 # MAGIC paired method-effect matrix.
-# Goal: measure the effect of candidate-path conflict scoring *within the same base model*.
+# Goal: measure candidate-path conflict scoring within the same base model.
 # Gold original_triplet / perturb_triplet fields are evaluation-only.
 
 attempts_per_example: 3
@@ -12,7 +12,7 @@ discriminative_scorer:
   key: deberta_v3_nli
   model: MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli
   role: world_scorer_only
-  note: "NLI discriminator; never used as a generative claim extractor."
+  note: "NLI discriminator; never used as a generative claim extractor. Scorer input must exclude provenance metadata."
 
 model_sets:
   current_available:
@@ -58,7 +58,8 @@ models:
     max_retries: 2
     contract_retries: 2
     retry_backoff_seconds: 2
-    availability_note: "Open-weight 111B Command A through Hugging Face Inference Providers; provider pinned to Cohere. Provider-side schema is reduced to Cohere's supported subset, while the full benchmark schema is preserved in the prompt and validated locally after generation."
+    fixed_transport_retries: 2
+    availability_note: "Command A through HF Inference Providers, pinned to Cohere. Fixed evaluation permits only exact-payload retries for transient transport errors; contract regeneration remains disabled."
 
   hf_gpt_oss_120b:
     display_name: GPT-OSS 120B (HF)
@@ -67,13 +68,13 @@ models:
     execution: huggingface_router
     api_key_env: HF_TOKEN
     structured_output: true
-    max_tokens: 2048
+    max_tokens: 3072
     schema_max_tokens:
-      magic_direct_judgment: 1024
-      magic_compute_analysis: 2048
-      magic_compute_final: 1024
+      magic_direct_judgment: 3072
+      magic_compute_analysis: 3072
+      magic_compute_final: 3072
       magic_claim_extraction: 4096
-      rashomon_world_score: 768
+      rashomon_world_score: 1024
       rashomon_world_batch_score: 4096
     timeout_seconds: 180
     max_retries: 2
@@ -81,7 +82,7 @@ models:
     retry_backoff_seconds: 2
     fixed_transport_retries: 2
     reasoning_effort: low
-    availability_note: "Open-weight GPT-OSS through Hugging Face Inference Providers; provider pinned to Novita. During fixed-call evaluation, transient transport errors such as HTTP 504 may resend the exact same payload up to two times; contract/regeneration retries remain disabled."
+    availability_note: "GPT-OSS through HF Inference Providers, pinned to Novita. Fixed evaluation allows exact-payload transient transport retries only. JSON tasks have larger output budgets because previous 1024-token runs truncated reasoning before the required object."
 
   hf_qwen3_235b:
     display_name: Qwen3 235B A22B Instruct 2507 (HF)
@@ -102,7 +103,8 @@ models:
     max_retries: 2
     contract_retries: 2
     retry_backoff_seconds: 2
-    availability_note: "Open-weight Qwen3 MoE through Hugging Face router; provider pinned to Novita."
+    fixed_transport_retries: 2
+    availability_note: "Qwen3 MoE through HF router, pinned to Novita. Fixed evaluation permits exact-payload retries for transient 5xx/504 errors; contract regeneration remains disabled."
 
   gpt_5_5:
     display_name: GPT-5.5
