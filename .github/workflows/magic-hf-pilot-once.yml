@@ -28,12 +28,12 @@ jobs:
         shell: bash
         run: |
           test -n "$HF_TOKEN" || { echo 'HF_TOKEN repository secret is missing'; exit 1; }
-      - name: Run 20-row paired HF open-LLM MAGIC pilot via Novita
+      - name: Run 3-row HF parser diagnostic via Novita
         run: |
           python scripts/run_magic_peer_matrix.py \
             --model-set hf_open_llms \
             --attempts 3 \
-            --limit 20 \
+            --limit 3 \
             --out results/magic_hf_pilot_summary.json \
             --loc-export results/magic_hf_pilot_loc_blinded.json
       - name: Require at least one successful HF model
@@ -46,17 +46,18 @@ jobs:
           if not models:
               raise SystemExit(f"No HF model completed successfully. Failures: {data.get('failures', [])}")
           print(f"Successful HF models: {len(models)}")
+          print(json.dumps(models, indent=2))
           PY
       - name: Analyze paired method effects
         run: |
           python scripts/analyze_magic_peer_matrix.py \
             --cache-dir results/magic_peer_matrix \
             --out results/magic_hf_pilot_paired_stats.json
-      - name: Upload HF pilot results
+      - name: Upload HF diagnostic results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: magic-hf-open-llm-pilot-20
+          name: magic-hf-open-llm-diagnostic-3
           path: |
             results/magic_hf_pilot_summary.json
             results/magic_hf_pilot_paired_stats.json
