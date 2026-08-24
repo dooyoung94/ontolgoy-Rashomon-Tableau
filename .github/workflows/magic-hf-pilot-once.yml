@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  hf-smoke:
+  hf-pilot-20:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -20,38 +20,61 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install project only
+      - name: Install project and DeBERTa dependencies
         run: |
           pip install -e .
+          pip install 'transformers>=4.50,<5' 'torch>=2.2' sentencepiece
       - name: Validate HF token is present
         shell: bash
         run: |
           test -n "$HF_TOKEN" || { echo 'HF_TOKEN repository secret is missing'; exit 1; }
-      - name: Revalidate Command A only with Cohere-compatible schema
+      - name: Run fixed-call 20-row paired HF MAGIC pilot
         run: |
-          python scripts/smoke_hf_contracts.py \
-            --model-set hf_command_a_only \
-            --out results/hf_contract_smoke.json
-      - name: Show bounded request policy
+          python scripts/run_magic_peer_matrix.py \
+            --model-set hf_open_llms \
+            --attempts 1 \
+            --limit 20 \
+            --no-retries \
+            --cache-dir results/magic_hf_fixed20_cache \
+            --out results/magic_hf_fixed20_summary.json \
+            --loc-export results/magic_hf_fixed20_loc_blinded.json
+      - name: Analyze paired method effects
+        if: always()
+        run: |
+          if ls results/magic_hf_fixed20_cache/*.jsonl >/dev/null 2>&1; then
+            python scripts/analyze_magic_peer_matrix.py \
+              --cache-dir results/magic_hf_fixed20_cache \
+              --out results/magic_hf_fixed20_paired_stats.json
+          else
+            echo '{"models":{},"note":"No completed fixed-call rows to analyze."}' > results/magic_hf_fixed20_paired_stats.json
+          fi
+      - name: Validate fixed-call budget
         if: always()
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          path = Path('results/hf_contract_smoke.json')
+          path = Path('results/magic_hf_fixed20_summary.json')
           if not path.exists():
-              print('Smoke result was not created.')
+              print('Summary was not created.')
               raise SystemExit(0)
           data = json.loads(path.read_text())
-          print('Hard provider request cap:', data['hard_provider_request_cap'])
-          print('Retries enabled:', data['retries_enabled'])
-          print('Task budgets:', data.get('task_budgets'))
-          for index, model in enumerate(data['models'], start=1):
-              print(index, model['model_key'], model['successful_calls'], '/ 3', 'all_ok=', model['all_contracts_ok'])
+          print(json.dumps(data.get('fixed_call_policy', {}), indent=2))
+          print('Models completed:', [m['model_key'] for m in data.get('models', [])])
+          print('Failures:', data.get('failures', []))
+          cap = data.get('fixed_call_policy', {}).get('provider_request_cap_if_no_retries')
+          if cap != 300:
+              raise SystemExit(f'Unexpected provider request cap: {cap}; expected 300')
+          for model in data.get('models', []):
+              print(model['model_key'], 'n=', model['n'], 'calls=', model['physical_provider_calls'], 'expected=', model['expected_calls_if_complete'])
           PY
-      - name: Upload HF smoke results
+      - name: Upload fixed-call 20-row pilot results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: magic-hf-command-a-schema-revalidation
-          path: results/hf_contract_smoke.json
+          name: magic-hf-fixed-call-pilot-20
+          path: |
+            results/magic_hf_fixed20_summary.json
+            results/magic_hf_fixed20_paired_stats.json
+            results/magic_hf_fixed20_loc_blinded.json
+            results/magic_hf_fixed20_cache/*.jsonl
