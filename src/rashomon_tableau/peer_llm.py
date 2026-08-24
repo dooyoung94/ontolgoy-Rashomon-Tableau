@@ -13,6 +13,20 @@ from typing import Any
 
 HF_ROUTER_URL = "https://router.huggingface.co/v1"
 _TRANSIENT_HTTP = {408, 409, 425, 429, 500, 502, 503, 504}
+_COHERE_UNSUPPORTED_SCHEMA_KEYS = {
+    "minimum",
+    "maximum",
+    "minItems",
+    "maxItems",
+    "minLength",
+    "maxLength",
+    "uniqueItems",
+    "additionalProperties",
+    "anyOf",
+    "allOf",
+    "oneOf",
+    "not",
+}
 
 
 @dataclass(frozen=True)
@@ -45,52 +59,129 @@ def _strip_reasoning_wrappers(text: str) -> str:
     return text.strip()
 
 
+def _validate_schema_value(value: Any, schema: dict[str, Any], path: str = "$") -> None:
+    """Validate the benchmark's original JSON contract locally.
+
+    Providers differ in which JSON-Schema keywords they can enforce. The benchmark
+    therefore validates the original, provider-neutral contract after generation so
+    a provider-specific schema relaxation never changes the accepted answer space.
+    """
+    expected = schema.get("type")
+    if expected == "object":
+        if not isinstance(value, dict):
+            raise ValueError(f"{path}: expected object")
+        required = schema.get("required") or []
+        missing = [key for key in required if key not in value]
+        if missing:
+            raise ValueError(f"{path}: missing required fields {missing}")
+        properties = schema.get("properties") or {}
+        if schema.get("additionalProperties") is False:
+            extra = sorted(set(value) - set(properties))
+            if extra:
+                raise ValueError(f"{path}: unexpected fields {extra}")
+        for key, child_schema in properties.items():
+            if key in value:
+                _validate_schema_value(value[key], child_schema, f"{path}.{key}")
+    elif expected == "array":
+        if not isinstance(value, list):
+            raise ValueError(f"{path}: expected array")
+        if "minItems" in schema and len(value) < int(schema["minItems"]):
+            raise ValueError(f"{path}: fewer than minItems")
+        if "maxItems" in schema and len(value) > int(schema["maxItems"]):
+            raise ValueError(f"{path}: more than maxItems")
+        if schema.get("uniqueItems") and len({json.dumps(x, sort_keys=True) for x in value}) != len(value):
+            raise ValueError(f"{path}: duplicate items")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                _validate_schema_value(item, item_schema, f"{path}[{index}]")
+    elif expected == "string":
+        if not isinstance(value, str):
+            raise ValueError(f"{path}: expected string")
+        if "minLength" in schema and len(value) < int(schema["minLength"]):
+            raise ValueError(f"{path}: shorter than minLength")
+        if "maxLength" in schema and len(value) > int(schema["maxLength"]):
+            raise ValueError(f"{path}: longer than maxLength")
+    elif expected == "boolean":
+        if not isinstance(value, bool):
+            raise ValueError(f"{path}: expected boolean")
+    elif expected == "integer":
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{path}: expected integer")
+    elif expected == "number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{path}: expected number")
+
+    if "enum" in schema and value not in schema["enum"]:
+        raise ValueError(f"{path}: value not in enum")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            raise ValueError(f"{path}: below minimum {schema['minimum']}")
+        if "maximum" in schema and value > schema["maximum"]:
+            raise ValueError(f"{path}: above maximum {schema['maximum']}")
+
+
 def _matches_schema_contract(value: Any, schema: dict[str, Any]) -> bool:
-    if not isinstance(value, dict):
+    try:
+        _validate_schema_value(value, schema)
+        return True
+    except ValueError:
         return False
-    required = schema.get("required") or []
-    if any(key not in value for key in required):
-        return False
-    properties = schema.get("properties") or {}
-    type_checks = {
-        "array": list,
-        "object": dict,
-        "string": str,
-        "boolean": bool,
-        "number": (int, float),
-        "integer": int,
-    }
-    for key in required:
-        spec = properties.get(key) or {}
-        expected = spec.get("type")
-        py_type = type_checks.get(expected)
-        if py_type is not None and not isinstance(value.get(key), py_type):
-            return False
-    return True
+
+
+def _cohere_compatible_schema(schema: Any) -> Any:
+    """Return the JSON-Schema subset accepted by Cohere Structured Outputs.
+
+    The full original schema remains in the textual contract and is revalidated
+    locally after generation. Only provider-side enforcement is relaxed.
+    """
+    if isinstance(schema, list):
+        return [_cohere_compatible_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key in _COHERE_UNSUPPORTED_SCHEMA_KEYS:
+            continue
+        out[key] = _cohere_compatible_schema(value)
+    return out
+
+
+def _provider_schema(schema: dict[str, Any], profile: str | None) -> dict[str, Any]:
+    if profile == "cohere":
+        return _cohere_compatible_schema(schema)
+    return schema
 
 
 def _extract_json(text: str, schema: dict[str, Any]) -> dict[str, Any]:
-    """Extract the first complete object satisfying the requested response schema."""
+    """Extract the first complete object satisfying the original response schema."""
     text = _strip_reasoning_wrappers(text)
     if not text:
         raise ValueError("model returned empty content")
 
     try:
         value = json.loads(text)
-        if _matches_schema_contract(value, schema):
-            return value
-    except json.JSONDecodeError:
+        _validate_schema_value(value, schema)
+        return value
+    except (json.JSONDecodeError, ValueError):
         pass
 
     decoder = json.JSONDecoder()
+    last_validation_error: ValueError | None = None
     for match in re.finditer(r"\{", text):
         try:
             value, _end = decoder.raw_decode(text[match.start() :])
         except json.JSONDecodeError:
             continue
-        if _matches_schema_contract(value, schema):
+        try:
+            _validate_schema_value(value, schema)
             return value
+        except ValueError as exc:
+            last_validation_error = exc
+            continue
 
+    if last_validation_error is not None:
+        raise last_validation_error
     required = schema.get("required") or []
     raise ValueError(f"no JSON object matched required fields {required}")
 
@@ -139,6 +230,7 @@ class OpenAICompatibleClient:
         contract_retries: int = 0,
         retry_backoff_seconds: float = 2.0,
         enforce_json_schema: bool = False,
+        schema_profile: str | None = None,
         reasoning_effort: str | None = None,
     ):
         self.model = model
@@ -155,6 +247,7 @@ class OpenAICompatibleClient:
         self.contract_retries = max(0, contract_retries)
         self.retry_backoff_seconds = max(0.0, retry_backoff_seconds)
         self.enforce_json_schema = enforce_json_schema
+        self.schema_profile = schema_profile
         self.reasoning_effort = reasoning_effort
 
     def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -195,15 +288,15 @@ class OpenAICompatibleClient:
         last_preview = ""
         last_finish = ""
         last_model = self.model
-
         token_budget = self.schema_max_tokens.get(schema_name, self.max_tokens)
+        provider_schema = _provider_schema(schema, self.schema_profile)
 
         for contract_attempt in range(self.contract_retries + 1):
             prompt = base_prompt
             if contract_attempt:
                 prompt += (
                     "\n\nIMPORTANT RETRY: The previous provider response did not satisfy the JSON contract. "
-                    "Return only the requested object with every required top-level field."
+                    "Return only the requested object with every required field and valid value ranges."
                 )
             payload: dict[str, Any] = {
                 "model": self.model,
@@ -214,7 +307,7 @@ class OpenAICompatibleClient:
             if self.reasoning_effort:
                 payload["reasoning_effort"] = self.reasoning_effort
             if self.enforce_json_schema:
-                payload["response_format"] = _schema_response_format(schema_name, schema)
+                payload["response_format"] = _schema_response_format(schema_name, provider_schema)
 
             raw = self._request(payload)
             last_model = raw.get("model", self.model)
@@ -262,7 +355,7 @@ class OpenAICompatibleClient:
         raise RuntimeError(
             f"structured response contract failed after {self.contract_retries + 1} attempts; "
             f"finish_reason={last_finish!r}; token_budget={token_budget!r}; "
-            f"error={last_error}; preview={last_preview[:700]!r}"
+            f"schema_profile={self.schema_profile!r}; error={last_error}; preview={last_preview[:700]!r}"
         )
 
 
@@ -338,6 +431,7 @@ def client_from_environment(model_cfg: dict[str, Any]):
             contract_retries=int(model_cfg.get("contract_retries", 2)),
             retry_backoff_seconds=float(model_cfg.get("retry_backoff_seconds", 2.0)),
             enforce_json_schema=bool(model_cfg.get("structured_output", True)),
+            schema_profile=model_cfg.get("schema_profile"),
             reasoning_effort=model_cfg.get("reasoning_effort"),
         )
     if execution == "openai_compatible":
