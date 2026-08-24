@@ -249,4 +249,6 @@ def main():
     print(json.dumps(result,ensure_ascii=False,indent=2))
 
 if __name__ == "__main__":
+    # Explicit branch marker: this code path is identical to main and exists only
+    # to trigger the reproducible pull-request benchmark workflow.
     main()
