@@ -1,211 +1,157 @@
 # Rashomon-Tableau
 
-## Provenance-Aware Logical Conflict Localization and Truth Resolution from Conflicting Sources
+## Ontology-Guided Bidirectional Tableau for Provenance-Aware Multi-Hop Truth Adjudication
 
-> **핵심 연구 질문:** 서로 상충하는 source를 먼저 합치거나 버리지 않고, 각 claim의 논리적 의미와 provenance를 유지한 채 conflict를 분석하면 실제 truth를 더 잘 찾을 수 있는가?
+> 서로 상충하는 source를 먼저 버리거나 합치지 않고, **forward/reverse multi-hop candidate를 찾은 뒤 ontology가 허용한 관계만 q / opposing evidence 양방향으로 검증하고, 그 provenance를 source reliability와 결합해 truth를 판정할 수 있는가?**
 
-Rashomon-Tableau는 세 문제를 분리한다.
-
-```text
-1. Logical Reasoning
-   Claim + Ontology / Rules
-              ↓
-   Implicit entailment / contradiction
-
-2. Conflict Localization
-   Source → Claim → Rule → Derived Claim → Conflict
-              ↓
-   Exact / Partial / Conflict
-
-3. Rashomon Truth Resolution
-   Source reliability
-        + atomic proposition support
-        + logical compatibility
-        + provenance
-              ↓
-   Candidate truth + confidence
-```
-
-여기서 **Rashomon**은 ML의 near-optimal model set을 의미하지 않는다. 동일 사건에 대한 상충된 관점을 성급히 제거하지 않고 함께 분석한 뒤, 어떤 주장이 truth에 더 잘 정당화되는지 판정한다는 문제의식을 의미한다.
-
----
-
-# Current Evidence
-
-## 1. Direct Truth-Discovery Comparison — DAFNA-EA Books
-
-공개 DAFNA-EA Books에서 동일한 100-book `AuthorsNamesList` gold subset을 사용해 우리 방법과 **공식 qcri/DAFNA-EA Java 구현**을 실제 실행하여 비교한다.
-
-- Gold books: **100**
-- Source-object claims: **1,999**
-- Sources: **227**
-
-| Method | Implementation | Exact Truth Accuracy | Author F1 |
-|---|---|---:|---:|
-| **Rashomon-Tableau Atomic Resolution** | this repo | **61.00%** | **82.88%** |
-| TruthFinder | official DAFNA-EA | 57.00% | 66.85% |
-| AccuSim | official DAFNA-EA | 57.00% | 66.18% |
-| 2-Estimates | official DAFNA-EA | 54.00% | 65.28% |
-| 3-Estimates | official DAFNA-EA | 53.00% | 65.45% |
-| Accu | official DAFNA-EA | 53.00% | 65.45% |
-| Reliability-Weighted Whole Claim | this repo | 45.00% | 75.24% |
-| Whole-Claim Majority | this repo | 44.00% | 73.57% |
-
-`LTM` is stochastic in the official implementation and showed unstable single-run values, so it should be reported as repeated-run mean ± standard deviation rather than used as a headline single number.
-
-The key modeling difference is that a multi-valued claim is not treated as one indivisible string.
+## Architecture
 
 ```text
-Gold candidate = {A, B}
-
-Source 1 = {A, B} → exact
-Source 2 = {A}    → partial support
-Source 3 = {C}    → conflict
+Multiple Sources
+      ↓
+Atomic Claims
+      ↓
+Ontology / Knowledge Graph
+      ↓
+Forward + Reverse Candidate Paths
+      ↓
+Ontology-Guided Bidirectional Tableau
+      ↓
+SUPPORTED / CONTRADICTED / BOTH / UNRESOLVED
+      ↓
+Source → Claim → Rule → Derived Claim → Conflict Provenance
+      ↓
+Source Reliability + Proposition Support
+      ↓
+Truth Adjudication + Confidence
 ```
 
-Measured outputs:
+**원칙:** `Graph path != Truth / Conflict / Causality`.  
+Inverse, symmetric, hierarchy, transitive, relation-composition은 명시적 ontology rule이 있을 때만 적용한다.
 
-- [`results/truth_discovery_books_metrics.json`](./results/truth_discovery_books_metrics.json)
-- [`results/dafna_official_comparison.md`](./results/dafna_official_comparison.md)
-- [`results/dafna_official_comparison.json`](./results/dafna_official_comparison.json)
+이 구조는 RCA에서도 동일하게 해석할 수 있다. Reverse path는 upstream cause candidate, forward path는 impact candidate이며 Tableau는 각 hypothesis의 support / contradiction을 검증한다.
 
 ---
 
-## 2. Modern Conflict Stress Test — MAGIC (Findings EMNLP 2025)
+# Research Questions
 
-MAGIC is a KG-derived benchmark for **inter-context conflict detection/localization**, including explicit single-hop and indirect multi-hop conflicts.
-
-A reproducible diagnostic is included:
-
-```bash
-python scripts/evaluate_magic_structured.py
-```
-
-Current result over all **1,080** released conflict examples:
-
-| Type | Detection |
-|---|---:|
-| 1 single-hop | 98.56% |
-| 2 single-hop | 98.70% |
-| 3 single-hop | 100.00% |
-| 4 single-hop | 100.00% |
-| 1 multi-hop | 27.00% |
-| 2 multi-hop | 41.14% |
-| 3 multi-hop | 37.50% |
-| 4 multi-hop | 38.00% |
-| **Overall** | **63.15%** |
-
-This result is intentionally treated as a **failure analysis**, not a headline SOTA claim.
-
-- direct conflict patterns are recognized well;
-- MAGIC multi-hop conflicts are built from 2–3 logically connected triplets;
-- the current local pairwise rules cannot reconstruct enough relation-composition semantics;
-- graph-path / ontology composition is therefore the next reasoning gap to solve.
-
-**Important:** the evaluator uses the released structured `original_triplet` / `perturb_triplet` fields. It is not directly comparable to MAGIC's natural-language LLM ID/LOC scores. Also, `pair_localization_coverage=1.0` is not 100% localization accuracy; it only means a best pair can always be selected from benchmark-provided structured fields.
+1. **RQ1 — Ontology-Guided Bidirectional Reasoning**: direct matching이 놓치는 multi-hop support/conflict를 복원·검증할 수 있는가?
+2. **RQ2 — Provenance-Aware Conflict Localization**: 어느 source / claim / relation / hop에서 conflict가 발생하는가?
+3. **RQ3 — Truth Adjudication**: localized conflict evidence + source reliability가 gold truth recovery를 개선하는가?
 
 ---
 
-## 3. Logical Core — FOLIO
+# Validated Results
 
-Current parser-supported FOLIO validation fragment: **28 / 204** examples.
+## 1. DAFNA-EA Books — same-protocol truth discovery
+
+100 gold books / 1,999 source-object claims / 227 sources.
+
+| Method | Exact Truth Accuracy | Author F1 | Status |
+|---|---:|---:|---|
+| **Rashomon-Tableau Atomic Resolution** | **61.00%** | **82.88%** | measured |
+| TruthFinder | 57.00% | 66.85% | official DAFNA-EA measured |
+| AccuSim | 57.00% | 66.18% | official DAFNA-EA measured |
+| 2-Estimates | 54.00% | 65.28% | official DAFNA-EA measured |
+| 3-Estimates | 53.00% | 65.45% | official DAFNA-EA measured |
+| Accu | 53.00% | 65.45% | official DAFNA-EA measured |
+
+`LTM`은 stochastic official implementation이라 repeated-run mean ± std 전까지 headline에서 제외한다.
+
+## 2. LogicNLI — dual-direction proof
+
+| Method | Accuracy | Macro-F1 | Paradox F1 |
+|---|---:|---:|---:|
+| Single-path Forward | 74.00% | 65.78% | 0.00% |
+| **Dual-Direction Proof Check** | **98.40%** | **98.40%** | **97.92%** |
+
+Structured symbolic evaluation이다.
+
+## 3. FOLIO — supported fragment only
+
+현재 grammar coverage: 28/204 validation examples.
 
 | Method | Accuracy | Macro-F1 |
 |---|---:|---:|
 | Forward Horn | 75.00% | 74.18% |
 | Semantic Clause Tableau | **96.43%** | **96.33%** |
 
-**96.43% is not full-FOLIO accuracy.** Grammar coverage is 13.73%.
+Full-FOLIO 성능으로 표현하지 않는다.
 
----
+## 4. MAGIC — actual multi-hop validation
 
-## 4. Dual-Direction Contradiction — LogicNLI
+Validated workflow: **32720349460**  
+Artifact: **9517514860**
 
-Official structured `test_logic`: **2,000 statements**.
+| Track | Single-hop | Multi-hop | 의미 |
+|---|---:|---:|---|
+| Legacy direct heuristic | 97.56% | 33.16% | permissive relation-replacement cue |
+| **Bidirectional candidate-path coverage** | **61.38%** | **68.03%** | forward/reverse path 존재; **정확도 아님** |
+| **Ontology-verified contradiction** | **42.68%** | **5.44%** | 명시적 ontology semantics로 실제 contradiction 증명 |
 
-| Method | Accuracy | Macro-F1 | Paradox F1 |
-|---|---:|---:|---:|
-| Single-Path Forward | 74.00% | 65.78% | 0.00% |
-| Dual-Direction Proof Check | **98.40%** | **98.40%** | **97.92%** |
+Multi-hop detail:
 
-This is a symbolic reasoning-layer evaluation, not an end-to-end NLP comparison.
+| MAGIC subset | N | Direct heuristic | Candidate path | Verified contradiction |
+|---|---:|---:|---:|---:|
+| 1 conflict | 300 | 27.00% | 57.33% | 1.33% |
+| 2 conflicts | 158 | 41.14% | 73.42% | 10.76% |
+| 3 conflicts | 80 | 37.50% | 82.50% | 7.50% |
+| 4 conflicts | 50 | 38.00% | 92.00% | 10.00% |
+| **Weighted** | **588** | **33.16%** | **68.03%** | **5.44%** |
 
----
+### Interpretation
 
-# 2025–2026 Research Positioning
+- 양방향 graph 탐색으로 **후보 경로 누락은 크게 완화**됐다.
+- 그러나 path가 있다고 conflict가 되는 것은 아니다.
+- 보수적 ontology로 실제 contradiction까지 닫히는 비율은 아직 낮다.
+- 따라서 다음 병목은 graph traversal보다 **relation semantics / ontology coverage**다.
 
-The closest recent work changes the novelty boundary substantially.
+MAGIC published peers는 natural-language context를 읽고 ID/LOC를 평가한다. 현재 우리 evaluator는 released structured triplet을 사용하므로 직접 head-to-head ranking하지 않는다.
 
-| Work | Venue | Main idea | Difference from Rashomon-Tableau |
-|---|---|---|---|
-| MAGIC | Findings EMNLP 2025 | KG-based inter-context conflict detection/localization benchmark | benchmark/stress test; does not estimate source reliability or truth from source histories |
-| FaithfulRAG | ACL 2025 | fact-level conflict modeling for context-faithful RAG | parametric-vs-retrieved conflict and answer generation, not source-level truth discovery |
-| DRAGged into CONFLICTS | 2025 | realistic conflicting search sources + correct answer | closest future end-to-end dataset; requires a frozen claim-extraction layer first |
-| TCR | AAAI 2026 | transparent semantic/factual/self-answerability signals | neural RAG conflict handling, primarily parametric-vs-context |
-| When Facts Change | Findings ACL 2026 | temporal knowledge conflict benchmark | temporal conflict special case; reinforces separation of detection and truth selection |
-| **KCR** | **ACL 2026** | text/KG reasoning traces + RLVR for logical conflict adjudication | **strongest conceptual overlap**; learned LLM adjudication vs symbolic source-provenance/reliability adjudication |
+Published N별 값을 공식 subset size로 가중한 참고값(논문 직접 표기 metric이 아니라 파생 계산):
 
-Detailed comparison: **[`MODERN_BASELINES.md`](./MODERN_BASELINES.md)**
+| Published peer | Weighted ID* | Weighted LOC* |
+|---|---:|---:|
+| Mixtral 8x7B | 28.21% | 9.23% |
+| Claude 3.5 Haiku | 48.81% | 34.01% |
+| o1 | 48.98% | 28.57% |
+| Llama 3.1 70B | 67.32% | 27.15% |
+| GPT-4o-mini | 78.40% | 47.28% |
+| **5-model mean** | **54.34%** | **29.25%** |
 
-## Updated novelty boundary
+`*` 참고용 published-value aggregation이며 **68.03% candidate coverage / 5.44% formal contradiction과 직접 비교하지 않는다**.
 
-This project does **not** claim novelty for any one of these in isolation:
-
-- multi-perspective reasoning;
-- graph-based conflict representation;
-- reasoning-trace decomposition;
-- multiple logical justifications;
-- fact-level conflict modeling;
-- logic-guided conflict resolution;
-- truth discovery from conflicting sources.
-
-After KCR/TCR/MAGIC/FaithfulRAG, the defensible target is narrower:
-
-> **Source identity and reliability remain attached to symbolic/ontology derivations; conflicts are localized as provenance paths; partial support is separated from incompatibility; and the localized evidence is reused for truth adjudication.**
-
-```text
-Source
-  ↓
-Claim
-  ↓
-Symbolic / Ontology Derivation
-  ↓
-Exact / Partial / Conflict
-  ↓
-Provenance-preserving Conflict Graph
-  ↓
-Source Reliability + Logical Support
-  ↓
-Truth Adjudication
-```
+Measured output: [`results/magic_bidirectional_tableau_metrics.json`](./results/magic_bidirectional_tableau_metrics.json)
 
 ---
 
 # Repository
 
 ```text
+README.md
+RESEARCH_PAPER.md
+BENCHMARK_PROTOCOL.md
+
+config/
+├── ontology_rules.yaml
+└── magic_ontology_rules.yaml
+
 src/rashomon_tableau/
-├── clause_tableau.py
-├── tableau.py
 ├── ontology.py
-├── rashomon.py
-└── truth_resolution.py
+├── graph_paths.py
+├── tableau.py
+├── truth_resolution.py
+└── ...
 
 scripts/
 ├── evaluate_folio_fragment.py
 ├── evaluate_logicnli.py
 ├── evaluate_truth_discovery_books.py
-├── evaluate_dafna_official_outputs.py
-├── prepare_dafna_official_books.py
-├── merge_truth_discovery_comparison.py
-└── evaluate_magic_structured.py
+├── evaluate_magic_structured.py
+└── evaluate_magic_bidirectional.py
 
 results/
-├── folio_fragment_metrics.json
-├── logicnli_metrics.json
-├── truth_discovery_books_metrics.json
-├── dafna_official_comparison.json
-└── magic_structured_metrics.json   # generated by CI / branch benchmark
+└── measured benchmark outputs
 ```
 
 ---
@@ -218,38 +164,17 @@ python scripts/evaluate_folio_fragment.py
 python scripts/evaluate_logicnli.py
 python scripts/evaluate_truth_discovery_books.py
 python scripts/evaluate_magic_structured.py
+python scripts/evaluate_magic_bidirectional.py
+pytest -q
 ```
 
-GitHub Actions additionally clones and executes the official DAFNA-EA Java algorithms.
+GitHub Actions는 official `qcri/DAFNA-EA` Java algorithms까지 clone/build/run한다.
 
 ---
 
-# Evaluation Policy
+# Documentation
 
-Do not place unrelated tasks into one leaderboard.
+- **[`RESEARCH_PAPER.md`](./RESEARCH_PAPER.md)** — 논문 본문
+- **[`BENCHMARK_PROTOCOL.md`](./BENCHMARK_PROTOCOL.md)** — dataset / metric / peer / fair-comparison 규칙
 
-1. **DAFNA Books** → direct truth-discovery comparison (Exact Truth / Author F1)
-2. **MAGIC** → modern conflict detection/localization stress test
-3. **CONFLICTS / DRAGged** → next end-to-end truth-resolution benchmark after claim extraction is frozen
-4. **FaithfulRAG / KCR / TCR** → execute only when their task/input/model setup can be reproduced fairly; otherwise use as related-work positioning rather than copying incompatible paper numbers into our leaderboard
-
----
-
-# Current Limitations
-
-- FOLIO full grammar is not supported.
-- LogicNLI evaluation uses structured logic input.
-- DAFNA Books has source-level truth labels but no rich ontology/rule chains.
-- MAGIC exposes a clear weakness on multi-hop graph-composed conflicts: current local pairwise reasoning drops to 27–41%.
-- Current MAGIC diagnostic uses structured gold conflict triplets and is not a natural-language ID/LOC reproduction.
-- A relation-composition / graph-path reasoner is required before claiming robust multi-hop conflict localization.
-- The recent KCR result means generic “reasoning-trace-based conflict resolution” cannot be claimed as novel; source-provenance + symbolic derivation + source reliability must remain central.
-- CONFLICTS / DRAGged requires a non-leaking claim extraction and normalization layer before fair end-to-end evaluation.
-
----
-
-# Paper and research notes
-
-- [`paper.md`](./paper.md) — manuscript draft
-- [`MODERN_BASELINES.md`](./MODERN_BASELINES.md) — 2025–2026 comparison and novelty boundary
-- [`report.md`](./report.md) — development / experiment history
+상위 연구 문서는 위 두 파일과 README만 유지하며, 측정 결과는 `results/` 아래에 둔다.

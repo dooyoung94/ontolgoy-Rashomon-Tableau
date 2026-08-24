@@ -52,6 +52,25 @@ class TableauResult:
 
 
 @dataclass
+class BidirectionalVerification:
+    """Four-state truth status for a queried proposition.
+
+    supported: q is derivable.
+    contradicted: not-q or an ontology-declared incompatible alternative is derivable.
+    status is one of SUPPORTED, CONTRADICTED, BOTH, UNRESOLVED.
+    """
+
+    query: Literal
+    supported: bool
+    contradicted: bool
+    status: str
+    support_rules: list[str] = field(default_factory=list)
+    contradiction_rules: list[str] = field(default_factory=list)
+    support_path: list[str] = field(default_factory=list)
+    contradiction_path: list[str] = field(default_factory=list)
+
+
+@dataclass
 class BenchmarkCase:
     case_id: str
     story: str

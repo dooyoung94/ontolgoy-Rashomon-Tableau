@@ -7,14 +7,14 @@ on:
       - 'src/rashomon_tableau/**'
       - 'scripts/**'
       - '.github/workflows/external-benchmarks.yml'
-      - 'config/ontology_rules.yaml'
+      - 'config/*.yaml'
   pull_request:
     branches: [main]
     paths:
       - 'src/rashomon_tableau/**'
       - 'scripts/**'
       - '.github/workflows/external-benchmarks.yml'
-      - 'config/ontology_rules.yaml'
+      - 'config/*.yaml'
   workflow_dispatch:
 
 jobs:
@@ -40,8 +40,10 @@ jobs:
         run: python scripts/evaluate_logicnli.py
       - name: Run Rashomon-Tableau on DAFNA-EA Books
         run: python scripts/evaluate_truth_discovery_books.py
-      - name: Run MAGIC 2025 structured conflict/provenance benchmark
+      - name: Run MAGIC direct structured diagnostic
         run: python scripts/evaluate_magic_structured.py
+      - name: Run MAGIC ontology-guided bidirectional Tableau benchmark
+        run: python scripts/evaluate_magic_bidirectional.py
       - name: Clone official DAFNA-EA implementation
         run: git clone --depth 1 https://github.com/qcri/DAFNA-EA.git /tmp/DAFNA-EA
       - name: Prepare identical 100-book AuthorsNamesList subset for official DAFNA
@@ -71,9 +73,6 @@ jobs:
             alg="$1"; shift
             out="/tmp/dafna-runs/${alg}"
             mkdir -p "$out"
-            # DAFNA writes Trustworthiness.csv and Confidences.csv before an obsolete
-            # Weka XML decision-tree post-processing step. On modern Java that optional
-            # post-processing can throw NoSuchMethodError; the voter outputs are complete.
             set +e
             java -jar "$JAR" "$alg" "$CLAIMS" "$GOLD" "$out" 0.001 0.8 1.0 0.4 "$@"
             rc=$?
@@ -109,6 +108,7 @@ jobs:
             results/logicnli_metrics.json
             results/truth_discovery_books_metrics.json
             results/magic_structured_metrics.json
+            results/magic_bidirectional_tableau_metrics.json
             results/dafna_official/*.json
             results/dafna_official_comparison.json
             results/dafna_official_comparison.md
