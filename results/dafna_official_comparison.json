@@ -1,0 +1,16 @@
+{
+  "dataset": "DAFNA-EA Books / AuthorsNamesList gold subset",
+  "validation_workflow_run": 32708606409,
+  "protocol": "Official qcri/DAFNA-EA Java voters; same 100 gold books; same benchmark-side surname+first-initial evaluation normalization",
+  "rows": [
+    {"method":"Rashomon-Tableau Atomic Resolution","implementation":"This repository","n":100,"exact_set_accuracy":0.61,"author_f1_mean":0.8287813852813852},
+    {"method":"TruthFinder","implementation":"Official DAFNA-EA","n":100,"exact_set_accuracy":0.57,"author_f1_mean":0.6685},
+    {"method":"AccuSim","implementation":"Official DAFNA-EA","n":100,"exact_set_accuracy":0.57,"author_f1_mean":0.6618333333333334},
+    {"method":"2-Estimates","implementation":"Official DAFNA-EA","n":100,"exact_set_accuracy":0.54,"author_f1_mean":0.6528333333333333},
+    {"method":"LTM","implementation":"Official DAFNA-EA","n":100,"exact_set_accuracy":0.54,"author_f1_mean":0.6528333333333333},
+    {"method":"3-Estimates","implementation":"Official DAFNA-EA","n":100,"exact_set_accuracy":0.53,"author_f1_mean":0.6545000000000001},
+    {"method":"Accu","implementation":"Official DAFNA-EA","n":100,"exact_set_accuracy":0.53,"author_f1_mean":0.6545000000000001},
+    {"method":"Reliability-Weighted Vote","implementation":"This repository","n":100,"exact_set_accuracy":0.45,"author_f1_mean":0.7523571428571428},
+    {"method":"Whole-Claim Majority","implementation":"This repository","n":100,"exact_set_accuracy":0.44,"author_f1_mean":0.7356904761904762}
+  ]
+}
