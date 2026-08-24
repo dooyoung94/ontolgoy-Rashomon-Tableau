@@ -10,22 +10,11 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-
 HF_ROUTER_URL = "https://router.huggingface.co/v1"
 _TRANSIENT_HTTP = {408, 409, 425, 429, 500, 502, 503, 504}
 _COHERE_UNSUPPORTED_SCHEMA_KEYS = {
-    "minimum",
-    "maximum",
-    "minItems",
-    "maxItems",
-    "minLength",
-    "maxLength",
-    "uniqueItems",
-    "additionalProperties",
-    "anyOf",
-    "allOf",
-    "oneOf",
-    "not",
+    "minimum", "maximum", "minItems", "maxItems", "minLength", "maxLength",
+    "uniqueItems", "additionalProperties", "anyOf", "allOf", "oneOf", "not",
 }
 
 
@@ -60,12 +49,6 @@ def _strip_reasoning_wrappers(text: str) -> str:
 
 
 def _validate_schema_value(value: Any, schema: dict[str, Any], path: str = "$") -> None:
-    """Validate the benchmark's original JSON contract locally.
-
-    Providers differ in which JSON-Schema keywords they can enforce. The benchmark
-    therefore validates the original, provider-neutral contract after generation so
-    a provider-specific schema relaxation never changes the accepted answer space.
-    """
     expected = schema.get("type")
     if expected == "object":
         if not isinstance(value, dict):
@@ -130,35 +113,25 @@ def _matches_schema_contract(value: Any, schema: dict[str, Any]) -> bool:
 
 
 def _cohere_compatible_schema(schema: Any) -> Any:
-    """Return the JSON-Schema subset accepted by Cohere Structured Outputs.
-
-    The full original schema remains in the textual contract and is revalidated
-    locally after generation. Only provider-side enforcement is relaxed.
-    """
     if isinstance(schema, list):
         return [_cohere_compatible_schema(item) for item in schema]
     if not isinstance(schema, dict):
         return schema
-    out: dict[str, Any] = {}
-    for key, value in schema.items():
-        if key in _COHERE_UNSUPPORTED_SCHEMA_KEYS:
-            continue
-        out[key] = _cohere_compatible_schema(value)
-    return out
+    return {
+        key: _cohere_compatible_schema(value)
+        for key, value in schema.items()
+        if key not in _COHERE_UNSUPPORTED_SCHEMA_KEYS
+    }
 
 
 def _provider_schema(schema: dict[str, Any], profile: str | None) -> dict[str, Any]:
-    if profile == "cohere":
-        return _cohere_compatible_schema(schema)
-    return schema
+    return _cohere_compatible_schema(schema) if profile == "cohere" else schema
 
 
 def _extract_json(text: str, schema: dict[str, Any]) -> dict[str, Any]:
-    """Extract the first complete object satisfying the original response schema."""
     text = _strip_reasoning_wrappers(text)
     if not text:
         raise ValueError("model returned empty content")
-
     try:
         value = json.loads(text)
         _validate_schema_value(value, schema)
@@ -170,7 +143,7 @@ def _extract_json(text: str, schema: dict[str, Any]) -> dict[str, Any]:
     last_validation_error: ValueError | None = None
     for match in re.finditer(r"\{", text):
         try:
-            value, _end = decoder.raw_decode(text[match.start() :])
+            value, _end = decoder.raw_decode(text[match.start():])
         except json.JSONDecodeError:
             continue
         try:
@@ -178,23 +151,16 @@ def _extract_json(text: str, schema: dict[str, Any]) -> dict[str, Any]:
             return value
         except ValueError as exc:
             last_validation_error = exc
-            continue
-
     if last_validation_error is not None:
         raise last_validation_error
-    required = schema.get("required") or []
-    raise ValueError(f"no JSON object matched required fields {required}")
+    raise ValueError(f"no JSON object matched required fields {schema.get('required') or []}")
 
 
 def _schema_response_format(schema_name: str, schema: dict[str, Any]) -> dict[str, Any]:
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", schema_name or "response")[:64] or "response"
     return {
         "type": "json_schema",
-        "json_schema": {
-            "name": safe_name,
-            "schema": schema,
-            "strict": True,
-        },
+        "json_schema": {"name": safe_name, "schema": schema, "strict": True},
     }
 
 
@@ -214,8 +180,12 @@ def _content_text(value: Any) -> str:
     return ""
 
 
+def _safe_payload_copy(payload: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(json.dumps(payload, ensure_ascii=False))
+
+
 class OpenAICompatibleClient:
-    """Provider-neutral Chat Completions adapter with HF reliability controls."""
+    """Provider-neutral Chat Completions adapter with auditable transport retries."""
 
     def __init__(
         self,
@@ -249,30 +219,47 @@ class OpenAICompatibleClient:
         self.enforce_json_schema = enforce_json_schema
         self.schema_profile = schema_profile
         self.reasoning_effort = reasoning_effort
+        # Contains provider payloads and status metadata only. Authorization headers
+        # and API keys are deliberately never recorded.
+        self.request_log: list[dict[str, Any]] = []
 
-    def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
-        req = urllib.request.Request(
-            self.url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-            method="POST",
-        )
+    def _request(self, payload: dict[str, Any], *, schema_name: str | None = None) -> dict[str, Any]:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
+            entry: dict[str, Any] = {
+                "schema_name": schema_name,
+                "url": self.url,
+                "transport_attempt": attempt + 1,
+                "payload": _safe_payload_copy(payload),
+            }
+            self.request_log.append(entry)
+            req = urllib.request.Request(
+                self.url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                method="POST",
+            )
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    return json.load(resp)
+                    raw = json.load(resp)
+                    entry["http_status"] = int(getattr(resp, "status", 200) or 200)
+                    entry["response_model"] = raw.get("model", self.model)
+                    return raw
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")
+                entry["http_status"] = int(exc.code)
+                entry["error_body_preview"] = body[:1200]
                 last_error = RuntimeError(f"LLM endpoint failed HTTP {exc.code}: {body[:1200]}")
                 if exc.code not in _TRANSIENT_HTTP or attempt >= self.max_retries:
                     raise last_error from exc
             except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
+                entry["transport_error"] = str(exc)
                 last_error = RuntimeError(f"LLM endpoint transport failure: {exc}")
                 if attempt >= self.max_retries:
                     raise last_error from exc
 
-            delay = self.retry_backoff_seconds * (2**attempt)
+            delay = self.retry_backoff_seconds * (2 ** attempt)
+            entry["retry_delay_seconds"] = delay
             if delay:
                 time.sleep(delay)
 
@@ -281,9 +268,7 @@ class OpenAICompatibleClient:
 
     def structured(self, *, instructions: str, input_text: str, schema_name: str, schema: dict[str, Any]) -> JsonResponse:
         base_prompt = f"{instructions}\n\n{_json_contract(schema)}\n\nINPUT\n{input_text}"
-        total_input = 0
-        total_output = 0
-        total_tokens = 0
+        total_input = total_output = total_tokens = 0
         last_error: Exception | None = None
         last_preview = ""
         last_finish = ""
@@ -309,7 +294,7 @@ class OpenAICompatibleClient:
             if self.enforce_json_schema:
                 payload["response_format"] = _schema_response_format(schema_name, provider_schema)
 
-            raw = self._request(payload)
+            raw = self._request(payload, schema_name=schema_name)
             last_model = raw.get("model", self.model)
             u = raw.get("usage") or {}
             total_input += int(u.get("prompt_tokens", 0) or 0)
@@ -319,36 +304,24 @@ class OpenAICompatibleClient:
             choice = (raw.get("choices") or [{}])[0]
             last_finish = str(choice.get("finish_reason") or "")
             message = choice.get("message") or {}
-
             parsed = message.get("parsed")
             if _matches_schema_contract(parsed, schema):
-                return JsonResponse(
-                    data=parsed,
-                    model=last_model,
-                    usage=Usage(total_input, total_output, total_tokens or total_input + total_output),
-                )
+                return JsonResponse(parsed, last_model, Usage(total_input, total_output, total_tokens or total_input + total_output))
 
             final_text = _content_text(message.get("content"))
             reasoning_text = _content_text(message.get("reasoning_content") or message.get("reasoning"))
             candidate_texts = [x for x in (final_text, reasoning_text) if x.strip()]
             last_preview = " | ".join(x[:500] for x in candidate_texts)
-
             for text in candidate_texts:
                 try:
                     data = _extract_json(text, schema)
-                    return JsonResponse(
-                        data=data,
-                        model=last_model,
-                        usage=Usage(total_input, total_output, total_tokens or total_input + total_output),
-                    )
+                    return JsonResponse(data, last_model, Usage(total_input, total_output, total_tokens or total_input + total_output))
                 except (ValueError, json.JSONDecodeError) as exc:
                     last_error = exc
-
             if not candidate_texts:
                 last_error = ValueError("model returned empty content")
-
             if contract_attempt < self.contract_retries:
-                delay = self.retry_backoff_seconds * (2**contract_attempt)
+                delay = self.retry_backoff_seconds * (2 ** contract_attempt)
                 if delay:
                     time.sleep(delay)
 
@@ -370,19 +343,11 @@ class AnthropicMessagesClient:
 
     def structured(self, *, instructions: str, input_text: str, schema_name: str, schema: dict[str, Any]) -> JsonResponse:
         prompt = f"{instructions}\n\n{_json_contract(schema)}\n\nINPUT\n{input_text}"
-        payload = {
-            "model": self.model,
-            "max_tokens": 2048,
-            "messages": [{"role": "user", "content": prompt}],
-        }
+        payload = {"model": self.model, "max_tokens": 2048, "messages": [{"role": "user", "content": prompt}]}
         req = urllib.request.Request(
             self.url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
+            headers={"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
             method="POST",
         )
         try:
@@ -414,11 +379,7 @@ def client_from_environment(model_cfg: dict[str, Any]):
     base_url = os.getenv(base_env, "") if base_env else ""
 
     if execution == "openai":
-        return OpenAICompatibleClient(
-            model=model,
-            api_key=api_key,
-            base_url=base_url or "https://api.openai.com/v1",
-        )
+        return OpenAICompatibleClient(model=model, api_key=api_key, base_url=base_url or "https://api.openai.com/v1")
     if execution == "huggingface_router":
         return OpenAICompatibleClient(
             model=model,
