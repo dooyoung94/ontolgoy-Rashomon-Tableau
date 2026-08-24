@@ -1,6 +1,6 @@
-# Rashomon-Tableau: Perspective-Indexed Satisfiability Reasoning for Contradiction Localization and Multi-Justification Preservation
+# Rashomon-Tableau: Provenance-Aware Logical Conflict Localization and Truth Resolution from Conflicting Sources
 
-## 라쇼몽-태블로: 모순 발생 위치 식별과 다중 정당화 보존을 위한 관점 인덱스 기반 만족가능성 추론
+## 라쇼몽-태블로: 상충 출처에서의 출처 추적형 논리 충돌 위치 식별과 진실 추론
 
 **Author:** [Author Name]  
 **Affiliation:** [Affiliation]  
@@ -10,742 +10,741 @@
 
 ## Abstract
 
-Logical reasoners traditionally determine whether a knowledge base is satisfiable or whether a proposition is entailed. In multi-source settings, however, a single SAT/UNSAT decision is often insufficient. A contradiction may already exist inside one source, or may emerge only after two individually consistent sources are combined. Furthermore, an inconsistency can admit multiple independent minimal explanations, and presenting only one proof may conceal alternative causes that are equally valid. We propose **Rashomon-Tableau**, a perspective-indexed reasoning framework that reuses satisfiability reasoning rather than introducing a new logical calculus. The framework has three separable components: (1) semantic satisfiability reasoning for logical inference, (2) perspective-indexed SAT tests for localizing contradiction scope, and (3) preservation of multiple minimal justifications using a Rashomon-inspired proof-set selection principle.
+Real-world information systems rarely observe a fact through a single reliable source. Different websites, witnesses, agents, sensors, documents, or database snapshots can provide mutually conflicting claims. Classical logical reasoning can determine whether a set of propositions is consistent, while truth-discovery methods estimate source reliability and select likely true claims. However, these two traditions answer different questions: logical reasoning explains whether and how a contradiction follows, whereas truth discovery estimates which competing value should be trusted. This paper studies whether the two can be connected through explicit provenance.
 
-We evaluate each component with a distinct experiment. On the strictly supported Horn/explicit-negation fragment of the official FOLIO v0.0 validation set, semantic clause-tableau reasoning obtains 96.43% accuracy and 96.33% Macro-F1, compared with 75.00% accuracy and 74.18% Macro-F1 for a forward-Horn baseline. On the official structured LogicNLI `test_logic` split containing 2,000 statements, a dual-proof decision procedure that checks both a proposition and its negation achieves 98.40% accuracy and 98.40% Macro-F1, whereas a single-path forward reasoner obtains 74.00% and 65.78%; the F1 score for the paradox/self-contradiction class increases from 0.00% to 97.92%. In a controlled four-class multi-context benchmark, perspective indexing improves contradiction-scope accuracy from 75.00% to 100.00% by distinguishing intra-perspective from inter-perspective inconsistency. Finally, on cases containing two independent minimal contradiction explanations, multi-justification preservation raises explanation coverage from 50.00% to 100.00%.
+We propose **Rashomon-Tableau**, a three-stage framework for conflicting-source reasoning. First, a semantic reasoning layer derives implicit propositions and verifies logical support or contradiction. Second, a provenance-preserving conflict layer records the path `Source → Claim → Rule/Ontology → Derived Claim → Conflict` instead of reducing all evidence to a single inconsistent knowledge base. Third, a truth-resolution layer combines source reliability with atomic logical compatibility and cross-source support to rank candidate truths. The term *Rashomon* is used here in the sense of retaining mutually conflicting perspectives long enough to reason about the underlying event, rather than in the machine-learning sense of a Rashomon set of near-optimal predictive models.
 
-The proposed framework is closely related to Standpoint Logic, Multi-Context Systems, and axiom pinpointing. Consequently, we do not claim the first perspective-aware logic, the first tableau for multi-perspective reasoning, or the first method for enumerating multiple justifications. The narrower contribution is an operational protocol that combines provenance-preserving SAT calls with contradiction-scope semantics and a proof-space Rashomon selection layer. CONAN detective narratives are used as a multi-perspective case study rather than as the definition of the task. The framework is intended for broader settings where provenance matters, including conflicting documents, multi-agent hypotheses, temporal snapshots, and heterogeneous operational evidence.
+The three components are evaluated separately because no single public benchmark used in this work provides natural-language logical rules, source provenance, conflicts, and external truth labels simultaneously. For logical reasoning, the semantic clause-tableau core reaches 96.43% accuracy and 96.33% Macro-F1 on the 28 examples of the FOLIO validation set that are strictly covered by the current Horn/explicit-negation grammar; this is not a full-FOLIO result. On LogicNLI's official structured `test_logic` split, dual-direction proof checking reaches 98.40% accuracy and 98.40% Macro-F1 and detects the paradox/self-contradiction class with 97.92% F1, compared with 0% paradox F1 for a single-path decision rule.
 
-**Keywords:** Tableau Reasoning; Multi-Perspective Reasoning; Contradiction Localization; Axiom Pinpointing; Minimal Unsatisfiable Subset; Rashomon Set; LogicNLI; FOLIO; Explainable Reasoning
+The main real-data evaluation uses the **DAFNA-EA Books** benchmark. It contains conflicting author claims from online sources and an independent gold truth. On 100 gold books, 1,999 source-object claims, and 227 sources, whole-claim majority voting obtains 44% exact truth accuracy, and an iterative source-reliability weighted whole-claim baseline obtains 45%. The proposed provenance-aware atomic resolution obtains **61% exact-set accuracy**, an improvement of **16 percentage points** over the reliability-weighted baseline. Mean author-level F1 improves from 75.24% to **82.88%**. At the claim level, distinguishing `exact`, `partial`, and `conflict` claims yields **74.58% Macro-F1**, compared with 50.37% for the reliability-weighted whole-claim baseline. The result suggests that a correct partial claim should not automatically be treated as a competing false value and that preserving claim structure and provenance can improve both conflict localization and truth recovery.
+
+We explicitly position the contribution relative to prior work. Standpoint Logic and Multi-Context Systems already provide principled representations of multiple or conflicting perspectives; Axiom Pinpointing already computes minimal explanations for logical consequences; TruthFinder, CATD, and related methods already infer source reliability from conflicting claims; Constrained Truth Discovery already introduces first-order denial constraints; and ontology-aware truth-discovery work already exploits semantic relationships between candidate values. Accordingly, we do **not** claim the first perspective-aware logic, the first multiple-proof method, or the first logic-aware truth-discovery algorithm. The narrower contribution is an operational architecture in which **logical derivation paths remain attached to source provenance, conflicts are localized at the claim level, and that provenance-aware conflict evidence is reused for truth resolution**.
+
+**Keywords:** Truth Discovery; Tableau Reasoning; Provenance; Conflict Localization; Multi-Source Reasoning; Source Reliability; Ontology Reasoning; Explainable AI
 
 ---
 
 ## 초록
 
-전통적인 논리 reasoner는 지식베이스의 만족가능성 또는 특정 명제의 entailment를 판정한다. 그러나 서로 다른 화자, 문서, 에이전트, 센서 또는 시점에서 생성된 정보를 함께 다루는 환경에서는 하나의 SAT/UNSAT 판정만으로 충분하지 않다. 모순은 하나의 출처 내부에 이미 존재할 수도 있고, 각각은 일관적인 두 출처가 결합될 때만 발생할 수도 있다. 또한 동일한 inconsistency가 여러 개의 독립적인 최소 설명으로 정당화될 수 있으므로 하나의 proof만 제시하면 동등하게 타당한 대안 원인을 숨길 수 있다. 본 연구는 새로운 논리 calculus를 제안하기보다 기존 satisfiability reasoning을 관점 단위로 조직하는 **Rashomon-Tableau** 프레임워크를 제안한다. 제안 방법은 (1) 논리 추론을 위한 semantic satisfiability reasoning, (2) 모순의 발생 범위를 식별하기 위한 perspective-indexed SAT 검사, (3) 여러 최소 정당화를 하나로 축약하지 않고 보존하기 위한 Rashomon-inspired proof-set selection의 세 구성요소로 이루어진다.
+실제 정보 시스템에서는 하나의 사실을 단일하고 완전히 신뢰할 수 있는 출처만으로 관찰하기 어렵다. 서로 다른 웹사이트, 증언자, 에이전트, 센서, 문서 또는 데이터 스냅샷은 동일 대상에 대해 상충하는 주장을 제공할 수 있다. 고전 논리 추론은 명제 집합의 일관성과 귀결 관계를 판정할 수 있고, Truth Discovery는 출처 신뢰도와 주장 신뢰도를 함께 추정하여 가능성이 높은 진실을 선택한다. 그러나 두 연구 흐름은 서로 다른 질문에 답한다. 논리 추론은 “어떤 논리 경로로 모순이 발생했는가”를 설명하는 데 강하고, Truth Discovery는 “서로 충돌하는 값 중 무엇을 믿을 것인가”에 강하다.
 
-각 구성요소는 서로 다른 실험으로 평가하였다. FOLIO v0.0 validation 중 현재 구현이 엄격하게 지원하는 Horn/explicit-negation fragment에서 semantic clause-tableau는 Accuracy 96.43%, Macro-F1 96.33%를 기록하여 forward-Horn baseline의 75.00%, 74.18%보다 높았다. LogicNLI 공식 structured `test_logic` 2,000개 statement에서는 명제와 그 부정의 양쪽 증명 가능성을 모두 검사하는 dual-proof 방식이 Accuracy 98.40%, Macro-F1 98.40%를 기록한 반면 single-path forward 방식은 각각 74.00%, 65.78%를 기록하였다. 특히 paradox/self-contradiction 클래스의 F1은 0.00%에서 97.92%로 향상되었다. 네 개 클래스의 controlled multi-context benchmark에서는 perspective indexing을 통해 contradiction-scope Accuracy가 75.00%에서 100.00%로 향상되었다. 마지막으로 두 개의 독립적인 최소 모순 설명이 존재하는 controlled benchmark에서 하나의 proof만 반환할 경우 explanation coverage는 50.00%였으나 복수 정당화를 보존할 경우 100.00%를 기록하였다.
+본 연구는 두 문제를 **provenance**를 중심으로 연결하는 **Rashomon-Tableau**를 제안한다. 제안 방법은 세 단계로 구성된다. 첫째, Semantic Reasoning 단계에서 명시되지 않은 관계를 추론하고 논리적 지지 또는 모순을 검증한다. 둘째, Conflict Localization 단계에서 모든 정보를 하나의 inconsistent knowledge base로 축약하지 않고 `Source → Claim → Rule/Ontology → Derived Claim → Conflict` 경로를 유지한다. 셋째, Truth Resolution 단계에서 source reliability, atomic claim support, logical compatibility, cross-source agreement를 함께 이용하여 candidate truth를 평가한다. 본 연구에서 Rashomon은 “비슷한 성능을 갖는 여러 예측 모델”이라는 Machine Learning의 Rashomon Set 의미가 아니라, **동일 사건에 대한 상충된 관점을 성급하게 제거하지 않고 함께 분석함으로써 실제 truth에 접근한다는 문제의식**을 의미한다.
 
-본 연구는 Standpoint Logic, Multi-Context Systems, Axiom Pinpointing과 밀접한 관련이 있다. 따라서 최초의 다중 관점 논리, 최초의 perspective-aware tableau, 또는 최초의 multiple-justification enumeration을 주장하지 않는다. 본 연구의 제한된 기여는 기존 satisfiability reasoner를 provenance-aware하게 호출하여 contradiction scope를 정의하고, 그 결과의 여러 justification을 proof-space Rashomon set으로 조직하는 실행 가능한 reasoning protocol에 있다. CONAN 탐정 서사는 방법론 자체가 아니라 multi-perspective case study로 사용된다.
+세 구성요소는 하나의 공개 데이터셋에서 모두 검증하지 않고 역할에 맞는 벤치마크로 분리 평가하였다. Logical Reasoning은 FOLIO와 LogicNLI로 검증한다. FOLIO v0.0 validation 204개 중 현재 parser가 엄격하게 지원하는 Horn/explicit-negation fragment 28개에서 Semantic Clause Tableau는 Accuracy 96.43%, Macro-F1 96.33%를 기록하였다. 이는 full-FOLIO 성능이 아니다. LogicNLI structured `test_logic` 2,000개 statement에서는 명제와 부정 명제 양쪽을 모두 확인하는 dual-proof 판정이 Accuracy 98.40%, Macro-F1 98.40%, paradox/self-contradiction F1 97.92%를 기록하였다.
 
-**주요어:** Tableau Algorithm, Multi-Perspective Reasoning, Contradiction Scope, Axiom Pinpointing, Minimal Unsatisfiable Subset, Rashomon Set, LogicNLI, FOLIO
+핵심 real-data 평가는 **DAFNA-EA Books** benchmark를 사용하였다. 100개의 gold book, 1,999개의 source-object claim, 227개의 source를 대상으로 whole-claim majority voting은 exact truth accuracy 44%, source-reliability weighted whole-claim baseline은 45%를 기록하였다. 제안한 provenance-aware atomic truth resolution은 **61%**로 reliability baseline 대비 **+16.0 percentage points** 향상되었다. Author-level mean F1은 75.24%에서 **82.88%**로 향상되었다. 또한 각 source claim을 `exact`, `partial`, `conflict`로 구분하는 conflict localization에서는 Macro-F1이 50.37%에서 **74.58%**로 향상되었다.
 
----
+본 연구는 Standpoint Logic, Multi-Context Systems, Axiom Pinpointing, TruthFinder, CATD, Constrained Truth Discovery, ontology-aware truth discovery와 직접적으로 겹치는 부분이 있다. 따라서 최초의 multi-perspective logic, 최초의 multiple-proof reasoning, 최초의 logic-aware truth discovery를 주장하지 않는다. 본 연구의 차별점은 **논리적 derivation과 source provenance를 분리하지 않고 conflict path로 유지하며, 해당 conflict provenance를 다시 truth resolution의 evidence로 사용하는 전체 reasoning pipeline**에 있다.
 
-# 1. 서론
-
-논리적 추론의 가장 기본적인 질문 중 하나는 “주어진 명제들이 동시에 참일 수 있는가?”이다. Tableau 계열 알고리즘은 논리식을 규칙에 따라 확장하고 가능한 해석의 branch를 구성한 뒤, branch 안에서 어떤 명제 $\phi$와 그 부정 $\neg\phi$가 동시에 나타나는 clash를 탐지한다. 모든 branch가 닫히면 지식베이스는 unsatisfiable하며, 하나 이상의 open branch가 남으면 satisfiable하다. 이러한 방식은 Description Logic과 ontology reasoning의 satisfiability, consistency, subsumption, entailment 판정에 오랫동안 활용되어 왔다 [1].
-
-그러나 실세계의 지식은 흔히 하나의 균질한 출처에서 생성되지 않는다. 증인마다 사건을 다르게 기억할 수 있고, 뉴스 매체마다 동일 사건의 일부 사실만 관찰할 수 있으며, 두 센서는 서로 다른 상태를 보고할 수 있다. 멀티에이전트 시스템에서는 각 agent가 독립적인 가설을 형성할 수 있고, 운영 시스템에서는 서로 다른 로그, 메트릭, 데이터 스냅샷이 동일 장애에 대해 상이한 증거를 제공한다. 이때 모든 명제를 하나의 ABox로 즉시 병합하면 전체 일관성은 확인할 수 있지만 “어디에서 모순이 시작되었는가”라는 provenance 정보가 사라질 수 있다.
-
-예를 들어 첫 번째 관점 $P_1$ 안에 이미 $p(a)$와 $\neg p(a)$가 함께 존재하는 경우와, $P_1$은 $p(a)$를 주장하고 $P_2$가 $\neg p(a)$를 주장하는 경우를 생각할 수 있다. 두 경우 모두 병합된 지식베이스는 UNSAT이다. 그러나 전자는 하나의 source 내부 consistency 문제이고, 후자는 두 source 사이의 충돌이다. 두 종류의 오류는 동일한 대응으로 처리하기 어렵다. 전자는 해당 source의 데이터 품질이나 추론 규칙을 조사해야 하고, 후자는 source 간 신뢰도, 시점, 범위 또는 관점 차이를 조사해야 한다.
-
-두 번째 문제는 explanation multiplicity이다. 하나의 모순 결론은 한 가지 이유만으로 발생한다고 보장할 수 없다. 서로 독립적인 두 규칙 체인이 동일 clash로 이어질 수 있고, ontology entailment에는 여러 개의 최소 justification이 존재할 수 있다. 이 문제는 Axiom Pinpointing 및 ontology debugging 문헌에서 이미 잘 알려져 있다 [2,3]. 따라서 본 연구는 “여러 proof를 찾을 수 있다”는 사실 자체를 신규성으로 주장하지 않는다. 대신 여러 proof를 하나의 대표 설명으로 조기 축약하지 않고, 어떤 관점의 어떤 명제가 각 proof에 기여했는지 provenance를 유지한 상태로 여러 설명을 보존하는 데 초점을 둔다.
-
-이 두 문제는 사실 하나의 공통된 정보 손실에서 출발한다. **병합은 source boundary를 잃게 만들고, 단일 proof 선택은 explanation boundary를 잃게 만든다.** 본 연구는 이 두 종류의 손실을 피하면서 기존 satisfiability reasoning을 재사용하는 방법을 제안한다.
-
-본 논문의 연구 질문은 다음과 같다.
-
-- **RQ1 — Logical inference:** semantic satisfiability reasoning은 단순 lookup 또는 forward-only reasoning보다 논리적으로 더 완전한 판정을 제공하는가?
-- **RQ2 — Dual-proof contradiction:** $q$의 proof 하나를 찾은 뒤 종료하는 방식보다 $q$와 $\neg q$를 모두 검사하는 방식이 paradox/self-contradiction을 더 잘 식별하는가?
-- **RQ3 — Contradiction scope:** 관점별 SAT와 union SAT를 분리하면 intra-perspective와 inter-perspective contradiction을 구분할 수 있는가?
-- **RQ4 — Explanation preservation:** 하나의 proof만 반환하는 방식과 비교해 복수의 최소 justification을 보존하면 설명 coverage가 향상되는가?
-
-본 연구의 기여는 새로운 logical connective나 tableau expansion rule이 아니다. 대신 기존 SAT oracle을 provenance-aware하게 사용하기 위한 **Perspective-Indexed Satisfiability Protocol**, local/merged SAT 상태로 모순의 범위를 구분하는 **Contradiction Scope Localization**, 양방향 proof 검사를 통한 paradox 보존, 그리고 여러 최소 explanation을 near-equivalent proof set으로 제시하는 **Rashomon-inspired selection layer**를 하나의 프레임워크로 정리한다.
+**주요어:** Truth Discovery, Tableau, Provenance, Conflict Localization, Multi-Source Reasoning, Source Reliability, Ontology, Explainable Reasoning
 
 ---
 
-# 2. 관련 연구
+# 1. Introduction
 
-## 2.1 Tableau와 Hypertableau
+## 1.1 Motivation
 
-Tableau reasoning은 satisfiability 문제를 branch expansion과 clash detection으로 환원한다. Description Logic reasoner에서는 표현력이 증가함에 따라 blocking, role restriction, dependency management 등의 기법이 발전했으며, HermiT의 Hypertableau와 같은 방식은 hyperresolution과 tableau의 장점을 결합하여 불필요한 nondeterminism을 줄이는 데 초점을 두었다 [1]. 이러한 연구에서 중심적인 평가지표는 새로운 논리 표현을 sound하고 complete하게 처리할 수 있는지, termination과 complexity가 어떠한지, 대규모 ontology에서 얼마나 효율적으로 동작하는지이다.
+서로 다른 출처의 정보가 다르다는 사실은 그 자체로 모순을 의미하지 않는다. 또한 모순이 발견되었다는 사실만으로 어떤 주장이 거짓인지 알 수 있는 것도 아니다. 다중 출처 환경에서는 다음 세 질문이 순차적으로 필요하다.
 
-본 연구는 이러한 calculus를 대체하지 않는다. Semantic Tableau는 제안 방법의 reasoning oracle일 뿐이다. 핵심 차이는 **어떤 명제 집합을 한 번에 reasoner에 투입할 것인가**에 있다.
+1. **Logical Reasoning:** 주장으로부터 무엇이 실제로 논리적으로 귀결되는가?
+2. **Conflict Localization:** 어떤 source, claim, rule에서 충돌이 발생했는가?
+3. **Truth Resolution:** 충돌하는 주장 중 무엇이 실제 truth에 더 잘 정당화되는가?
 
-## 2.2 Axiom Pinpointing과 Multiple Justifications
+이 세 문제를 구분하지 않으면 서로 다른 종류의 정보 손실이 발생한다. 단순 문자열 비교는 implicit contradiction을 놓칠 수 있고, 모든 source를 하나의 ABox로 병합하면 contradiction provenance가 사라질 수 있으며, 단순 majority voting은 부분적으로 옳은 주장을 서로 다른 값으로 취급하거나 다수의 저품질 source에 의해 오염될 수 있다.
 
-Axiom Pinpointing은 특정 entailment를 야기하는 ontology axiom의 최소 집합을 찾는 문제이다. Baader와 Peñaloza는 일반 tableau를 axiom pinpointing이 가능하도록 확장하는 방법을 제시했고 [2], EL 계열에서도 하나의 consequence를 만드는 모든 minimal axiom set을 찾는 연구가 진행되었다 [3]. 이후 OWL ontology debugging 연구에서도 한 entailment가 여러 justification을 가질 수 있다는 점과 이들을 사용자에게 설명하는 문제가 중요한 inference service로 다뤄졌다 [4].
+본 연구의 중심 가설은 다음과 같다.
 
-이 연구 계보는 본 논문의 multi-proof 부분과 가장 직접적으로 겹친다. 따라서 **multiple justification 자체는 본 연구의 신규성이 아니다.** 본 연구가 추가하는 요소는 justification을 perspective provenance와 함께 유지하고, 설명의 길이와 관점 다양성을 기준으로 하나의 justification만 선택하지 않는 proof-set presentation이다. 이 아이디어는 논리적 필요조건이라기보다 explanation policy에 가깝다.
+> **상충된 관점을 즉시 하나로 병합하거나 하나를 제거하지 않고, 각 주장의 출처와 논리적 derivation을 보존하면 conflict를 더 정확하게 위치시킬 수 있으며, 그 conflict provenance를 source reliability와 결합하면 truth resolution을 개선할 수 있다.**
 
-## 2.3 Multi-Context Systems
+## 1.2 Running Example
 
-Multi-Context Systems(MCS)는 서로 다른 logic을 사용하는 분산 knowledge base를 context 단위로 유지하고 bridge rule을 통해 정보를 교환하는 일반적 프레임워크이다 [5]. Eiter 등은 context 간 정보 교환으로 발생하는 inconsistency를 어떤 bridge rule 조합이 유발했는지 설명하는 방법을 제안하였다 [6]. 이는 “각 context는 독립적으로 의미가 있지만 상호 연결에서 conflict가 발생할 수 있다”는 점에서 본 연구의 inter-perspective contradiction과 매우 가깝다.
+다음 세 source를 생각한다.
 
-MCS는 본 연구보다 훨씬 일반적이다. heterogeneous logic, non-monotonic bridge rule, equilibrium semantics와 repair까지 다룬다. 반면 본 연구는 동일하거나 호환 가능한 logical vocabulary로 정규화된 perspective-specific proposition set을 대상으로 한다. 이 제한 덕분에 별도의 MCS semantics 없이 기존 SAT reasoner를 그대로 사용할 수 있지만, 표현력 측면에서는 MCS보다 좁다.
+```text
+Source A: Alice is Bob's father.
+Source B: Alice is not Bob's parent.
+Source C: Alice is Bob's parent.
+```
 
-## 2.4 Standpoint Logic과 다중 관점 Tableau
+공통 ontology에 다음 규칙이 있다고 하자.
 
-본 연구와 가장 가까운 선행축 중 하나는 Standpoint Logic이다. Standpoint Logic은 서로 다른 agent 또는 ontology author가 서로 다른, 심지어 충돌하는 semantic commitment를 가질 수 있음을 명시적으로 표현하기 위해 standpoint modality를 도입한다 [7]. Standpoint EL은 Description Logic EL을 여러 관점으로 확장하면서도 tractable reasoning을 유지하는 것을 목표로 하고 [8], Standpoint EL+은 axiom negation과 role-chain 등을 추가한 deduction calculus를 제안한다 [9]. 또한 Standpoint Linear Temporal Logic은 시간적 추론과 다중 관점을 결합하고 이를 위한 terminating tableau calculus를 제시하였다 [10]. 최근에는 SHIQ과 standpoint modality의 결합도 연구되었다 [11].
+$$
+Father(x,y) \rightarrow Parent(x,y)
+$$
 
-따라서 본 연구는 “최초의 perspective-aware logic”이나 “최초의 multi-perspective tableau”를 주장할 수 없다. Standpoint Logic이 **관점을 논리의 syntax와 semantics 안에 넣는 접근**이라면, 본 연구는 관점이 이미 metadata로 주어진 환경에서 **기존 reasoner를 반복 호출하는 protocol**이다. 즉 표현력과 이론적 완결성에서는 Standpoint Logic이 더 강하고, 기존 시스템에 대한 적용 단순성 측면에서 본 연구가 더 가벼운 접근이라고 볼 수 있다.
+Source A의 명시적 claim은 `Father(Alice,Bob)`이지만 semantic reasoning을 적용하면 다음 명제가 파생된다.
 
-## 2.5 Rashomon Set
+$$
+Parent(Alice,Bob)
+$$
 
-Rashomon effect는 동일 데이터에 대해 거의 비슷하게 우수한 성능을 내는 여러 모델이 존재할 수 있다는 문제를 지칭한다. Fisher, Rudin, Dominici는 하나의 잘 맞는 모델만 해석하기보다 전체 well-performing model class를 함께 분석해야 한다고 주장하며 Model Class Reliance를 제안하였다 [12]. 이때 Rashomon set은 일반적으로 다음과 같이 정의할 수 있다.
+따라서 Source A와 Source B 사이에는 명시적 문자열이 동일하지 않아도 논리적 conflict가 존재한다.
 
-\[
-\mathcal{R}_{\epsilon}=\{f \in \mathcal{F}: L(f) \leq L(f^*)+\epsilon\}.
-\]
+```text
+Source A
+  └─ Father(Alice,Bob)
+       └─ [Father -> Parent]
+            └─ Parent(Alice,Bob)
+                    X
+Source B            └─ NOT Parent(Alice,Bob)
 
-본 연구는 이 개념을 그대로 theorem proving semantics로 사용하지 않는다. 대신 **하나의 contradiction에 여러 최소 justification이 존재할 때, 설명 품질이 최고 설명과 충분히 가까운 여러 proof를 함께 보존한다**는 selection principle로 전이한다.
+Source C
+  └─ Parent(Alice,Bob)
+       └─ supports the same candidate truth as A
+```
 
-\[
-\mathcal{R}^{proof}_{\epsilon}(c)=
-\{\pi: \pi \vdash c,\ Score(\pi) \ge Score(\pi^*)-\epsilon\}.
-\]
+여기서 단순한 `UNSAT` 결과만 반환하면 Source A가 어떤 rule을 통해 충돌에 참여했는지 보이지 않는다. 반대로 provenance path를 유지하면 `Source A → Father → Parent → conflict with Source B`와 `Source C → Parent → conflict with Source B`를 별도로 기록할 수 있다.
 
-따라서 “Proof Rashomon Set”은 본 연구가 제안하는 conceptual transfer이며, 기존 Rashomon 연구가 논리 proof에 동일한 정의를 사용했다는 의미는 아니다. 또한 모든 minimal justification을 무조건 출력하는 Axiom Pinpointing과도 구분된다. Pinpointing은 **무엇이 최소 정당화인가**를 계산하고, Rashomon layer는 **그 중 어떤 설명 집합을 사용자에게 함께 보존·제시할 것인가**를 다룬다.
+최종 단계는 누가 “이겼는가”를 단순히 세는 것이 아니다. Source A와 C의 reliability, 두 claim의 논리적 consistency, ontology-derived support, Source B가 과거에 제공한 claim의 정확성 등을 함께 고려하여 `Parent(Alice,Bob)`와 `NOT Parent(Alice,Bob)`의 confidence를 계산한다.
 
-## 2.6 Neuro-Symbolic Logical Reasoning
+이 running example이 본 논문의 세 기여를 모두 보여준다.
 
-LogicNLI는 자연어 모델의 first-order logical reasoning을 entailment, contradiction, neutral, paradox 관점에서 진단하며, BERT, RoBERTa, XLNet이 복잡한 FOL 추론에 한계를 보임을 보고하였다 [13]. FOLIO는 자연어 premise와 FOL annotation을 함께 제공하여 복잡한 FOL reasoning 및 NL-to-FOL 변환을 평가한다 [14]. LINC와 같은 neuro-symbolic 접근은 LLM을 semantic parser로 사용하고 실제 deduction은 외부 theorem prover에 위임함으로써 language-only reasoning의 오류를 줄이는 방향을 제시한다 [15].
+## 1.3 Research Questions
 
-본 연구도 자연어가 입력일 경우 formalization layer를 필요로 하지만, 본 논문의 핵심 실험은 **reasoner layer를 분리하여 평가**한다. 따라서 LogicNLI의 structured logical representation과 FOLIO의 FOL annotation을 활용하며, 자연어 parsing 성능과 논리 reasoning 성능을 혼합하지 않는다.
+**RQ1 — Logical Reasoning**  
+Semantic satisfiability reasoning은 명시적 fact lookup 또는 한 방향의 forward reasoning이 놓치는 implicit entailment와 contradiction을 검출할 수 있는가?
 
-## 2.7 선행연구 대비 연구 위치
+**RQ2 — Conflict Localization**  
+전체 conflict를 하나의 값으로 축약하지 않고 source-claim provenance와 proposition structure를 유지하면 실제 gold truth 기준으로 `exact`, `partial`, `conflict` claim을 더 정확하게 식별할 수 있는가?
 
-| 연구 계열 | 다중 관점 | SAT/Tableau | 모순 원인/범위 | 복수 justification | 본 연구와의 관계 |
-|---|---:|---:|---:|---:|---|
-| Classical Tableau / Hypertableau | X | O | 전체 KB clash | 보통 X | reasoning core |
-| Axiom Pinpointing | X | O | axiom-level cause | **O** | multi-proof의 직접 선행연구 |
-| Multi-Context Systems | **O** | 별도 semantics | context/bridge inconsistency | O | inter-context inconsistency의 직접 선행연구 |
-| Standpoint Logic / EL / SLTL | **O** | O/전용 calculus | viewpoint-aware reasoning | 부분적 | perspective logic의 가장 가까운 선행연구 |
-| Rashomon Set | X | X | X | 모델 대안 집합 | proof-set selection의 개념적 기반 |
-| LogicNLI / FOLIO | X | benchmark | contradiction/paradox | proof trace 일부 | reasoning evaluation |
-| **Rashomon-Tableau** | **O** | **기존 SAT oracle 재사용** | **Intra/Inter scope** | **O + provenance + selection** | 제안 프레임워크 |
+**RQ3 — Rashomon Truth Resolution**  
+상충된 source를 유지한 상태에서 source reliability와 atomic logical compatibility를 결합하면 majority 또는 whole-claim reliability voting보다 실제 truth recovery가 개선되는가?
 
-이 표에서 보듯 본 연구의 각 구성요소는 개별적으로 완전히 새로운 것이 아니다. 연구의 의미는 **기존 SAT reasoning, perspective provenance, contradiction localization, multiple justification, Rashomon-style preservation을 하나의 operational pipeline으로 연결하고 그 효과를 분리 평가한다는 점**에 있다.
+## 1.4 Contributions
 
----
+본 논문의 기여는 다음 세 가지로 제한한다.
 
-# 3. 문제 정의
+**C1. Provenance-preserving semantic reasoning architecture.**  
+논리적 귀결을 원래 source/claim에서 분리하지 않고 derivation path로 유지하는 reasoning architecture를 정의한다.
 
-관점 집합을
+**C2. Claim-level conflict localization.**  
+다중 값을 갖는 claim을 하나의 불가분한 문자열로 취급하지 않고 atomic proposition 집합으로 해석하여 `exact`, `partial`, `conflict`를 구분한다.
 
-\[
-\mathcal{P}=\{P_1,P_2,\dots,P_m\}
-\]
+**C3. Provenance-aware truth resolution.**  
+source reliability와 atomic proposition support를 반복적으로 함께 추정하고, conflict provenance를 유지하면서 candidate truth를 구성하는 lightweight resolution method를 제안한다.
 
-이라고 하자. 관점 $P_i$에서 얻은 assertion 집합은
-
-\[
-A_i=\{\phi_{i1},\phi_{i2},\dots,\phi_{in_i}\}
-\]
-
-이며 모든 관점이 공유하는 domain rule 또는 ontology를 $\mathcal{T}$라 한다. 각 관점의 knowledge base는
-
-\[
-K_i=\mathcal{T}\cup A_i
-\]
-
-로 정의한다.
-
-SAT 판정 함수는
-
-\[
-SAT(K)=
-\begin{cases}
-1, & K\text{에 model이 존재}\cr
-0, & K\text{가 inconsistent}
-\end{cases}
-\]
-
-이다.
-
-## 3.1 Intra-Perspective Contradiction
-
-하나의 관점 자체가 inconsistent한 경우:
-
-\[
-C_{intra}(P_i)=1-SAT(\mathcal{T}\cup A_i).
-\]
-
-## 3.2 Inter-Perspective Contradiction
-
-두 관점은 각각 satisfiable하지만 결합했을 때만 inconsistent한 경우:
-
-\[
-SAT(K_i)=1,\quad SAT(K_j)=1,
-\]
-
-\[
-SAT(\mathcal{T}\cup A_i\cup A_j)=0.
-\]
-
-이를 inter-perspective contradiction으로 정의한다.
-
-## 3.3 Divergence
-
-관점이 서로 다른 명제를 갖더라도 union이 satisfiable하면 contradiction이 아니다.
-
-\[
-A_i \neq A_j \land SAT(\mathcal{T}\cup A_i\cup A_j)=1
-\Rightarrow Divergence.
-\]
-
-따라서 최종 scope label은 다음 네 가지이다.
-
-\[
-Y(P_i,P_j) \in
-\{Consistent, Divergence, Intra, Inter\}.
-\]
-
-## 3.4 Minimal Justification and Proof Set
-
-모순을 야기하는 최소 assertion subset을 MUS 관점에서
-
-\[
-M \subseteq A_i\cup A_j
-\]
-
-라 할 때
-
-\[
-SAT(\mathcal{T}\cup M)=0
-\]
-
-이고 $M$의 모든 proper subset이 satisfiable하면 $M$은 minimal contradiction explanation이다.
-
-하나의 contradiction $c$에 대한 여러 minimal explanation을
-
-\[
-\Pi(c)=\{\pi_1,\ldots,\pi_k\}
-\]
-
-라 하고, 설명 점수의 차이가 $\epsilon$ 이내인 proof들을 Rashomon-inspired set으로 유지한다.
+본 연구는 새로운 Tableau calculus를 제안하지 않으며, TruthFinder나 CATD를 대체하는 일반적인 SOTA truth-discovery algorithm을 주장하지도 않는다.
 
 ---
 
-# 4. 제안 방법
+# 2. Related Work
 
-제안 방법은 새로운 tableau calculus 하나가 아니라 세 단계의 protocol이다.
+## 2.1 Truth Discovery
 
-\[
-\text{Semantic SAT}
-\rightarrow
-\text{Perspective Index}
-\rightarrow
-\text{Multi-Justification Preservation}
-\]
+Truth Discovery는 동일 object에 대해 여러 source가 서로 다른 값을 제공할 때 source reliability와 value confidence를 함께 추정하는 연구 분야이다. TruthFinder는 “신뢰할 수 있는 source가 제공한 fact는 더 신뢰할 수 있고, 신뢰할 수 있는 fact를 많이 제공하는 source는 더 신뢰할 수 있다”는 상호 강화 구조를 사용한다. 이후 source dependence, value similarity, Bayesian inference, latent truth, long-tail source participation 등 여러 문제를 다루는 방법들이 제안되었다.
 
-각 단계가 해결하는 문제는 서로 다르다. 이를 명확히 하기 위해 세 개의 running example을 사용한다.
+CATD는 source가 제공하는 claim 수가 매우 불균형한 long-tail 상황에서 적은 claim을 가진 source의 reliability estimation uncertainty를 고려한다. 이는 source reliability의 통계적 신뢰도를 다룬다는 점에서 본 연구보다 정교한 부분이다.
 
-## 4.1 Example A: 추론 정확성 — 왜 semantic satisfiability가 필요한가
+**차이점:** 전통적 Truth Discovery의 중심 대상은 `source ↔ claimed value` 관계이다. 본 연구는 claim이 규칙 또는 ontology를 통해 다른 명제로 파생되어 충돌할 수 있다는 경우에 대비하여 `source ↔ claim ↔ derivation ↔ conflict` provenance를 명시적으로 보존하는 것을 목표로 한다.
 
-다음 지식베이스를 생각하자.
+## 2.2 Constrained Truth Discovery
 
-\[
+Constrained Truth Discovery는 denial constraint와 같은 first-order logical constraint를 truth discovery 최적화에 통합한다. 따라서 “logic을 truth discovery에 사용한다”는 주장 자체는 본 연구의 novelty가 될 수 없다.
+
+**차이점:** constraint-based truth discovery는 논리 제약을 candidate truth의 feasible space 또는 optimization constraint로 사용한다. 본 연구가 강조하는 것은 constraint 존재 자체보다 **어떤 source claim이 어떤 derivation을 거쳐 어떤 다른 claim과 conflict했는지에 대한 proof provenance를 output과 truth score에 연결하는 것**이다.
+
+이 차이는 향후 반드시 동일 데이터와 동일 constraint 조건에서 직접 비교되어야 하며, 현재 실험만으로 Constrained Truth Discovery보다 우수하다고 주장하지 않는다.
+
+## 2.3 Ontology-Aware Truth Discovery
+
+Beretta et al.은 claim value 사이의 semantic relation과 partial ordering을 활용하여 단일 값만을 truth로 가정하는 전통적 truth-finding의 한계를 완화했다. 예를 들어 `Málaga`와 `Spain`처럼 서로 다른 수준의 값이 동시에 참일 수 있는 경우를 다룬다.
+
+이 연구는 본 논문의 DAFNA 실험과 특히 관련이 깊다. `Author A`와 `Author A; Author B`가 항상 상호 배타적인 값은 아니며, 전자는 후자의 부분 정보일 수 있기 때문이다.
+
+**차이점:** ontology-aware truth discovery는 value 간 semantic relation을 truth estimation에 이용한다. 본 연구는 이를 더 일반적인 provenance architecture로 연결하고, semantic compatibility를 단순 truth score뿐 아니라 `partial` vs `conflict` localization에도 이용한다. 다만 ontology semantic relation 활용 자체는 기존 연구의 기여임을 명확히 인정한다.
+
+## 2.4 Standpoint Logic
+
+Standpoint Logic은 서로 다른, 심지어 충돌하는 관점을 하나의 논리 체계에서 표현하기 위한 formalism이다. Standpoint EL과 Standpoint EL+은 Description Logic 환경에서 tractable multi-perspective reasoning을 다루며, 기존 reasoner와 연결 가능한 번역 및 deduction 방법도 제시되어 있다.
+
+**차이점:** Standpoint Logic의 핵심 문제는 perspective-aware knowledge representation과 entailment이다. 본 연구의 최종 문제는 여러 source의 truthfulness가 알려져 있지 않은 상황에서 **conflict provenance를 유지한 뒤 candidate truth를 선택하는 data fusion 문제**이다. 따라서 Standpoint Logic은 본 연구보다 perspective semantics 측면에서 더 강한 formalism이며, 본 연구는 source reliability와 truth resolution에 초점을 둔 operational pipeline이다.
+
+## 2.5 Multi-Context Systems
+
+Multi-Context Systems는 서로 다른 logic과 knowledge base가 bridge rule을 통해 연결되는 상황을 모델링한다. Eiter et al.은 bridge rule 조합을 중심으로 inconsistency explanation과 repair를 연구하였다.
+
+**차이점:** MCS는 heterogeneous reasoning system의 consistency management를 다룬다. 본 연구는 동일 또는 정규화 가능한 proposition vocabulary를 전제로 하고, inconsistency repair보다 “어느 competing claim이 gold truth에 가까운가”를 평가하는 데 초점을 둔다.
+
+## 2.6 Axiom Pinpointing
+
+Axiom Pinpointing은 어떤 ontology axiom subset이 특정 consequence를 발생시키는지 계산한다. Tableau 기반 axiom pinpointing은 이미 오래전부터 multiple minimal justification을 다룬다.
+
+**차이점:** 따라서 multiple proof를 찾는 것 자체는 본 연구의 novelty가 아니다. 본 연구에서는 justification/proof를 **truth resolution에 사용할 provenance evidence**로 해석한다. 즉 proof는 최종 산출물이 아니라 source reliability와 candidate truth를 평가하기 위한 중간 구조이다.
+
+## 2.7 Positioning Summary
+
+| Research line | Main question | Perspective / source | Logic / semantics | Source reliability | Explicit conflict provenance | Truth resolution |
+|---|---|---:|---:|---:|---:|---:|
+| Tableau / Hypertableau | Is the KB satisfiable? | No | Yes | No | proof-level | No |
+| Axiom Pinpointing | Which axioms caused an entailment? | No | Yes | No | Yes | No |
+| Standpoint Logic | What follows under different standpoints? | Yes | Yes | No | perspective semantics | No |
+| Multi-Context Systems | How do contexts interact and become inconsistent? | Yes | Yes | No | bridge-rule explanation | repair-oriented |
+| TruthFinder | Which conflicting value is likely true? | source | Limited | Yes | No derivation path | Yes |
+| CATD | How reliable is truth discovery under long-tail participation? | source | Limited | Yes + confidence | No derivation path | Yes |
+| Constrained Truth Discovery | How can logical constraints improve truth discovery? | source | **Yes** | Yes | constraint-oriented | Yes |
+| Ontology-aware truth finding | How do semantic value relations affect truth? | source/value | **Yes** | Yes | value relation | Yes |
+| **Rashomon-Tableau** | Which claim conflicts, through what path, and which truth is best supported? | **Yes** | **Yes** | **Yes** | **Source→Claim→Derivation→Conflict** | **Yes** |
+
+The last row should be read as a **combination and operationalization claim**, not as a claim that every individual component is new.
+
+---
+
+# 3. Problem Formulation
+
+## 3.1 Sources and Claims
+
+Let the set of sources be:
+
+$$
+S = \{s_1, s_2, \ldots, s_m\}
+$$
+
+For object $o$, source $s_i$ provides a claim $c_{i,o}$. A claim can contain one or more atomic propositions.
+
+For example:
+
+```text
+"Book X has authors Alice and Bob"
+```
+
+is represented as:
+
+$$
+C_{i,o} = \{AuthorOf(Alice,o), AuthorOf(Bob,o)\}
+$$
+
+This decomposition matters because a claim containing only Alice may be incomplete but still compatible with the richer truth `{Alice, Bob}`.
+
+## 3.2 Semantic Closure
+
+Let $T$ denote shared logical or ontological rules. The closure of claim set $C$ is:
+
+$$
+Cl_T(C) = \{q \mid T \cup C \models q\}
+$$
+
+In a general domain, a conflict exists when both a proposition and its negation are derivable:
+
+$$
+q \in Cl_T(C_i)
+$$
+
+and
+
+$$
+\neg q \in Cl_T(C_j)
+$$
+
+For DAFNA Books, the available benchmark does not provide rich ontology rules, so the real-data evaluation mainly uses conjunction/set semantics rather than a deep ontology closure. This limitation is discussed later.
+
+## 3.3 Claim Relationship
+
+Given a candidate truth set $G_o$, a source claim $C_{i,o}$ is classified as:
+
+- **Exact:** $C_{i,o} = G_o$
+- **Partial:** $C_{i,o} \subset G_o$
+- **Conflict:** $C_{i,o}$ asserts at least one atom outside $G_o$
+
+This three-way distinction is important because whole-value truth-discovery algorithms can treat `{Alice}` and `{Alice, Bob}` as two different candidate values even though the former may be a correct partial observation.
+
+## 3.4 Source Reliability
+
+Each source has reliability:
+
+$$
+r_i \in [0,1]
+$$
+
+The proposed implementation initializes all sources with the same prior and iteratively updates reliability according to compatibility between the source's claims and the current candidate truth.
+
+For claim $C$ and candidate truth $G$, compatibility is based on overlap precision and recall:
+
+$$
+Compat(C,G) = 0.85 \cdot P(C,G) + 0.15 \cdot R(C,G)
+$$
+
+where:
+
+$$
+P(C,G) = \frac{|C \cap G|}{|C|}
+$$
+
+and
+
+$$
+R(C,G) = \frac{|C \cap G|}{|G|}
+$$
+
+The larger weight on precision means that asserting a false extra author is penalized more strongly than omitting a valid co-author.
+
+## 3.5 Atomic Truth Support
+
+For candidate atomic proposition $a$, support is the reliability-weighted sum of sources asserting it:
+
+$$
+Support(a,o) = \frac{\sum_{i:a\in C_{i,o}} r_i}{\sum_{i} r_i}
+$$
+
+Candidate atoms are ranked by support. The current prototype selects atoms whose support exceeds a relative threshold against the best-supported atom, with an evidence-based cardinality cap derived from observed claim size.
+
+This is a lightweight prototype rather than a fully learned probabilistic model.
+
+---
+
+# 4. Proposed Framework
+
+## 4.1 Stage 1: Semantic Logical Reasoning
+
+The semantic reasoning layer answers whether a query follows from explicit claims and shared rules. Entailment can be checked through refutation:
+
+$$
+KB \models q
+$$
+
+iff
+
+$$
+SAT(KB \cup \{\neg q\}) = 0
+$$
+
+The role of this layer is not to perform truth discovery. It produces logically expanded claims and proof traces that later stages can use.
+
+### Example
+
+Given:
+
+$$
 P(a) \rightarrow Q(a)
-\]
+$$
 
-\[
+and
+
+$$
 \neg Q(a)
-\]
+$$
 
-질의는
+querying $\neg P(a)$ can be resolved by adding $P(a)$ and deriving a clash between $Q(a)$ and $\neg Q(a)$.
 
-\[
-\neg P(a)
-\]
+## 4.2 Stage 2: Provenance-Aware Conflict Localization
 
-이다.
+Each derived proposition is stored with provenance:
 
-단순 forward rule execution은 $P(a)$가 주어지지 않았기 때문에 새로운 사실을 생성하지 못한다. 따라서 `Unknown`을 반환할 수 있다. 그러나 classical semantics에서는 modus tollens에 의해 $\neg P(a)$가 귀결된다.
+```text
+(source_id, original_claim, applied_rule, derived_claim)
+```
 
-Tableau/refutation 방식으로 entailment를 검사하면 질의의 부정을 추가한다.
+A conflict can therefore be represented as a graph:
 
-\[
-KB \cup \{P(a)\}
-\]
+```text
+Source A
+   ↓
+Claim A
+   ↓ rule r1
+Derived proposition q
+   X
+Derived proposition NOT q
+   ↑ rule r2
+Claim B
+   ↑
+Source B
+```
 
-$P(a)\rightarrow Q(a)$와 $P(a)$로부터 $Q(a)$가 성립하고 기존 $\neg Q(a)$와 clash한다.
+The key property is that inconsistency does not erase the path by which it was produced.
 
-\[
-Q(a),\neg Q(a)\Rightarrow\bot.
-\]
+For multi-valued claims, the current real-data prototype also uses proposition-level relationships:
 
-따라서
+```text
+Gold / candidate truth = {A, B}
 
-\[
-KB\models\neg P(a).
-\]
+Source 1 = {A, B}  → exact
+Source 2 = {A}     → partial
+Source 3 = {C}     → conflict
+```
 
-**이 예시가 보여주는 바는 “Tableau가 관점을 잘 처리한다”가 아니다.** 먼저 semantic satisfiability가 단순 forward-only inference보다 더 강한 논리 판정을 제공할 수 있다는 점이다. 본 논문의 첫 번째 실험은 정확히 이 logical core를 FOLIO에서 평가한다.
+This prevents an incomplete but correct source from being treated identically to a source asserting an incompatible value.
 
-## 4.2 Example B: 모순 발생 위치 — 전체 UNSAT만으로는 충분하지 않다
+## 4.3 Stage 3: Rashomon Truth Resolution
 
-공통 ontology rule을 다음과 같이 두자.
+The word Rashomon is used as a problem metaphor: conflicting accounts are kept rather than prematurely discarded. The algorithm does not assume that disagreement itself determines truth.
 
-\[
-FatherOf(x,y)\rightarrow ParentOf(x,y).
-\]
+The resolution layer iterates between:
 
-### Case B-1: Intra-Perspective Contradiction
+1. estimating source reliability,
+2. accumulating atomic support,
+3. constructing candidate truth,
+4. re-evaluating each source against the candidate truth.
 
-관점 $P_1$:
+A general future form of the score is:
 
-\[
-FatherOf(Alice,Bob)
-\]
+$$
+TruthScore(q) =
+\alpha SourceSupport(q)
++ \beta LogicalSupport(q)
++ \gamma CrossSourceAgreement(q)
+- \delta ConflictPenalty(q)
+$$
 
-\[
-\neg ParentOf(Alice,Bob)
-\]
-
-관점 $P_2$:
-
-\[
-FriendOf(Carol,Dan)
-\]
-
-$P_1$만 보더라도 ontology closure에 의해 `ParentOf(Alice,Bob)`가 도출되므로 $P_1$은 이미 UNSAT이다.
-
-\[
-SAT(T\cup A_1)=0.
-\]
-
-### Case B-2: Inter-Perspective Contradiction
-
-관점 $P_1$:
-
-\[
-FatherOf(Alice,Bob)
-\]
-
-관점 $P_2$:
-
-\[
-\neg ParentOf(Alice,Bob)
-\]
-
-이 경우
-
-\[
-SAT(T\cup A_1)=1,
-\]
-
-\[
-SAT(T\cup A_2)=1,
-\]
-
-이지만
-
-\[
-SAT(T\cup A_1\cup A_2)=0.
-\]
-
-### 기존 merged reasoning과의 차이
-
-두 경우 모두 처음부터
-
-\[
-SAT(T\cup A_1\cup A_2)
-\]
-
-만 검사하면 결과는 동일하게 `UNSAT`이다. 그러나 Perspective-Indexed protocol은 local SAT 상태를 먼저 보존하기 때문에 Case B-1을 `Intra`, Case B-2를 `Inter`로 구분한다.
-
-이 예시는 본 연구의 핵심적인 **contradiction localization** 기여를 설명하며, controlled four-class scope experiment가 이를 평가한다.
-
-## 4.3 Example C: 복수 proof 보존 — 하나의 모순에 원인이 두 개일 수 있다
-
-다음 규칙과 사실을 생각하자.
-
-\[
-A\rightarrow C
-\]
-
-\[
-B\rightarrow C
-\]
-
-\[
-A, B, \neg C
-\]
-
-이 지식베이스에는 동일한 clash $C\land\neg C$를 만드는 두 개의 독립적인 최소 설명이 존재한다.
-
-첫 번째 proof:
-
-\[
-\pi_1=\{A, A\rightarrow C, \neg C\}.
-\]
-
-두 번째 proof:
-
-\[
-\pi_2=\{B, B\rightarrow C, \neg C\}.
-\]
-
-둘 다 하나의 요소만 제거해도 더 이상 contradiction을 보장하지 않는 minimal explanation이다. 첫 번째 proof를 발견하는 즉시 탐색을 멈추면 사용자는 $A$ 경로만 보게 된다. 그러나 실제로 $B$ 경로도 독립적인 원인이다.
-
-본 연구의 Rashomon layer는 “최초 proof”를 “최고 proof”로 간주하지 않는다. 여러 minimal justification에 점수를 부여하고 최고 점수와 $\epsilon$ 이내인 설명을 모두 보존한다.
-
-예를 들어
-
-\[
-Score(\pi)=
--\alpha |\pi|
-+\beta Diversity(\pi)
-+\gamma Provenance(\pi)
-\]
-
-와 같이 정의할 수 있다. 현재 구현은 작은 benchmark에서 proof length와 perspective diversity를 이용하는 경량 버전을 사용한다.
-
-이 예시의 핵심은 “multiple justification을 처음 발견했다”는 것이 아니다. Axiom Pinpointing은 이미 이를 다룬다. 본 연구가 평가하는 것은 **single-proof output과 multi-proof preservation 사이의 explanation coverage 차이**이다.
-
-## 4.4 Dual-Proof State
-
-LogicNLI의 paradox는 별도의 중요한 사례를 제공한다. 특정 statement $q$에 대해
-
-\[
-KB\models q
-\]
-
-이면서 동시에
-
-\[
-KB\models\neg q
-\]
-
-일 수 있다. 만약 reasoner가 $q$의 proof를 찾는 즉시 `Entailment`로 종료하면 paradox를 잃는다. 따라서 다음 상태를 모두 검사한다.
-
-\[
-E^+(q)=1-SAT(KB\cup\{\neg q\}),
-\]
-
-\[
-E^-(q)=1-SAT(KB\cup\{q\}).
-\]
-
-최종 판정은
-
-\[
-(E^+,E^-)=
-\begin{cases}
-(1,0) & Entailment\\
-(0,1) & Contradiction\\
-(0,0) & Neutral\\
-(1,1) & Paradox
-\end{cases}
-\]
-
-가 된다.
+The current DAFNA implementation instantiates the source-support and proposition-compatibility terms; ontology-derived proof support is evaluated separately through the logical benchmarks because DAFNA does not provide rich rules.
 
 ---
 
-# 5. 실험 설계
+# 5. Experimental Design
 
-## 5.1 데이터셋
+## 5.1 Why the Evaluation Is Split
 
-### FOLIO
+No dataset used in this study simultaneously provides all of the following:
 
-FOLIO는 자연어 premise와 first-order logic annotation을 함께 제공하는 human-annotated logical reasoning benchmark이다 [14]. 본 실험은 natural-language parsing이 아니라 logical core를 평가하기 위해 공식 v0.0 validation의 FOL annotation을 사용한다. 현재 구현이 완전히 지원하는 fragment는 ground fact/conjunction, universal Horn implication, explicit negation, single ground-literal query이다. Existential quantification, disjunction, XOR, biconditional 등 전체 FOL 문법은 아직 지원하지 않는다.
+- multiple identifiable sources,
+- natural-language or symbolic rules,
+- ontology-mediated implicit contradiction,
+- source-level provenance,
+- competing truth candidates,
+- independent gold truth.
 
-따라서 204개 validation example 중 28개만 strict supported fragment로 분류되며 coverage는 13.73%이다. 이 제한은 결과 해석에 반드시 포함한다.
+Therefore the paper uses a **component-wise validation** rather than claiming a single end-to-end benchmark.
 
-### LogicNLI
+| Research question | Dataset | What is evaluated |
+|---|---|---|
+| RQ1 Logical Reasoning | FOLIO | semantic entailment / contradiction core |
+| RQ1 + dual-direction contradiction | LogicNLI `test_logic` | support for both proposition and negation |
+| RQ2 Conflict Localization | DAFNA-EA Books | exact / partial / conflict claim classification |
+| RQ3 Truth Resolution | DAFNA-EA Books | recovery of gold author set |
 
-LogicNLI는 first-order reasoning을 NLI 형식으로 진단하기 위한 benchmark이며 entailment, contradiction, neutral, paradox/self-contradiction을 구분한다 [13]. 본 실험은 자연어 문장이 아니라 공식 `test_logic` structured representation을 사용한다. 총 100 context, 2,000 statement이며 네 클래스가 각각 500개이다.
+## 5.2 FOLIO
 
-### Controlled Contradiction-Scope Benchmark
+FOLIO is a first-order logical reasoning benchmark with natural-language premises and FOL annotations. The current implementation does **not** support the full FOL grammar. It supports ground facts/conjunctions, universal Horn implications, explicit negation, and a single ground-literal query.
 
-외부 benchmark에는 본 논문이 정의한 `Intra`, `Inter`, `Divergence`, `Consistent` 네 클래스가 직접 존재하지 않는다. 따라서 capability ablation을 위해 각 클래스 20개씩 총 80개의 controlled logical case를 생성하였다. 이 데이터셋은 자연어 generalization 성능 측정이 아니라 **protocol이 원래 의도한 네 상태를 구분할 수 있는지 확인하는 기능 검증**이다.
+Only 28 of 204 validation examples satisfy this strict supported grammar, so the reported FOLIO result is a component validation rather than a competitive full-dataset score.
 
-### Controlled Multi-Justification Benchmark
+## 5.3 LogicNLI
 
-20개 case 각각에 두 개의 독립적인 minimal contradiction explanation을 구성하였다. 따라서 gold explanation 수는 총 40개이다. 이 benchmark는 proof enumeration 및 preservation 기능을 검증한다.
+LogicNLI defines four reasoning states: entailment, contradiction, neutral, and paradox/self-contradiction. The experiment uses the official structured `test_logic` representation rather than natural-language input.
 
-### CONAN Case Study
+The main comparison is between a single-path decision that can stop after finding support for one direction and a dual-direction procedure that checks whether both $q$ and $\neg q$ are derivable.
 
-CONAN은 탐정 서사에서 등장인물별 관계 관점을 제공하는 데이터셋이다 [16]. 각 인물에게 알려진 관계가 다르므로 perspective provenance를 실제 서사 데이터에서 관찰할 수 있다. 다만 CONAN 원본은 contradiction-scope label을 제공하지 않으므로 본 논문의 정량 성능 주장을 CONAN에 직접 의존하지 않는다. CONAN은 multi-perspective proposition extraction과 사례 분석에 사용한다.
+## 5.4 DAFNA-EA Books
 
-## 5.2 Baselines
+The main real-data truth-resolution benchmark is DAFNA-EA Books. The claim file contains online-source claims for book authors, and the gold file provides independently validated author information for 100 books in the available gold subset used by the evaluator.
 
-실험 목적별 baseline을 다르게 둔다.
+After filtering to gold objects and collapsing repeated claims from the same source-object pair, the experiment contains:
 
-1. **Direct Fact:** query 또는 그 부정이 explicit fact로 존재하는지만 검사한다.
-2. **Forward Horn:** implication을 정방향으로 적용하는 forward-chaining baseline이다.
-3. **Semantic Clause Tableau:** satisfiability/refutation 기반 logical core이다.
-4. **Single-Path Forward Decision:** 첫 번째 지원 방향을 발견하면 판정을 종료한다.
-5. **Dual-Proof Decision:** positive/negative proof를 모두 검사한다.
-6. **Merged-ABox Tableau:** perspective를 합친 후 한 번만 SAT를 검사한다.
-7. **Perspective-Indexed Tableau:** local SAT와 merged SAT를 분리 검사한다.
-8. **Single-Proof Explanation:** 첫 번째 minimal explanation 하나만 반환한다.
-9. **Multi-Justification/Rashomon:** near-equivalent minimal explanations를 복수로 보존한다.
+- **100** gold books,
+- **1,999** source-object claims,
+- **227** unique sources.
 
-## 5.3 평가 지표
+All compared methods use the same benchmark-side author canonicalization to reduce surface variations such as `Knuth, Donald E.` versus `Donald E. Knuth`. Therefore normalization does not give a unique advantage to the proposed method.
 
-Accuracy는 전체 instance 중 정확히 분류한 비율이다.
+## 5.5 Baselines
 
-\[
-Accuracy=\frac{\#Correct}{\#Total}.
-\]
+### Whole-Claim Majority
 
-각 클래스의 F1은 Precision과 Recall의 조화평균이다.
+The most frequent complete author set for an ISBN is selected.
 
-\[
-F1_c=\frac{2P_cR_c}{P_c+R_c}.
-\]
+### Reliability-Weighted Whole-Claim Vote
 
-Macro-F1은 각 클래스 F1을 동일 가중치로 평균한다.
+An iterative local baseline jointly updates source reliability and whole-value support. A source receives full agreement credit only when its complete author set equals the selected candidate.
 
-\[
-MacroF1=\frac{1}{|C|}\sum_{c\in C}F1_c.
-\]
+**Important:** this implementation is **not** an exact reproduction of TruthFinder, CATD, DART, or another published method. It is used to isolate the effect of source-reliability weighting while keeping the experiment executable in the repository.
 
-본 연구에서 Macro-F1이 중요한 이유는 merged reasoning이 전체 Accuracy는 높게 유지하면서도 `Intra-Contradiction`과 같은 특정 클래스를 전혀 맞히지 못할 수 있기 때문이다. 예를 들어 네 클래스가 균등한 80개 case에서 한 클래스 20개를 전부 놓치면 Accuracy는 75%이지만 해당 클래스 F1은 0이 된다.
+### Proposed Atomic Resolution
 
-Explanation Coverage는 gold minimal explanation 중 반환된 explanation의 비율이다.
+Author lists are decomposed into atomic `AuthorOf` propositions. Partial subsets are compatible evidence. Atomic support is weighted by source reliability, and source reliability is updated from proposition-level compatibility.
 
-\[
-Coverage=\frac{|E_{returned}\cap E_{gold}|}{|E_{gold}|}.
-\]
+## 5.6 Metrics
+
+### Exact-Set Accuracy
+
+A prediction is correct only when the predicted author set equals the gold author set exactly.
+
+$$
+Accuracy_{set} = \frac{Correct\ exact\ sets}{All\ gold\ objects}
+$$
+
+### Author-Level F1
+
+For each object, precision and recall are computed over predicted and gold authors, followed by F1.
+
+$$
+F1 = \frac{2PR}{P+R}
+$$
+
+### Conflict Localization Macro-F1
+
+Each source claim is labelled `exact`, `partial`, or `conflict` relative to gold truth. Macro-F1 gives each relation class equal weight.
 
 ---
 
-# 6. 실험 결과
+# 6. Results
 
-## 6.1 RQ1: 추론 정확성 — FOLIO
-
-FOLIO strict supported fragment 28개에서의 결과는 다음과 같다.
+## 6.1 RQ1: Logical Reasoning — FOLIO
 
 | Method | Accuracy | Macro-F1 |
 |---|---:|---:|
 | Direct Fact | 42.86% | 26.71% |
 | Forward Horn | 75.00% | 74.18% |
 | **Semantic Clause Tableau** | **96.43%** | **96.33%** |
-| Rashomon-Tableau logical core | 96.43% | 96.33% |
 
-Semantic Clause Tableau는 Forward Horn 대비 Accuracy **+21.43 percentage points**, Macro-F1 **+22.15 percentage points** 높았다. Example A에서 보인 것처럼 refutation 기반 entailment 검사는 forward-only inference가 직접 생성하지 못하는 logical consequence를 판정할 수 있다.
+On the 28-example supported fragment, semantic satisfiability reasoning improves Accuracy by 21.43 percentage points and Macro-F1 by 22.15 points over the forward-Horn baseline.
 
-그러나 이 결과에는 두 가지 제한이 있다. 첫째, 28/204, 즉 13.73%의 validation fragment만 대상으로 한다. 둘째, FOLIO는 single-context이므로 perspective indexing이나 Rashomon explanation layer는 class prediction을 변경하지 않는다. 실제로 Semantic Clause Tableau와 Rashomon-Tableau logical core의 Accuracy가 동일한 것은 예상된 결과이다. 따라서 이 실험은 **전체 Rashomon-Tableau 성능이 아니라 semantic reasoning core의 검증**이다.
+This result supports the use of a semantic reasoning core but **must not be interpreted as 96.43% accuracy on full FOLIO**. Grammar coverage is only 13.73% of the validation set.
 
-## 6.2 RQ2: Dual-Proof Contradiction — LogicNLI
+## 6.2 RQ1: Opposing Proof Directions — LogicNLI
 
-LogicNLI structured `test_logic` 전체 2,000 statement에서 결과는 다음과 같다.
-
-| Method | Accuracy | Macro-F1 | Paradox / Self-Contradiction F1 |
+| Method | Accuracy | Macro-F1 | Paradox F1 |
 |---|---:|---:|---:|
 | Direct Fact Dual Check | 50.55% | 42.88% | 0.40% |
-| Single-Path Forward | 74.00% | 65.78% | **0.00%** |
-| **Dual-Proof Decision** | **98.40%** | **98.40%** | **97.92%** |
+| Single-Path Forward | 74.00% | 65.78% | 0.00% |
+| **Dual-Direction Proof Check** | **98.40%** | **98.40%** | **97.92%** |
 
-Dual-Proof 방식은 Single-Path 대비 Accuracy **+24.40 pp**, Macro-F1 **+32.63 pp** 향상되었다. 특히 paradox F1은 0.00%에서 97.92%로 증가하였다.
+The result shows why a reasoner should not stop after finding one supported conclusion. When both $q$ and $\neg q$ are derivable, a single-path procedure collapses the contradictory evidence into one class.
 
-이 결과는 Example C와 유사한 “복수 경로를 잃지 않는 것”의 중요성을 다른 형태로 보여준다. 단, 여기서 dual-proof는 여러 MUS를 모두 열거한다는 뜻이 아니다. `q`와 `¬q`라는 두 **결론 방향**의 증명 가능성을 모두 확인하는 것이다. Proof Rashomon layer는 동일 contradiction에 대한 **여러 justification**을 보존한다는 점에서 한 단계 다르다.
+Again, the result is for LogicNLI's structured logical representation and is not an end-to-end NLP comparison with BERT, RoBERTa, or LLM systems.
 
-LogicNLI 원 논문에서 자연어 입력을 사용하는 RoBERTa의 Test-A Accuracy는 68.3%, XLNet은 65.4%, BERT는 55.9%, human은 77.5%로 보고되었다 [13]. 본 연구의 98.40%를 이 수치와 직접적인 모델 우위로 비교하지 않는다. 원 논문 모델은 자연어 입력에서 logical pattern을 학습해야 하지만 본 실험은 공식 structured logical representation을 입력으로 사용하기 때문이다. 따라서 본 결과는 **end-to-end language understanding 성능이 아니라 symbolic decision procedure의 성능**이다.
+## 6.3 RQ3: Real-Data Truth Resolution — DAFNA-EA Books
 
-## 6.3 RQ3: 모순 발생 위치 — Perspective Scope
+| Method | Exact Set Accuracy | Mean Author Precision | Mean Author Recall | Mean Author F1 |
+|---|---:|---:|---:|---:|
+| Whole-Claim Majority | 44.00% | 94.00% | 65.43% | 73.57% |
+| Reliability-Weighted Whole Claim | 45.00% | **96.00%** | 66.93% | 75.24% |
+| **Proposed Atomic Truth Resolution** | **61.00%** | 95.67% | **78.39%** | **82.88%** |
 
-80개 controlled four-class benchmark의 결과는 다음과 같다.
+The proposed method improves exact-set accuracy by **16.0 percentage points** over the reliability-weighted baseline.
 
-| Method | Accuracy | Macro-F1 |
+Mean author F1 improves by **7.64 percentage points**. The main change is recall: 66.93% to 78.39%, while precision remains similar (96.00% vs 95.67%).
+
+This pattern is consistent with the design goal. Whole-claim voting can select a frequently repeated but incomplete author list. Atomic aggregation can recover additional co-authors supported across different partial observations without accepting every conflicting value.
+
+## 6.4 RQ2: Real-Data Conflict Localization
+
+The gold relation distribution over the 1,999 source claims is:
+
+| Gold relation | Count |
+|---|---:|
+| Exact | 903 |
+| Partial | 585 |
+| Conflict | 511 |
+
+The localization result is:
+
+| Method | Claim-Level Accuracy | Macro-F1 |
 |---|---:|---:|
-| Merged-ABox Tableau | 75.00% | 66.67% |
-| **Perspective-Indexed Tableau** | **100.00%** | **100.00%** |
+| Whole-Claim Majority | 60.68% | 49.04% |
+| Reliability-Weighted Whole Claim | 62.08% | 50.37% |
+| **Proposed Atomic Truth Resolution** | **76.69%** | **74.58%** |
 
-Merged baseline은 `Consistent`, `Divergence`, `Inter-Contradiction`은 처리하지만 `Intra-Contradiction` 20개를 모두 union-level contradiction으로 해석하였다. 따라서 Intra 클래스의 Precision, Recall, F1이 모두 0이 된다. Perspective-Indexed protocol은 Example B처럼 local SAT를 먼저 검사하기 때문에 네 클래스를 모두 구분한다.
+Compared with the reliability-weighted baseline, claim-level accuracy improves by **14.61 percentage points** and Macro-F1 by **24.21 percentage points**.
 
-향상폭은 Accuracy **+25.00 pp**, Macro-F1 **+33.33 pp**이다. 다만 이 결과는 controlled benchmark의 기능 검증이며 natural-language generalization 결과가 아니다. 따라서 “기존 Tableau보다 일반적으로 25% 정확하다”가 아니라 **동일 SAT oracle을 사용하는 상황에서 contradiction-scope classification capability가 향상되었다**고 해석해야 한다.
+The particularly large Macro-F1 gain matters because whole-claim methods almost never represent the `partial` relation explicitly. They tend to collapse a correct incomplete claim into either the selected exact value or a competing value. Proposition decomposition provides a separate state for partial support.
 
-## 6.4 RQ4: 복수 Explanation Preservation
+## 6.5 Why the Old Synthetic 100% Result Is Not a Main Result
 
-각 case에 독립적인 minimal contradiction explanation이 2개씩 존재하는 20개 controlled case를 평가하였다.
+Earlier development versions included a controlled four-class benchmark on which perspective-indexed reasoning obtained 100% accuracy. That result is intentionally **not used as a headline empirical claim** in this paper.
 
-| Method | Returned Explanations | Gold Explanations | Coverage |
-|---|---:|---:|---:|
-| Single-Proof | 20 | 40 | 50.00% |
-| **Multi-Justification / Rashomon Set** | **40** | **40** | **100.00%** |
-
-Example C와 같이 독립적인 두 proof가 존재할 때 single-proof 방식은 한 경로만 보존한다. 여러 minimal explanation을 유지하면 explanation coverage가 **+50.00 pp** 증가하였다.
-
-이 결과 역시 Axiom Pinpointing보다 더 많은 justification을 “발견했다”는 의미가 아니다. 동일한 enumeration 결과를 사용자-facing explanation 단계에서 하나로 줄이지 않았다는 의미다. 대규모 ontology에서는 justification 수가 지수적으로 증가할 수 있으므로 모든 explanation을 무조건 출력하는 것도 현실적이지 않다. Rashomon-style selection은 바로 이 지점에서 필요한 **bounded presentation policy**로 해석할 수 있다.
-
-## 6.5 결과 요약
-
-| 평가 대상 | 데이터셋 | Baseline | Baseline | Proposed | 개선 |
-|---|---|---|---:|---:|---:|
-| Logical inference Accuracy | FOLIO fragment | Forward Horn | 75.00% | **96.43%** | **+21.43 pp** |
-| Logical inference Macro-F1 | FOLIO fragment | Forward Horn | 74.18% | **96.33%** | **+22.15 pp** |
-| Dual-proof Accuracy | LogicNLI | Single Path | 74.00% | **98.40%** | **+24.40 pp** |
-| Dual-proof Macro-F1 | LogicNLI | Single Path | 65.78% | **98.40%** | **+32.63 pp** |
-| Paradox F1 | LogicNLI | Single Path | 0.00% | **97.92%** | **+97.92 pp** |
-| Scope Accuracy | Controlled Multi-Context | Merged Tableau | 75.00% | **100.00%** | **+25.00 pp** |
-| Scope Macro-F1 | Controlled Multi-Context | Merged Tableau | 66.67% | **100.00%** | **+33.33 pp** |
-| Explanation Coverage | Controlled Multi-MUS | Single Proof | 50.00% | **100.00%** | **+50.00 pp** |
-
-이 표의 행들은 하나의 동일한 “모델 성능”을 반복 측정한 것이 아니다. 각각 다른 구성요소의 효과를 측정한다. 따라서 서로 다른 개선폭을 더하거나 평균내어 하나의 종합 향상률로 보고하지 않는다.
+A benchmark generated directly from the protocol's own definition is useful for unit/capability testing but weak evidence of real-world generalization. The main empirical claims now rely on DAFNA-EA's independent gold truth, while controlled cases remain repository tests only.
 
 ---
 
-# 7. 논의
+# 7. Analysis
 
-## 7.1 본 연구에서 실제로 향상된 것은 무엇인가
+## 7.1 What Actually Produced the DAFNA Improvement?
 
-세 가지 개선은 서로 다른 원인에서 나온다.
+The real-data gain should not be attributed to Tableau alone. DAFNA Books does not provide rich logical rules. The main mechanism is **structural claim decomposition with provenance-preserving reliability weighting**.
 
-첫째, FOLIO의 향상은 **semantic satisfiability reasoning**에서 나온다. 이는 Perspective나 Rashomon과 무관한 logical core의 효과다.
+Consider three author claims:
 
-둘째, multi-context scope benchmark의 향상은 **Perspective Index**에서 나온다. 기존 Tableau calculus가 약해서가 아니라, 모든 assertion을 먼저 병합하면 local inconsistency 여부를 다시 복원하기 어렵기 때문이다.
+```text
+S1: {A, B}
+S2: {A}
+S3: {C}
+```
 
-셋째, explanation benchmark의 향상은 **multiple justification preservation**에서 나온다. 이 단계는 SAT/UNSAT class prediction을 바꾸지 않으며, 설명의 recall/coverage를 높인다.
+A whole-value model sees three competing values.
 
-따라서 본 논문의 메시지는 “Rashomon을 붙이면 모든 Accuracy가 올라간다”가 아니다.
+```text
+{A,B} != {A} != {C}
+```
 
-\[
-\text{Semantic Tableau}
-\Rightarrow \text{Inference quality}
-\]
+The proposed representation sees:
 
-\[
-\text{Perspective Index}
-\Rightarrow \text{Contradiction localization}
-\]
+```text
+S1 supports A and B
+S2 supports A
+S3 supports C
+```
 
-\[
-\text{Multi-Justification Preservation}
-\Rightarrow \text{Explanation coverage}
-\]
+If the truth is `{A,B}`, S2 is incomplete but not false. This distinction improves both truth recall and conflict localization.
 
-이다.
+## 7.2 Why Call It Provenance-Aware?
 
-## 7.2 Standpoint Logic과의 차이
+The resolver does not only return an author atom. It can retain the list of source IDs that support the atom and its support score. In a domain with ontology rules, the same structure can be extended to retain rule IDs and intermediate propositions.
 
-Standpoint Logic은 여러 viewpoint를 논리 formalism에 직접 통합한다. 이는 본 연구보다 이론적으로 더 근본적인 해결책이다. 예를 들어 standpoint modality를 이용하면 “관점 $s$에서 $\phi$가 참이다”와 같은 표현을 object language 수준에서 정의할 수 있다. SLTL은 이를 temporal reasoning과 결합하고 전용 tableau까지 제공한다.
+```text
+candidate truth atom
+    ↑
+weighted support
+    ↑
+source claims
+    ↑
+source reliability
+```
 
-본 연구는 반대로 perspective를 논리 외부의 provenance key로 처리한다. 따라서 `Perspective ABox → SAT oracle`이라는 단순한 인터페이스만 있으면 기존 reasoner를 사용할 수 있다. 이 방식은 Standpoint Logic보다 덜 표현력 있지만 다음과 같은 실용적 가능성이 있다.
+or, with ontology inference:
 
-1. 기존 OWL/SAT reasoner를 변경하지 않고 사용할 수 있다.
-2. 이미 source id 또는 agent id를 갖는 데이터 파이프라인에 쉽게 연결할 수 있다.
-3. contradiction scope를 operational label로 직접 반환할 수 있다.
-4. justification 결과와 provenance를 연결하기 쉽다.
+```text
+candidate proposition
+    ↑
+derived proposition
+    ↑ rule
+original claim
+    ↑
+source
+```
 
-따라서 두 연구는 경쟁이라기보다 **formal integration vs lightweight orchestration**의 관계에 가깝다.
+This is the intended bridge between symbolic reasoning and truth discovery.
 
-## 7.3 Axiom Pinpointing과 Rashomon Layer의 차이
+## 7.3 Rashomon as Conflict-Preserving Truth Seeking
 
-Axiom Pinpointing은 minimal justification을 계산하는 정확한 inference service이다. 이 기능만 놓고 보면 본 연구의 MUS enumeration보다 선행 연구가 훨씬 깊고 성숙하다. 본 연구에서 Rashomon layer가 의미를 가지려면 단순히 “여러 MUS를 반환했다”에서 끝나서는 안 된다.
+The term Rashomon is not used here to mean that all conflicting accounts are equally true. Nor does the method adopt the ML Rashomon-set definition as its objective function.
 
-향후에는 다음과 같은 proof selection 문제로 명확히 확장할 필요가 있다.
+Instead the term describes the methodological stance:
 
-\[
-Score(\pi)=
-\alpha Faithfulness(\pi)
-+\beta ProvenanceDiversity(\pi)
--\gamma Length(\pi)
--\delta Redundancy(\pi).
-\]
+> **Do not eliminate one account before understanding how the accounts conflict. Preserve the disagreement, trace its logical support, and only then resolve the truth.**
 
-즉 all-justifications를 전부 사용자에게 노출하는 대신, 논리적으로 유효하면서 서로 구조적으로 또는 provenance 측면에서 충분히 다른 explanation set을 선택해야 한다. 기존 연구에서 justification의 구조적 다양성을 분석해 대규모 justification corpus가 매우 유사한 template으로 반복될 수 있음이 보고된 점은 이 방향의 필요성을 뒷받침한다 [17].
+This distinction is important. The output is ultimately a ranked candidate truth, not an unordered set of equally accepted answers.
 
-이 관점에서 Rashomon layer의 가능성은 **enumeration 자체가 아니라 diversity-aware explanation summarization**에 있다.
+## 7.4 Relation to TruthFinder
 
-## 7.4 적용 가능성
+TruthFinder already models the feedback loop between source trustworthiness and fact confidence. Therefore source reliability iteration is not novel.
 
-Perspective는 반드시 사람의 의견을 의미하지 않는다. 다음과 같이 provenance가 분리된 모든 정보 source를 하나의 perspective로 볼 수 있다.
+The proposed method differs in where evidence is attached. Instead of only associating reliability with complete candidate values, it can attach support to atomic propositions and, in the general architecture, to derived propositions with rule provenance.
 
-- 서로 다른 뉴스 문서
-- 법률 사건의 원고/피고 진술
-- 여러 의료 전문가의 판단
-- 서로 다른 센서 또는 장비
-- 데이터베이스의 시점별 snapshot
-- 멀티에이전트의 독립 가설
-- 로그/메트릭/트레이스 등 서로 다른 observability source
-- 여러 LLM이 생성한 candidate hypothesis
+The current experiment does **not** implement official TruthFinder and thus does not claim an empirical victory over TruthFinder. An exact DAFNA-EA TruthFinder/CATD comparison is future work and should be included before making a SOTA claim.
 
-따라서 중요한 것은 narrative가 아니라 **source boundary가 semantic하게 의미가 있는가**이다.
+## 7.5 Relation to Constrained Truth Discovery
 
----
+Constrained Truth Discovery is a particularly important baseline because it already introduces first-order logical constraints into truth discovery. The present work should therefore be understood as shifting emphasis from **constraint satisfaction** to **traceable conflict evidence**.
 
-# 8. 한계
+A future head-to-head comparison should answer:
 
-첫째, 현재 FOLIO evaluator는 전체 FOL이 아니라 validation 204개 중 28개, 즉 13.73%의 strict fragment만 완전 지원한다. 따라서 96.43%를 full-FOLIO 성능 또는 SOTA로 주장할 수 없다.
+- Do explicit proof paths improve truth accuracy beyond constraints alone?
+- Do they improve conflict localization or explanation fidelity even when truth accuracy is similar?
+- What is the computational overhead of maintaining provenance?
 
-둘째, LogicNLI 실험은 공식 structured logical representation을 사용한다. 이는 language model이 자연어를 logic으로 변환하는 문제를 제거하므로 BERT/RoBERTa의 end-to-end 결과와 직접적인 동등 비교가 아니다.
-
-셋째, contradiction-scope와 explanation benchmark는 controlled synthetic logical case다. protocol의 capability를 검증하기에는 적합하지만 자연 발생 multi-source contradiction에서의 generalization을 보장하지 않는다.
-
-넷째, 현재 Rashomon explanation score는 경량 heuristic이다. 이를 학술적으로 강한 기여로 만들기 위해서는 explanation diversity, redundancy, faithfulness에 대한 명확한 metric과 human evaluation이 필요하다.
-
-다섯째, Axiom Pinpointing, Standpoint Logic, Multi-Context Systems가 이미 본 연구의 상당 부분과 개념적으로 겹친다. 따라서 novelty는 이들 이론을 대체하는 데 있지 않고, 기존 reasoner와 데이터 provenance를 직접 연결하는 lightweight protocol 및 이를 empirical NLP benchmark와 연결하는 데 있다.
-
-여섯째, pairwise perspective만 중심으로 평가하였다. $m>2$ context에서 어떤 최소 perspective coalition이 inconsistency를 만드는지 찾는 문제는 별도의 조합적 문제다. 향후에는
-
-\[
-S\subseteq\mathcal{P},\quad SAT(T\cup\bigcup_{P_i\in S}A_i)=0
-\]
-
-을 만족하는 minimal perspective subset을 탐색할 필요가 있다.
+These questions are more defensible novelty claims than simply saying “we add logic to truth discovery.”
 
 ---
 
-# 9. 결론
+# 8. Threats to Validity and Limitations
 
-본 연구는 논리 reasoning에서 두 종류의 정보 손실에 주목하였다. 첫 번째는 서로 다른 context를 병합하면서 contradiction의 발생 위치를 잃는 문제이고, 두 번째는 하나의 proof만 선택하면서 동등하게 타당한 alternative explanation을 잃는 문제이다. 이를 해결하기 위해 새로운 logical calculus를 만들기보다 기존 satisfiability reasoner를 perspective별로 반복 호출하고, local SAT와 union SAT의 패턴으로 contradiction scope를 분류하며, 여러 minimal justification을 provenance와 함께 보존하는 Rashomon-Tableau framework를 제안하였다.
+## 8.1 No Single End-to-End Benchmark
 
-세 개의 running example은 제안 방법의 역할을 구분한다. Example A는 semantic refutation이 forward-only inference가 놓치는 logical consequence를 판정하는 과정을 보였다. Example B는 동일한 전체 UNSAT 결과가 실제로는 intra-perspective 또는 inter-perspective conflict일 수 있음을 보였다. Example C는 동일 clash에 여러 독립적인 minimal explanation이 존재할 수 있고 single-proof 출력이 그중 일부를 숨길 수 있음을 보였다.
+The largest limitation is that the logical core and truth-resolution layer are validated on different datasets. FOLIO/LogicNLI contain logical structure but not source-reliability gold truth; DAFNA contains real conflicting sources and gold truth but little ontology structure.
 
-실험에서도 이러한 역할 분리가 관찰되었다. FOLIO supported fragment에서 semantic Tableau는 forward-Horn 대비 Accuracy 21.43 pp, Macro-F1 22.15 pp 높은 성능을 보였다. LogicNLI structured benchmark에서는 dual-proof decision이 single-path 대비 Accuracy 24.40 pp, Macro-F1 32.63 pp 높았고 paradox F1을 0.00%에서 97.92%로 향상시켰다. Controlled multi-context benchmark에서는 perspective indexing을 통해 contradiction-scope Accuracy가 75.00%에서 100.00%로 증가했으며, controlled multi-justification benchmark에서는 explanation coverage가 50.00%에서 100.00%로 증가하였다.
+Therefore the paper demonstrates **component validity**, not complete end-to-end superiority.
 
-그러나 이 수치들을 하나의 총체적 “Rashomon-Tableau Accuracy 향상”으로 해석해서는 안 된다. Logical core, perspective localization, explanation preservation은 서로 다른 문제를 해결한다. 본 연구의 학술적 가능성은 이 세 문제를 혼합하지 않고 **reasoning correctness, provenance-aware conflict localization, explanation diversity**라는 분리된 축으로 정식화하고 평가하는 데 있다.
+## 8.2 FOLIO Grammar Coverage
 
-향후 연구에서는 full first-order formula coverage, 실제 multi-source contradiction annotation, Standpoint Logic과의 동일 조건 비교, scalable axiom pinpointing backend, diversity-aware proof-set optimization, 그리고 human-centered explanation evaluation이 필요하다.
+Only 28 of 204 FOLIO validation examples are supported. The current parser must be expanded to existential quantification, disjunction, biconditional, and richer first-order formulas before full benchmark comparison is meaningful.
+
+## 8.3 Structured LogicNLI
+
+The LogicNLI experiment bypasses natural-language semantic parsing. It measures symbolic reasoning quality, not end-to-end NLI performance.
+
+## 8.4 DAFNA Name Canonicalization
+
+Author identity normalization is heuristic. Surname + first initial can merge distinct people or fail on malformed author strings. The same normalization is applied to all methods, but absolute metric values remain sensitive to entity-resolution quality.
+
+## 8.5 Baseline Scope
+
+The current reliability-weighted baseline is deliberately simple and reproducible, but it is not an exact reproduction of TruthFinder, CATD, AccuSim, LTM, or Constrained Truth Discovery. Before publication at a strong venue, official or faithful implementations of major truth-discovery baselines should be added.
+
+## 8.6 Current Truth Score Is Heuristic
+
+The compatibility weights and support threshold are fixed heuristic parameters. They should be tuned only on a training/development split and evaluated on a held-out test split to avoid hidden benchmark fitting.
+
+## 8.7 Objective Truth Is Not Always Unique
+
+Some domains contain genuinely multiple truths, evolving truths, or unresolved evidence. A production system should support `Truth / False / Unresolved` or a calibrated probability rather than forcing every case into a single answer.
+
+---
+
+# 9. Future Work
+
+The strongest next experiments are:
+
+1. **Official DAFNA algorithm baselines:** run TruthFinder, 2-Estimates, 3-Estimates, Accu/AccuSim, SimpleLCA, and LTM on the same canonicalized objects where protocol compatibility allows.
+2. **Constrained Truth Discovery baseline:** compare proof-provenance evidence with denial-constraint optimization under the same constraints.
+3. **Ontology-rich multi-source benchmark:** construct or annotate a dataset with source IDs, ontology rules, implicit conflicts, and external truth labels in the same examples.
+4. **Held-out parameter evaluation:** split DAFNA objects into development/test sets and tune threshold parameters only on development.
+5. **Calibration:** evaluate Brier score or expected calibration error for truth confidence.
+6. **Provenance ablation:** remove rule paths, source IDs, atomic decomposition, and reliability one at a time.
+7. **Human explanation study:** test whether explicit `Source → Claim → Rule → Conflict → Truth` traces improve users' ability to audit a resolved fact.
+
+---
+
+# 10. Conclusion
+
+This paper reframes Rashomon-Tableau around a narrower and more defensible problem: **finding the most defensible truth from conflicting sources without discarding the conflict structure that explains why the sources disagree**.
+
+The framework separates three functions. Semantic reasoning determines what claims logically imply. Conflict localization retains source and derivation provenance so that disagreement can be attributed to concrete claims or rule paths. Truth resolution then combines source reliability with proposition-level compatibility and cross-source support.
+
+The real-data DAFNA-EA Books evaluation provides the strongest current evidence. Exact gold-truth recovery increases from 45% for a reliability-weighted whole-claim baseline to 61% for atomic provenance-aware resolution, while author-level F1 increases from 75.24% to 82.88%. Claim-level conflict localization Macro-F1 increases from 50.37% to 74.58%. These are not synthetic 100% capability scores; they are measured against independent gold truth on conflicting real-source data.
+
+At the same time, the work should not be presented as the first multi-perspective logic, the first use of logic in truth discovery, or the first multiple-proof method. Standpoint Logic, Multi-Context Systems, Axiom Pinpointing, TruthFinder, CATD, Constrained Truth Discovery, and ontology-aware truth finding already cover those individual ideas. The potential contribution lies in connecting them through **explicit source-to-proof provenance and using localized conflict evidence as an input to truth resolution**.
+
+Whether this architecture remains beneficial against faithful state-of-the-art truth-discovery and constrained-reasoning baselines is the key question for the next stage of the research.
 
 ---
 
 # References
 
-[1] Motik, B., Shearer, R., & Horrocks, I. (2009). **Hypertableau Reasoning for Description Logics.** Journal of Artificial Intelligence Research, 36, 165–228.
+[1] Yin, X., Han, J., & Yu, P. S. (2008). **Truth Discovery with Multiple Conflicting Information Providers on the Web.** IEEE Transactions on Knowledge and Data Engineering, 20(6), 796–808. DOI: 10.1109/TKDE.2007.190745.
 
-[2] Baader, F., & Peñaloza, R. (2007). **Axiom Pinpointing in General Tableaux.** TABLEAUX 2007, LNCS 4548, 11–27.
+[2] Li, Q., Li, Y., Gao, J., Su, L., Zhao, B., Demirbas, M., Fan, W., & Han, J. (2014). **A Confidence-Aware Approach for Truth Discovery on Long-Tail Data.** Proceedings of the VLDB Endowment, 8(4), 425–436. DOI: 10.14778/2735496.2735505.
 
-[3] Baader, F., Peñaloza, R., & Suntisrivaraporn, B. (2007). **Pinpointing in the Description Logic EL+.** KI 2007, LNCS 4667, 52–67.
+[3] Waguih, D. A., & Berti-Équille, L. (2014). **Truth Discovery Algorithms: An Experimental Evaluation.** arXiv:1409.6428. DAFNA-EA implementation and datasets.
 
-[4] Kalyanpur, A., Parsia, B., Horridge, M., & Sirin, E. (2007). **Finding All Justifications of OWL DL Entailments.** ISWC/ASWC 2007.
+[4] Li, Y., et al. (2022). **Constrained Truth Discovery.** IEEE Transactions on Knowledge and Data Engineering, 34(1), 205–218. DOI: 10.1109/TKDE.2020.2982393.
 
-[5] Brewka, G., & Eiter, T. (2007). **Equilibria in Heterogeneous Nonmonotonic Multi-Context Systems.** AAAI 2007.
+[5] Beretta, V., Harispe, S., Ranwez, S., & Mougenot, I. (2016). **How Can Ontologies Give You Clue for Truth-Discovery? An Exploratory Study.** DOI: 10.1145/2912845.2912848.
 
-[6] Eiter, T., Fink, M., Schüller, P., & Weinzierl, A. (2010). **Finding Explanations of Inconsistency in Multi-Context Systems.** KR 2010.
+[6] Gómez Álvarez, L., Rudolph, S., & Strass, H. (2022). **How to Agree to Disagree: Managing Ontological Perspectives using Standpoint Logic.** arXiv:2206.06793.
 
-[7] Gómez Álvarez, L., Rudolph, S., & Strass, H. (2022). **How to Agree to Disagree: Managing Ontological Perspectives using Standpoint Logic.** arXiv:2206.06793.
+[7] Gómez Álvarez, L., Rudolph, S., & Strass, H. (2023). **Pushing the Boundaries of Tractable Multiperspective Reasoning: A Deduction Calculus for Standpoint EL+.** KR 2023.
 
-[8] Gómez Álvarez, L., Rudolph, S., & Strass, H. (2023). **Tractable Diversity: Scalable Multiperspective Ontology Management via Standpoint EL.** arXiv:2302.13187.
+[8] Eiter, T., Fink, M., Schüller, P., & Weinzierl, A. (2014). **Finding Explanations of Inconsistency in Multi-Context Systems.** Artificial Intelligence, 216, 233–274. DOI: 10.1016/j.artint.2014.07.008.
 
-[9] Gómez Álvarez, L., Rudolph, S., & Strass, H. (2023). **Pushing the Boundaries of Tractable Multiperspective Reasoning: A Deduction Calculus for Standpoint EL+.** KR 2023, 333–343.
+[9] Baader, F., & Peñaloza, R. (2010). **Axiom Pinpointing in General Tableaux.** Journal of Logic and Computation, 20(1), 5–34. DOI: 10.1093/logcom/exn058.
 
-[10] Gigante, N., Gómez Álvarez, L., & Lyon, T. S. (2023). **Standpoint Linear Temporal Logic.** KR 2023.
+[10] Tian, J., Li, Y., Chen, W., Xiao, L., He, H., & Jin, Y. (2021). **Diagnosing the First-Order Logical Reasoning Ability Through LogicNLI.** EMNLP 2021.
 
-[11] Gómez Álvarez, L., et al. (2024). **Reasoning in SHIQ with Axiom- and Concept-Level Standpoint Modalities.** KR 2024.
+[11] Han, S., et al. (2024). **FOLIO: Natural Language Reasoning with First-Order Logic.** EMNLP 2024.
 
-[12] Fisher, A., Rudin, C., & Dominici, F. (2019). **All Models are Wrong, but Many are Useful: Learning a Variable's Importance by Studying an Entire Class of Prediction Models Simultaneously.** Journal of Machine Learning Research, 20(177), 1–81.
-
-[13] Tian, J., Li, Y., Chen, W., Xiao, L., He, H., & Jin, Y. (2021). **Diagnosing the First-Order Logical Reasoning Ability Through LogicNLI.** EMNLP 2021, 3738–3747.
-
-[14] Han, S., et al. (2024). **FOLIO: Natural Language Reasoning with First-Order Logic.** EMNLP 2024, 22017–22031.
-
-[15] Olausson, T., et al. (2023). **LINC: A Neurosymbolic Approach for Logical Reasoning by Combining Language Models with First-Order Logic Provers.** EMNLP 2023.
-
-[16] Zhao, R., Zhu, Q., Xu, H., et al. (2024). **Large Language Models Fall Short: Understanding Complex Relationships in Detective Narratives.** Findings of ACL 2024, 7618–7638.
-
-[17] Bail, S., Parsia, B., & Sattler, U. (2013). **The Logical Diversity of Explanations in OWL Ontologies.** CIKM 2013.
-
-[18] Kalyanpur, A., Parsia, B., Sirin, E., & Hendler, J. (2005). **Debugging Unsatisfiable Classes in OWL Ontologies.** Journal of Web Semantics, 3(4), 268–293.
-
-[19] Ozaki, A., & Peñaloza, R. (2018). **Consequence-Based Axiom Pinpointing.** SUM 2018.
-
-[20] Peñaloza, R. (2020). **Axiom Pinpointing.** arXiv:2003.08298.
+[12] Motik, B., Shearer, R., & Horrocks, I. (2009). **Hypertableau Reasoning for Description Logics.** Journal of Artificial Intelligence Research, 36, 165–228.
 
 ---
 
-## Reproducibility Note
+## Reproducibility
 
-The numerical results reported in this manuscript are generated by the repository's executable evaluation scripts and stored under `results/`:
+Repository scripts used for the reported results:
 
-- `results/folio_fragment_metrics.json`
-- `results/logicnli_metrics.json`
-- `results/ablation_metrics.json`
+```text
+scripts/evaluate_folio_fragment.py
+scripts/evaluate_logicnli.py
+scripts/evaluate_truth_discovery_books.py
+```
 
-The reported FOLIO score is a supported-fragment result, not a full-FOLIO score. The LogicNLI experiment uses the official structured logical representation, not end-to-end natural-language input. Controlled scope and explanation experiments are capability ablations rather than natural-language generalization tests.
+Measured real-data result:
+
+```text
+results/truth_discovery_books_metrics.json
+```
+
+GitHub Actions real-data validation run:
+
+```text
+Run ID: 32706842910
+Artifact ID: 9512567772
+```
+
+The DAFNA evaluator downloads the public claim and gold files directly from the `qcri/DAFNA-EA` repository. The result file records the exact sample counts and metrics used in this manuscript.
