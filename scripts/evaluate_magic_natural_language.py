@@ -72,16 +72,17 @@ def build_rashomon_judgment(
     context2: str,
     max_hops: int = 4,
     world_scorer: DebertaWorldScorer | None = None,
+    extracted_response=None,
 ) -> dict:
-    """Build Rashomon judgment with fixed LLM-call policy.
+    """Build Rashomon judgment with a fixed LLM-call policy.
 
-    same-LLM mode uses exactly two logical LLM calls per macro attempt:
-      1) claim extraction
-      2) one batch scoring call for all candidate query-path worlds
-    DeBERTa mode uses one LLM extraction call plus local discriminative scoring.
-    Gold MAGIC triples are never supplied to prediction.
+    If ``extracted_response`` is supplied, no extraction call is made. This lets the
+    same extracted candidate space be shared by the LLM and DeBERTa scorers.
+    same-LLM mode then adds exactly one batch-scoring call; DeBERTa adds no provider
+    call because scoring is local discriminative inference.
     """
-    extracted = extract_claims(client, context1, context2)
+    extracted = extracted_response or extract_claims(client, context1, context2)
+    extraction_was_shared = extracted_response is not None
     claims = extracted.data["claims"]
     c1 = extracted_literals(claims, "context1")
     c2 = extracted_literals(claims, "context2")
@@ -89,9 +90,10 @@ def build_rashomon_judgment(
     ontology = Ontology()
     reasoner = RelationalTableau(ontology)
     usage = {
-        "input_tokens": extracted.usage.input_tokens,
-        "output_tokens": extracted.usage.output_tokens,
-        "calls": 1,
+        "input_tokens": 0 if extraction_was_shared else extracted.usage.input_tokens,
+        "output_tokens": 0 if extraction_was_shared else extracted.usage.output_tokens,
+        "calls": 0 if extraction_was_shared else 1,
+        "shared_extraction": extraction_was_shared,
     }
     scorer_name = "deberta-v3" if world_scorer is not None else "same-llm-batch"
 
@@ -118,9 +120,6 @@ def build_rashomon_judgment(
 
     score_map: dict[str, tuple[float, float, float]] = {}
     if world_scorer is None:
-        # Preserve exactly two LLM calls even when no graph paths are found. The empty
-        # batch is a real diagnostic of the constructed search space and keeps compute
-        # accounting deterministic across rows.
         batch = score_worlds_batch(client, batch_items)
         usage["input_tokens"] += batch.usage.input_tokens
         usage["output_tokens"] += batch.usage.output_tokens
@@ -246,7 +245,7 @@ def run(args) -> dict:
         for row in rows:
             if args.limit and processed >= args.limit:
                 break
-            key = f"{filename}:{row.get('id')}:{args.model}:{scorer_suffix}:batch-v1"
+            key = f"{filename}:{row.get('id')}:{args.model}:{scorer_suffix}:batch-v2"
             if key in existing:
                 output_rows.append(existing[key])
                 processed += 1
