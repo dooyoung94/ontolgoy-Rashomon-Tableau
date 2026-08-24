@@ -10,6 +10,8 @@ from pathlib import Path
 def load_records(cache_dir: Path) -> dict[str, list[dict]]:
     out: dict[str, list[dict]] = {}
     for path in sorted(cache_dir.glob("*.jsonl")):
+        if path.name.endswith(".failures.jsonl"):
+            continue
         rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
         if rows:
             out[path.stem] = rows
@@ -45,11 +47,14 @@ def _eligible(row: dict, baseline: str, treatment: str) -> bool:
     cond = row.get("conditions", {})
     if baseline not in cond or treatment not in cond:
         return False
-    if baseline == "compute_matched_direct":
-        return bool(cond[baseline].get("budget_reached"))
-    if treatment == "compute_matched_direct":
-        return bool(cond[treatment].get("budget_reached"))
-    return True
+    if "compute_matched_direct" not in {baseline, treatment}:
+        return True
+
+    # Fixed-call rows already record the two-stage compute budget in cost metadata.
+    # The old analyzer incorrectly looked for conditions[*].budget_reached, a field
+    # that run_magic_peer_matrix.py never emitted, excluding every matched pair.
+    matched_cost = row.get("cost", {}).get("compute_matched_direct", {})
+    return bool(matched_cost.get("fixed_two_stage")) and int(matched_cost.get("logical_llm_calls", 0)) >= 2
 
 
 def paired_condition(rows: list[dict], baseline: str, treatment: str) -> dict | None:
@@ -96,7 +101,10 @@ def main() -> None:
     }
     result = {
         "metric": "MAGIC conflict identification on released conflict rows (paired recall diagnostic)",
-        "compute_matched_policy": "Pairs with budget_reached=false are excluded from compute-matched comparisons.",
+        "compute_matched_policy": (
+            "Compute-matched pairs are eligible when the row cost metadata confirms the fixed two-stage baseline "
+            "(fixed_two_stage=true and logical_llm_calls>=2)."
+        ),
         "models": {},
     }
     for model, rows in model_rows.items():
