@@ -1,0 +1,37 @@
+{
+  "benchmark": "MAGIC multi-hop structured conflict cases",
+  "method": "Rashomon Worlds corrected first ablation",
+  "validated_workflow_run": 32725453943,
+  "artifact_id": 9519356207,
+  "artifact_digest": "sha256:cafb274bb6f2889104f15340b8ce0ac509d436da119a669fcbb55c34c6dc1c24",
+  "protocol_warning": "The released multi-hop files evaluated here contain conflict rows, so conflict metrics are recall rather than full ID accuracy. B3/B4 structured exact localization is row-level: every original_triplet[i] must be localized through its paired perturb_triplet[i]. This remains a structured provenance diagnostic and is not the paper's natural-language LOC metric.",
+  "leakage_policy": "No row IDs, rel_id labels, gold conflict labels, or sample-specific composition rules are used to score relation interpretations. Gold perturb groups are used only after prediction to evaluate path localization.",
+  "ablation_definition": {
+    "B1": "static hard ontology + Tableau",
+    "B2": "single-world early commitment to the highest fixed lexical relation interpretation, including unresolved",
+    "B3": "possible-world existential retention: whether at least one consistent conflicting world covers the paired gold perturb path",
+    "B4": "weighted possible-world marginalization using the same fixed lexical relation prior; equal source reliability in MAGIC"
+  },
+  "overall": {
+    "rows": 588,
+    "queries": 1056,
+    "b1_static_tableau_row_conflict_recall": 0.05442176870748299,
+    "b1_static_tableau_query_conflict_recall": 0.04450757575757576,
+    "b2_early_commit_row_conflict_recall": 0.29931972789115646,
+    "b2_early_commit_query_conflict_recall": 0.22632575757575757,
+    "b3_gold_world_query_recall": 0.3939393939393939,
+    "b3_structured_row_exact_loc": 0.2942176870748299,
+    "b4_weighted_world_row_conflict_recall": 0.22789115646258504,
+    "b4_weighted_world_query_conflict_recall": 0.16856060606060605,
+    "b4_structured_row_exact_loc": 0.07142857142857142,
+    "mean_world_count_per_row": 7.358843537414966,
+    "mean_world_count_per_query": 4.097537878787879,
+    "mean_candidate_paths_per_query": 1.4573863636363635
+  },
+  "per_subset": [
+    {"file":"1-multi-hop_conflict.json","rows":300,"queries":300,"b1_row_recall":0.013333333333333334,"b2_row_recall":0.20666666666666667,"b3_gold_world_query_recall":0.44,"b3_row_exact_loc":0.44,"b4_row_recall":0.14666666666666667,"b4_row_exact_loc":0.12,"mean_world_count_per_row":3.29},
+    {"file":"2-multi-hop_conflict.json","rows":158,"queries":316,"b1_row_recall":0.10759493670886076,"b2_row_recall":0.36075949367088606,"b3_gold_world_query_recall":0.39556962025316456,"b3_row_exact_loc":0.2088607594936709,"b4_row_recall":0.2721518987341772,"b4_row_exact_loc":0.03164556962025317,"mean_world_count_per_row":10.170886075949367},
+    {"file":"3-multi-hop_conflict.json","rows":80,"queries":240,"b1_row_recall":0.075,"b2_row_recall":0.3625,"b3_gold_world_query_recall":0.3333333333333333,"b3_row_exact_loc":0.0625,"b4_row_recall":0.275,"b4_row_exact_loc":0.0,"mean_world_count_per_row":10.1},
+    {"file":"4-multi-hop_conflict.json","rows":50,"queries":200,"b1_row_recall":0.1,"b2_row_recall":0.56,"b3_gold_world_query_recall":0.395,"b3_row_exact_loc":0.06,"b4_row_recall":0.5,"b4_row_exact_loc":0.02,"mean_world_count_per_row":18.5}
+  ]
+}

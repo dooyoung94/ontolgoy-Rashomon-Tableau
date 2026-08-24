@@ -11,13 +11,7 @@ from .tableau import RelationalTableau
 
 @dataclass(frozen=True)
 class RelationHypothesis:
-    """A defeasible interpretation of a two-hop relation composition.
-
-    It is deliberately *not* an ontology axiom.  A hypothesis may come from
-    external schema metadata, rule mining, or another candidate generator.
-    Different mutually exclusive hypotheses can therefore define different
-    possible worlds without contaminating the hard ontology.
-    """
+    """A defeasible interpretation of a two-hop relation composition."""
 
     name: str
     left: str
@@ -44,24 +38,69 @@ class RelationHypothesis:
                 perspective = first.perspective if first.perspective == second.perspective else None
                 story = first.story if first.story == second.story else None
                 derived.append(
-                    Literal(
-                        self.result,
-                        first.subject,
-                        second.object,
-                        self.negated_result,
-                        perspective,
-                        story,
-                        source,
-                    )
+                    Literal(self.result, first.subject, second.object, self.negated_result, perspective, story, source)
                 )
         return list(dict.fromkeys(derived))
 
 
 @dataclass(frozen=True)
-class WorldChoice:
-    """One relation interpretation selected for one uncertain composition slot."""
+class PathRelationHypothesis:
+    """A defeasible interpretation of one arbitrary multi-hop path pattern.
 
-    hypothesis: RelationHypothesis | None
+    ``start``/``end`` bind the hypothesis to the retrieved candidate endpoints so
+    the same relation sequence elsewhere in the graph cannot create unrelated
+    claims. ``swap_endpoints`` represents a reverse candidate path while deriving
+    the proposition in the query's canonical subject/object direction.
+    """
+
+    name: str
+    relations: tuple[str, ...]
+    result: str
+    confidence: float
+    negated_result: bool = False
+    origin: str = "path-candidate"
+    start: str | None = None
+    end: str | None = None
+    swap_endpoints: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.relations:
+            raise ValueError("relations must not be empty")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("confidence must be in [0, 1]")
+
+    def derive(self, facts: Iterable[Literal]) -> list[Literal]:
+        positives = [fact for fact in facts if not fact.negated]
+        adjacency: dict[str, list[Literal]] = {}
+        for fact in positives:
+            adjacency.setdefault(fact.subject, []).append(fact)
+
+        derived: list[Literal] = []
+
+        def walk(path_start: str, node: str, index: int, chain: list[Literal]) -> None:
+            if index == len(self.relations):
+                if not chain or (self.end is not None and node != self.end):
+                    return
+                sources = {edge.source for edge in chain if edge.source}
+                source = next(iter(sources)) if len(sources) == 1 else None
+                subject, object_ = (node, path_start) if self.swap_endpoints else (path_start, node)
+                derived.append(Literal(self.result, subject, object_, self.negated_result, source=source))
+                return
+            expected = self.relations[index]
+            for edge in adjacency.get(node, []):
+                if edge.predicate == expected:
+                    walk(path_start, edge.object, index + 1, [*chain, edge])
+
+        starts = [self.start] if self.start is not None else list(adjacency)
+        for path_start in starts:
+            if path_start in adjacency:
+                walk(path_start, path_start, 0, [])
+        return list(dict.fromkeys(derived))
+
+
+@dataclass(frozen=True)
+class WorldChoice:
+    hypothesis: RelationHypothesis | PathRelationHypothesis | None
     label: str
     confidence: float
 
@@ -106,14 +145,6 @@ def build_possible_worlds(
     source_reliability: Mapping[str, float] | None = None,
     max_worlds: int = 256,
 ) -> list[PossibleWorld]:
-    """Enumerate internally consistent worlds from mutually exclusive choices.
-
-    Each element of ``alternative_groups`` is one uncertain semantic decision.
-    A world selects exactly one choice from each group.  Hard ontology remains
-    unchanged; only the chosen defeasible relation hypotheses add derived facts.
-    Inconsistent worlds are discarded by the Tableau checker.
-    """
-
     facts = list(dict.fromkeys(base_facts))
     source_reliability = source_reliability or {}
     groups = [list(group) for group in alternative_groups if group]
@@ -140,9 +171,6 @@ def build_possible_worlds(
             source_support = prod(max(1e-9, source_reliability.get(source, 0.5)) for source in sources) ** (1.0 / len(sources))
         else:
             source_support = 1.0
-
-        # A simple, explicit baseline weighting.  The paper treats this as an
-        # ablatable scoring function rather than a fixed truth formula.
         weight = relation_support * source_support
         worlds.append(
             PossibleWorld(
@@ -165,18 +193,11 @@ def build_possible_worlds(
     return worlds
 
 
-def truth_marginal(
-    worlds: Sequence[PossibleWorld],
-    query: Literal,
-    reasoner: RelationalTableau,
-) -> TruthMarginal:
-    """Marginalize q / opposing evidence over weighted consistent worlds."""
-
+def truth_marginal(worlds: Sequence[PossibleWorld], query: Literal, reasoner: RelationalTableau) -> TruthMarginal:
     mass = {"SUPPORTED": 0.0, "CONTRADICTED": 0.0, "UNRESOLVED": 0.0, "BOTH": 0.0}
     for world in worlds:
         status = reasoner.verify(world.facts, query).status
         mass[status] += world.weight
-
     if not worlds:
         mass["UNRESOLVED"] = 1.0
     winner = max(mass.items(), key=lambda item: item[1])[0]
