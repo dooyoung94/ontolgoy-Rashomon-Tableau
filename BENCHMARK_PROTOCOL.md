@@ -2,62 +2,120 @@
 
 ## Central test
 
-> **Does preserving multiple internally consistent worlds, then adjudicating across them with provenance-aware reliability, improve multi-hop explanation retention and final truth recovery over early single-world commitment?**
+> **Does Rashomon Worlds improve the same base model's multi-hop conflict identification and localization under identical MAGIC conditions?**
 
-The protocol deliberately separates **world construction/localization** from **world ranking/truth adjudication**.
-
----
-
-## 1. Dataset roles
-
-### MAGIC — world construction and localization
-
-Current structured track uses all released multi-hop conflict files:
-
-- 588 rows;
-- 1,056 paired query conflicts.
-
-Required metrics:
-
-- row/query conflict recall;
-- gold-world query recall;
-- strict structured row exact localization;
-- candidate-path count;
-- retained-world count.
-
-**Boundary:** because the released structured files in this track are conflict cases, conflict detection values are recall, not full official MAGIC ID accuracy. Structured exact localization requires all `original_triplet[i] ↔ perturb_triplet[i]` pairs to be localized and is not the natural-language MAGIC LOC metric.
-
-A future text track must reproduce the published natural-language input/output protocol before reporting direct ID/LOC peer comparison.
-
-### DAFNA-EA Books — world adjudication
-
-Current same-protocol track:
-
-- 100 gold books;
-- `AuthorsNamesList`;
-- 1,999 collapsed source-object claims;
-- 227 sources;
-- shared surname + first-initial benchmark-side normalization.
-
-Required metrics:
-
-- candidate gold-world coverage;
-- exact set truth accuracy;
-- author F1;
-- uniform vs hard/MAP vs marginal reliability ablation;
-- official DAFNA-EA peer comparison.
-
-Gold truth is evaluation-only. It must not enter candidate generation, scoring, or source-reliability updates.
-
-### LogicNLI / FOLIO
-
-Reasoning-engine sanity checks only; not headline evidence for the possible-world contribution.
+The paper's main MAGIC claim is a **method effect within model**, not a raw comparison between unrelated model families.
 
 ---
 
-## 2. Measured MAGIC structured results
+## 1. Primary MAGIC paired experiment
 
-Validated run `32725453943`, artifact `9519356207`.
+Use the same five peer model families evaluated by MAGIC:
+
+- Mixtral 8x7B Instruct
+- Llama 3.1 70B Instruct
+- Claude 3.5 Haiku
+- GPT-4o-mini
+- o1
+
+For each model `M`, evaluate the same examples under three conditions:
+
+| Condition | Input | LLM reasoning | Rashomon Worlds |
+|---|---|---|---|
+| **M-Direct** | original MAGIC natural-language contexts | direct conflict judgment | No |
+| **M-ComputeMatched** | identical contexts | repeated/direct reasoning with call/token budget matched as closely as possible | No |
+| **M-Rashomon** | identical contexts | claim extraction + world scoring by the same model | **Yes** |
+
+The primary effects are paired within model:
+
+```text
+ΔID_M  = ID(M-Rashomon)  - ID(M-ComputeMatched)
+ΔLOC_M = LOC(M-Rashomon) - LOC(M-ComputeMatched)
+```
+
+Secondary effects compare against the original direct condition:
+
+```text
+ΔID_direct_M  = ID(M-Rashomon)  - ID(M-Direct)
+ΔLOC_direct_M = LOC(M-Rashomon) - LOC(M-Direct)
+```
+
+The final method-level evidence should report:
+
+- mean ΔID across the five models;
+- mean ΔLOC across the five models;
+- number of models with positive ΔID;
+- number of models with positive ΔLOC;
+- per-conflict-count (1/2/3/4) effects;
+- paired bootstrap confidence intervals over examples.
+
+A strong claim requires improvement to be **consistent across several base models**, not just one model.
+
+---
+
+## 2. MAGIC protocol parity
+
+MAGIC's published evaluation performs three independent inference attempts per model. The natural-language reproduction therefore uses **3 attempts/example/condition** where the endpoint permits stochastic sampling.
+
+For ID, retain the paper's success logic: if conflict detection fails in all attempts the example scores 0; otherwise it scores 1.
+
+For LOC, evaluate localization only for correctly identified conflict cases and require all conflict locations according to the official protocol/mapping.
+
+All conditions must use:
+
+- exactly the same `context1` and `context2` text;
+- the same sentence numbering and gold-to-sentence mapping;
+- the same attempt count;
+- frozen prompt templates before test execution;
+- identical test examples;
+- no `original_triplet`, `perturb_triplet`, `rel_id`, row ID, or gold LOC in prediction prompts.
+
+Gold structured fields may be read **only after prediction** for scoring/audit.
+
+---
+
+## 3. Compute fairness
+
+Rashomon Worlds naturally makes more model calls than a one-shot direct baseline. Therefore two baselines are mandatory:
+
+1. **M-Direct** — reproduces ordinary MAGIC direct prompting.
+2. **M-ComputeMatched** — spends a comparable number of calls/tokens on direct/self-consistency reasoning but does not use possible-world construction.
+
+The main causal comparison is `M-Rashomon` vs `M-ComputeMatched`. This prevents a gain caused purely by additional inference compute from being attributed to the method.
+
+Record per method/model:
+
+- API calls/example;
+- input tokens/example;
+- output tokens/example;
+- wall-clock latency where available;
+- endpoint/model revision;
+- sampling parameters.
+
+---
+
+## 4. Exact model reproducibility
+
+Historical peer numbers are retained as reference, but exact 2025 checkpoints are not uniformly available through first-party APIs in 2026.
+
+`config/magic_peer_model_matrix.yaml` records the expected checkpoint and runtime environment for each family.
+
+Rules:
+
+- If the **exact historical checkpoint** can be served, label the run `historical-checkpoint reproduction`.
+- If only a replacement/current checkpoint is available, label it `same-family current-model experiment` and do **not** merge its score with the published MAGIC number.
+- For open-weight Mixtral/Llama, a reproducible vLLM/local endpoint serving exact weights is acceptable.
+- For retired proprietary checkpoints (notably Claude 3.5 Haiku), an exact rerun may be impossible; replacement-model results must be a separate row.
+
+The method-effect claim itself remains valid as long as **Direct, ComputeMatched, and Rashomon use the exact same checkpoint within each paired model experiment**.
+
+---
+
+## 5. Existing structured MAGIC diagnostics
+
+The previous structured experiment remains a mechanism diagnostic, not the headline peer comparison.
+
+Validated run `32725453943`, artifact `9519356207`:
 
 | Variant | Row conflict recall | Query conflict recall | Gold-world query recall | Structured row exact LOC |
 |---|---:|---:|---:|---:|
@@ -66,25 +124,50 @@ Validated run `32725453943`, artifact `9519356207`.
 | B3 Possible-world retention | — | — | **39.39%** | **29.42%** |
 | B4 Weakly weighted worlds | 22.79% | 16.86% | — | 7.14% |
 
-Complexity:
-
-- 1.46 candidate paths/query;
-- 4.10 retained worlds/query;
-- 7.36 worlds/row.
-
-Interpretation rule: B3 supports **retention**, but B4 does not support a claim that naive weighting improves selection. The B4 < B2 result must remain visible.
+Interpretation: possible worlds improve retention, while naive ranking remains insufficient. These numbers are **not official MAGIC ID/LOC**.
 
 ---
 
-## 3. Measured DAFNA truth-world results
+## 6. Published MAGIC peer reference
 
-Validated run `32726434311`, artifact `9519739380`.
+Weighted multi-hop values derived from the published N=1..4 subgroup results:
 
-Candidate generation:
+| Peer | Weighted ID | Weighted LOC |
+|---|---:|---:|
+| Mixtral 8x7B | 28.21% | 9.23% |
+| Claude 3.5 Haiku | 48.81% | 34.01% |
+| o1 | 48.98% | 28.57% |
+| Llama 3.1 70B | 67.32% | 27.15% |
+| GPT-4o-mini | 78.40% | 47.28% |
 
-- gold-world coverage: **93.00%**;
-- mean candidate worlds/book: **27.94**;
-- max candidate worlds: **256**.
+These are the **baseline model rows** motivating the new paired study. The research question is not simply whether Rashomon beats 78.40% globally; it is whether adding the method raises each model's own ID/LOC under controlled conditions.
+
+Expected final table:
+
+| Model | Direct ID | +Rashomon ID | ΔID | Direct LOC | +Rashomon LOC | ΔLOC |
+|---|---:|---:|---:|---:|---:|---:|
+| Mixtral 8x7B | measured | measured | measured | measured | measured | measured |
+| Llama 3.1 70B | measured | measured | measured | measured | measured | measured |
+| Claude 3.5 Haiku | measured | measured | measured | measured | measured | measured |
+| GPT-4o-mini | measured | measured | measured | measured | measured | measured |
+| o1 | measured | measured | measured | measured | measured | measured |
+| **Mean** | — | — | **mean ΔID** | — | — | **mean ΔLOC** |
+
+A second table reports ComputeMatched vs Rashomon and is the primary method-effect table.
+
+---
+
+## 7. DAFNA-EA Books — already measured truth adjudication
+
+Current same-protocol track:
+
+- 100 gold books;
+- `AuthorsNamesList`;
+- 1,999 collapsed source-object claims;
+- 227 sources;
+- shared surname + first-initial normalization.
+
+Validated run `32726434311`, artifact `9519739380`:
 
 | Method | Exact Truth Accuracy | Author F1 |
 |---|---:|---:|
@@ -100,135 +183,56 @@ Candidate generation:
 
 Identical-protocol gains:
 
-- marginal vs hard commitment: **+1.00 pp exact**, **+0.08 pp F1**;
-- marginal vs prior atomic: **+1.00 pp exact**, **+1.25 pp F1**;
+- marginal vs hard commitment: **+1.00 pp exact**;
+- marginal vs prior atomic: **+1.00 pp exact, +1.25 pp F1**;
 - marginal vs TruthFinder/AccuSim: **+5.00 pp exact**.
 
-Do not claim global SOTA. Safe scope is the evaluated 100-book AuthorsNamesList subset under shared normalization.
+DAFNA establishes the truth-adjudication side; the five-model paired MAGIC experiment is required to establish the multi-hop conflict/localization side.
 
 ---
 
-## 4. Core ablation definitions
+## 8. Leakage and tuning rules
 
-### MAGIC
+Forbidden:
 
-- **B1 Static Tableau:** hard ontology only, single logical state.
-- **B2 Early Commit:** one highest-scoring relation interpretation, including unresolved.
-- **B3 Possible Worlds:** retain alternative consistent relation interpretations and evaluate whether the paired gold conflict world survives.
-- **B4 Weighted Worlds:** marginalize worlds using the same fixed relation prior; MAGIC sources are treated equally in this first structured experiment.
+- test-row-specific relation rules;
+- sample IDs, `rel_id`, `original_triplet`, `perturb_triplet`, gold ID or LOC in model inputs;
+- prompt or coefficient tuning on the final reported test outputs;
+- giving only the Rashomon condition extra external facts unavailable to the baseline.
 
-### DAFNA
-
-All variants use the same candidate world generator.
-
-- **Uniform:** equal source reliability.
-- **Hard Commit:** update each source against the current MAP truth world.
-- **Marginal Reliability:** update source reliability using expected compatibility over the complete world posterior.
-
-This isolates delayed commitment from candidate generation.
+Development/tuning must use a frozen dev subset or external relation source and then be locked before final evaluation.
 
 ---
 
-## 5. Leakage rules
+## 9. Statistical reporting
 
-### Forbidden
+For every paired model experiment report:
 
-- adding a relation rule after seeing a MAGIC test example;
-- using row IDs, `rel_id`, gold conflict labels, or gold LOC to score a relation hypothesis;
-- using DAFNA gold truth to create or rank candidate author worlds;
-- tuning coefficients directly on the reported test set and then presenting the same set as unbiased evaluation.
+- ID and LOC;
+- absolute percentage-point improvement;
+- paired bootstrap 95% CI for ΔID and ΔLOC;
+- McNemar test for paired binary ID where appropriate;
+- per-N conflict breakdown;
+- inference cost.
 
-### Current MAGIC first-ablation policy
-
-Relation interpretation scores use only a frozen broad lexical prior over relation names. Gold perturb groups are read only after prediction to calculate localization.
-
-### Preferred next MAGIC protocol
-
-```text
-external ontology / train graph
-        ↓
-relation-rule induction or semantic model
-        ↓
-freeze model
-        ↓
-relation-held-out / domain-held-out evaluation
-        ↓
-MAGIC test
-```
+Across models report the mean/median ΔID and ΔLOC and count of positive models. Do not treat five models as independent examples for a high-powered significance claim; example-level paired statistics remain primary.
 
 ---
 
-## 6. Published MAGIC peer boundary
+## 10. Reproducibility record
 
-Natural-language peer references:
+Every headline run must record:
 
-| Peer | Weighted ID | Weighted LOC |
-|---|---:|---:|
-| Mixtral 8x7B | 28.21% | 9.23% |
-| Claude 3.5 Haiku | 48.81% | 34.01% |
-| o1 | 48.98% | 28.57% |
-| Llama 3.1 70B | 67.32% | 27.15% |
-| GPT-4o-mini | 78.40% | 47.28% |
-
-These values cannot be directly compared with structured `gold-world recall` or `structured exact LOC`. A fair direct comparison requires a Rashomon Worlds natural-language track evaluated with official MAGIC ID/LOC.
-
----
-
-## 7. Prior repository baseline
-
-Historical MAGIC structured diagnostics:
-
-| Metric | Multi-hop |
-|---|---:|
-| direct heuristic | 33.16% |
-| bidirectional path coverage | 68.03% |
-| strict ontology contradiction | 5.44% |
-
-`68.03%` is path coverage, not accuracy or ID. These values explain the research transition but must not be mixed arithmetically with the new metrics.
-
----
-
-## 8. Improvement reporting
-
-Improvement may be reported only between identical metrics under the same protocol.
-
-Valid:
-
-- DAFNA marginal 62% vs hard 61% exact = **+1.0 pp**.
-- DAFNA marginal 62% vs TruthFinder 57% exact = **+5.0 pp** under the shared evaluated subset.
-
-Invalid:
-
-- 68.03% old MAGIC path coverage vs 39.39% gold-world recall;
-- structured MAGIC LOC analogue vs published natural-language LOC;
-- MAGIC conflict recall vs natural-language ID accuracy.
-
----
-
-## 9. Reproducibility record
-
-Each headline result must record:
-
-- exact dataset/split;
-- candidate-world construction policy;
-- source/relation weighting rule;
-- maximum world count/pruning policy;
+- dataset commit/version;
+- exact model checkpoint/endpoint;
+- prompt hash;
+- attempts/example;
+- decoding parameters;
+- call/token budget;
+- maximum graph hops/worlds;
 - gold usage policy;
 - code commit;
-- CI workflow run;
-- artifact ID and digest.
+- CI/live-run identifier;
+- raw cached predictions.
 
-Persistent summaries:
-
-- `results/magic_possible_worlds_summary.json`
-- `results/dafna_possible_worlds_summary.json`
-
----
-
-## 10. Current evidence status
-
-- **H1:** supported on MAGIC as explanation-retention evidence.
-- **H2:** supported for preserving alternatives; not enough to claim all multi-world ranking is superior, because weak MAGIC B4 ranking is below B2.
-- **H3:** modestly supported on DAFNA; marginal reliability improves exact truth accuracy from 61% hard-commit to 62%.
-
-The dominant remaining research gap is **world ranking/calibration**: MAGIC preserves more correct explanation worlds than it selects, and DAFNA has 93% gold-world coverage but only 62% exact final selection.
+The natural-language method comparison is not considered complete until all available peer-model pairs have both baseline and Rashomon predictions under this protocol.

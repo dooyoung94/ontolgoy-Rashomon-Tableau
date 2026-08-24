@@ -48,6 +48,12 @@ jobs:
         run: python scripts/evaluate_magic_bidirectional.py
       - name: Run MAGIC possible-world ablation
         run: python scripts/evaluate_magic_possible_worlds.py
+      - name: Install DeBERTa benchmark dependencies
+        run: pip install 'transformers>=4.50,<5' 'torch>=2.2' sentencepiece
+      - name: Run MAGIC DeBERTa-v3 world-ranking benchmark
+        env:
+          TOKENIZERS_PARALLELISM: 'false'
+        run: python scripts/evaluate_magic_deberta_worlds.py
       - name: Clone official DAFNA-EA implementation
         run: git clone --depth 1 https://github.com/qcri/DAFNA-EA.git /tmp/DAFNA-EA
       - name: Prepare identical 100-book AuthorsNamesList subset for official DAFNA
@@ -116,6 +122,7 @@ jobs:
             results/magic_structured_metrics.json
             results/magic_bidirectional_tableau_metrics.json
             results/magic_possible_worlds_metrics.json
+            results/magic_deberta_worlds_metrics.json
             results/dafna_official/*.json
             results/dafna_official_comparison.json
             results/dafna_official_comparison.md

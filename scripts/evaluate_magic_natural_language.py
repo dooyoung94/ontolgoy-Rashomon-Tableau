@@ -1,0 +1,265 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import urllib.request
+from pathlib import Path
+
+from rashomon_tableau.deberta_world_scorer import DebertaWorldScorer
+from rashomon_tableau.graph_paths import bidirectional_candidate_paths
+from rashomon_tableau.models import Literal
+from rashomon_tableau.ontology import Ontology
+from rashomon_tableau.openai_frontend import (
+    OpenAIResponsesClient,
+    direct_magic_judgment,
+    extract_claims,
+    score_world_bidirectionally,
+)
+from rashomon_tableau.possible_worlds import PathRelationHypothesis, WorldChoice, build_possible_worlds, truth_marginal
+from rashomon_tableau.tableau import RelationalTableau
+
+MAGIC_BASE = "https://raw.githubusercontent.com/HYU-NLP/MAGIC/main/dataset/multi-hop"
+FILES = [
+    "1-multi-hop_conflict.json",
+    "2-multi-hop_conflict.json",
+    "3-multi-hop_conflict.json",
+    "4-multi-hop_conflict.json",
+]
+
+
+def norm(x: str) -> str:
+    return re.sub(r"\s+", " ", x.strip().lower())
+
+
+def download_json(url: str):
+    with urllib.request.urlopen(url, timeout=60) as response:
+        return json.load(response)
+
+
+def extracted_literals(claims: list[dict], source: str) -> list[Literal]:
+    out: list[Literal] = []
+    for claim in claims:
+        if claim.get("source") != source:
+            continue
+        out.append(
+            Literal(
+                norm(claim["relation"]),
+                norm(claim["subject"]),
+                norm(claim["object"]),
+                bool(claim.get("negated", False)),
+                story=str(claim.get("sentence_id", 0)),
+                source=source,
+            )
+        )
+    return out
+
+
+def literal_text(x: Literal) -> str:
+    neg = "NOT " if x.negated else ""
+    return f"{neg}{x.subject} --{x.predicate}--> {x.object} [source={x.source}, sentence={x.story}]"
+
+
+def _normalize_scores(support: float, contradiction: float, unresolved: float) -> tuple[float, float, float]:
+    total = max(1e-9, support + contradiction + unresolved)
+    return support / total, contradiction / total, unresolved / total
+
+
+def build_rashomon_judgment(
+    client,
+    context1: str,
+    context2: str,
+    max_hops: int = 4,
+    world_scorer: DebertaWorldScorer | None = None,
+) -> dict:
+    """Build Rashomon judgment from natural-language contexts.
+
+    The LLM always performs claim extraction. World scoring is either the same LLM
+    or a DeBERTa-v3 NLI discriminator. Gold MAGIC triples are never supplied here.
+    """
+    extracted = extract_claims(client, context1, context2)
+    claims = extracted.data["claims"]
+    c1 = extracted_literals(claims, "context1")
+    c2 = extracted_literals(claims, "context2")
+
+    ontology = Ontology()
+    reasoner = RelationalTableau(ontology)
+    candidates: list[dict] = []
+    usage = {
+        "input_tokens": extracted.usage.input_tokens,
+        "output_tokens": extracted.usage.output_tokens,
+        "calls": 1,
+    }
+    scorer_name = "deberta-v3" if world_scorer is not None else "same-llm"
+
+    for q_index, query in enumerate(c1):
+        paths = bidirectional_candidate_paths(c2, query.subject, query.object, max_hops=max_hops, max_paths_per_direction=8)
+        if not paths:
+            continue
+        choices: list[WorldChoice] = []
+        path_meta: dict[str, dict] = {}
+        for p_index, path in enumerate(paths):
+            query_repr = literal_text(query)
+            evidence_repr = [literal_text(x) for x in path.literals]
+            if world_scorer is None:
+                score = score_world_bidirectionally(client, query=query_repr, world_evidence=evidence_repr)
+                usage["input_tokens"] += score.usage.input_tokens
+                usage["output_tokens"] += score.usage.output_tokens
+                usage["calls"] += 1
+                raw_support = float(score.data["support"])
+                raw_contradiction = float(score.data["contradiction"])
+                raw_unresolved = float(score.data["unresolved"])
+            else:
+                nli = world_scorer.score(query_repr, evidence_repr)
+                raw_support = nli.support
+                raw_contradiction = nli.contradiction
+                raw_unresolved = nli.unresolved
+
+            support, contradiction, unresolved = _normalize_scores(
+                raw_support, raw_contradiction, raw_unresolved
+            )
+            relations = tuple(x.predicate for x in path.literals)
+            start = path.literals[0].subject
+            end = path.literals[-1].object
+            swap = path.direction == "REVERSE"
+            prefix = f"q{q_index}-p{p_index}"
+            support_h = PathRelationHypothesis(
+                f"{prefix}-support", relations, query.predicate, support,
+                negated_result=query.negated, origin=f"{scorer_name}-world-scorer",
+                start=start, end=end, swap_endpoints=swap,
+            )
+            contradiction_h = PathRelationHypothesis(
+                f"{prefix}-contradiction", relations, query.predicate, contradiction,
+                negated_result=not query.negated, origin=f"{scorer_name}-world-scorer",
+                start=start, end=end, swap_endpoints=swap,
+            )
+            choices.extend([
+                WorldChoice(support_h, f"{prefix}:support", support),
+                WorldChoice(contradiction_h, f"{prefix}:contradiction", contradiction),
+                WorldChoice.unresolved(f"{prefix}:unresolved", unresolved),
+            ])
+            path_meta[prefix] = {
+                "direction": path.direction,
+                "sentence_ids": sorted({int(x.story) for x in path.literals if x.story is not None}),
+                "scores": {"support": support, "contradiction": contradiction, "unresolved": unresolved},
+                "path": evidence_repr,
+            }
+
+        worlds = build_possible_worlds(c2, [choices], reasoner, {"context2": 1.0}, max_worlds=128)
+        marginal = truth_marginal(worlds, query, reasoner)
+        conflict_mass = marginal.contradiction + marginal.both
+        candidate = {
+            "query": literal_text(query),
+            "query_sentence_id": int(query.story or 0),
+            "support_mass": marginal.support,
+            "contradiction_mass": conflict_mass,
+            "unresolved_mass": marginal.unresolved,
+            "world_count": len(worlds),
+            "paths": path_meta,
+        }
+        candidates.append(candidate)
+
+    ranked = sorted(candidates, key=lambda x: x["contradiction_mass"], reverse=True)
+    best = ranked[0] if ranked else None
+    conflict = bool(best and best["contradiction_mass"] > max(best["support_mass"], best["unresolved_mass"]))
+    locations = []
+    if conflict and best:
+        locations.append({"source": "context1", "sentence_id": best["query_sentence_id"]})
+        path_items = list(best["paths"].values())
+        if path_items:
+            best_path = max(path_items, key=lambda x: x["scores"]["contradiction"])
+            locations.extend({"source": "context2", "sentence_id": x} for x in best_path["sentence_ids"])
+
+    return {
+        "conflict_detected": conflict,
+        "locations": locations,
+        "confidence": best["contradiction_mass"] if best else 0.0,
+        "candidate_queries": len(c1),
+        "evaluated_query_paths": sum(len(x["paths"]) for x in candidates),
+        "usage": usage,
+        "world_scorer": scorer_name,
+        "candidates": ranked[:10],
+        "extracted_claims": claims,
+    }
+
+
+def run(args) -> dict:
+    client = OpenAIResponsesClient(model=args.model)
+    deberta = DebertaWorldScorer() if args.deberta else None
+    cache_path = Path(args.cache)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    existing: dict[str, dict] = {}
+    if cache_path.exists():
+        for line in cache_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                row = json.loads(line)
+                existing[row["key"]] = row
+
+    output_rows: list[dict] = []
+    processed = 0
+    scorer_suffix = "deberta" if args.deberta else "llm"
+    for filename in FILES:
+        rows = download_json(f"{MAGIC_BASE}/{filename}")
+        for row in rows:
+            if args.limit and processed >= args.limit:
+                break
+            key = f"{filename}:{row.get('id')}:{args.model}:{scorer_suffix}"
+            if key in existing:
+                output_rows.append(existing[key])
+                processed += 1
+                continue
+            direct = direct_magic_judgment(client, row["context1"], row["context2"])
+            rashomon = build_rashomon_judgment(client, row["context1"], row["context2"], args.max_hops, deberta)
+            record = {
+                "key": key,
+                "file": filename,
+                "id": row.get("id"),
+                "model": args.model,
+                "direct": direct.data,
+                "direct_usage": direct.usage.__dict__,
+                "rashomon": rashomon,
+                "gold": {
+                    "original_triplet": row.get("original_triplet"),
+                    "perturb_triplet": row.get("perturb_triplet"),
+                },
+            }
+            with cache_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            output_rows.append(record)
+            processed += 1
+        if args.limit and processed >= args.limit:
+            break
+
+    direct_id = sum(bool(x["direct"]["conflict_detected"]) for x in output_rows) / len(output_rows) if output_rows else 0.0
+    rashomon_id = sum(bool(x["rashomon"]["conflict_detected"]) for x in output_rows) / len(output_rows) if output_rows else 0.0
+    summary = {
+        "track": "MAGIC natural-language same-input conflict detection",
+        "n": len(output_rows),
+        "model": args.model,
+        "world_scorer": scorer_suffix,
+        "direct_conflict_recall": direct_id,
+        "rashomon_worlds_conflict_recall": rashomon_id,
+        "gain_pp": 100 * (rashomon_id - direct_id),
+        "metric_warning": "All released files in this run are conflict cases, so detection is recall. LOC remains blind human-scored for peer comparison.",
+        "generation_policy": "Neither direct nor Rashomon prediction receives original_triplet or perturb_triplet. Gold structured fields are attached only after prediction for scoring/audit.",
+    }
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default=os.getenv("OPENAI_MODEL", "gpt-5.4-mini-2026-03-17"))
+    parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--max-hops", type=int, default=4)
+    parser.add_argument("--deberta", action="store_true")
+    parser.add_argument("--cache", default="results/magic_natural_language_predictions.jsonl")
+    parser.add_argument("--out", default="results/magic_natural_language_summary.json")
+    args = parser.parse_args()
+    print(json.dumps(run(args), ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()
