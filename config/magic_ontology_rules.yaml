@@ -1,0 +1,47 @@
+# Conservative relation semantics for the MAGIC structured benchmark.
+# These rules are domain semantics, not benchmark-answer templates.
+# If a relation is not listed here, the tableau does not invent a reverse or composition rule.
+
+symmetric:
+  - shares border with
+  - sibling
+  - spouse
+
+inverse:
+  contains: part of
+  part of: contains
+  parent: child
+  child: parent
+
+hierarchy:
+  father:
+    - parent
+  mother:
+    - parent
+  son:
+    - child
+  daughter:
+    - child
+
+transitive:
+  - subclass of
+  - part of
+  - located in the administrative territorial entity
+
+composition:
+  - left: instance of
+    right: subclass of
+    result: instance of
+  - left: part of
+    right: part of
+    result: part of
+  - left: located in the administrative territorial entity
+    right: located in the administrative territorial entity
+    result: located in the administrative territorial entity
+
+# Only explicit semantic incompatibilities should be declared.
+# Relation replacement alone is NOT treated as contradiction here.
+incompatible: []
+
+# Avoid assuming functional relations unless the ontology guarantees them.
+exclusive: []
