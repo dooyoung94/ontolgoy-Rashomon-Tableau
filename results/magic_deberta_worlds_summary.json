@@ -1,0 +1,29 @@
+{
+  "benchmark": "MAGIC multi-hop structured conflict cases",
+  "method": "Rashomon Worlds + DeBERTa-v3 NLI world scorer",
+  "deberta_model": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
+  "rows": 588,
+  "queries": 1056,
+  "row_conflict_recall": 0.41496598639455784,
+  "query_conflict_recall": 0.3153409090909091,
+  "structured_row_exact_loc": 0.15476190476190477,
+  "query_gold_path_selection": 0.2206439393939394,
+  "mean_worlds_per_query": 4.089962121212121,
+  "mean_paths_per_query": 1.4535984848484849,
+  "comparison_to_weak_lexical_b4": {
+    "lexical_row_conflict_recall": 0.22789115646258502,
+    "deberta_row_conflict_recall": 0.41496598639455784,
+    "gain_row_conflict_pp": 18.707482993197282,
+    "lexical_structured_row_exact_loc": 0.07142857142857142,
+    "deberta_structured_row_exact_loc": 0.15476190476190477,
+    "gain_structured_exact_loc_pp": 8.333333333333334,
+    "lexical_query_conflict_recall": 0.16856060606060605,
+    "deberta_query_conflict_recall": 0.3153409090909091,
+    "gain_query_conflict_pp": 14.678030303030305
+  },
+  "workflow_run": 32730398659,
+  "artifact_id": 9521415589,
+  "artifact_digest": "sha256:a3a6b643f0b36c51bd8e9ece4967e86312c600a3d4506c5bba04bd214fc25fdc",
+  "protocol_warning": "This is a structured MAGIC world-ranking diagnostic, not the official natural-language peer ID/LOC protocol. Conflict values are recall because these released files are conflict cases. Structured exact LOC must not be directly compared with published MAGIC natural-language LOC.",
+  "gold_policy": "Gold perturb paths were used only after world scoring to evaluate selected-path correctness."
+}
