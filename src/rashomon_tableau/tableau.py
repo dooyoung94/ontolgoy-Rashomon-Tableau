@@ -7,6 +7,19 @@ from .models import BidirectionalVerification, Clash, Literal, TableauResult
 from .ontology import Ontology
 
 
+def _literal_sort_key(lit: Literal) -> tuple[str, str, str, bool, str, str, str]:
+    """Deterministic ordering that is safe for optional provenance fields."""
+    return (
+        lit.predicate,
+        lit.subject,
+        lit.object,
+        lit.negated,
+        lit.perspective or "",
+        lit.story or "",
+        lit.source or "",
+    )
+
+
 class RelationalTableau:
     """Explainable relational tableau over ontology-governed binary relations.
 
@@ -69,7 +82,7 @@ class RelationalTableau:
                     )
                 )
 
-        return TableauResult(not clashes, sorted(closure), clashes, derivations)
+        return TableauResult(not clashes, sorted(closure, key=_literal_sort_key), clashes, derivations)
 
     def verify(self, facts: Iterable[Literal], query: Literal) -> BidirectionalVerification:
         """Verify q and its opposing direction without assuming closed-world negation.
