@@ -36,12 +36,24 @@ jobs:
             --limit 20 \
             --out results/magic_hf_pilot_summary.json \
             --loc-export results/magic_hf_pilot_loc_blinded.json
+      - name: Require at least one successful HF model
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('results/magic_hf_pilot_summary.json').read_text())
+          models = data.get('models', [])
+          if not models:
+              raise SystemExit(f"No HF model completed successfully. Failures: {data.get('failures', [])}")
+          print(f"Successful HF models: {len(models)}")
+          PY
       - name: Analyze paired method effects
         run: |
           python scripts/analyze_magic_peer_matrix.py \
             --cache-dir results/magic_peer_matrix \
             --out results/magic_hf_pilot_paired_stats.json
       - name: Upload HF pilot results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: magic-hf-open-llm-pilot-20
