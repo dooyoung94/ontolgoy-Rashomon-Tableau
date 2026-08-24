@@ -19,13 +19,8 @@ from rashomon_tableau.openai_frontend import (
 from rashomon_tableau.peer_llm import client_from_environment
 
 MAGIC_BASE = "https://raw.githubusercontent.com/HYU-NLP/MAGIC/main/dataset/multi-hop"
-FILES = [
-    "1-multi-hop_conflict.json",
-    "2-multi-hop_conflict.json",
-    "3-multi-hop_conflict.json",
-    "4-multi-hop_conflict.json",
-]
-FIXED_PROTOCOL_VERSION = "fixed-v2"
+FILES = [f"{i}-multi-hop_conflict.json" for i in range(1, 5)]
+FIXED_PROTOCOL_VERSION = "fixed-v3"
 LOGICAL_CALLS_PER_ATTEMPT = 5
 
 
@@ -66,6 +61,11 @@ def _request_log(client) -> list[dict]:
     return value if isinstance(value, list) else []
 
 
+def _count_transport_retries(requests: list[dict]) -> int:
+    """Count only physical re-sends of an identical logical payload."""
+    return sum(1 for x in requests if int(x.get("transport_attempt", 1) or 1) > 1)
+
+
 def run_one_macro_attempt(client, context1: str, context2: str, max_hops: int, deberta) -> dict:
     """Run five logical provider calls; transport retries reuse the exact payload."""
     request_start = len(_request_log(client))
@@ -75,107 +75,96 @@ def run_one_macro_attempt(client, context1: str, context2: str, max_hops: int, d
     compute_final = compute_matched_finalize(client, context1, context2, compute_analysis.data)
     extracted = extract_claims(client, context1, context2)
     candidate_llm = build_rashomon_judgment(
-        client,
-        context1,
-        context2,
-        max_hops,
-        world_scorer=None,
-        extracted_response=extracted,
+        client, context1, context2, max_hops, world_scorer=None, extracted_response=extracted
     )
-    candidate_deberta = None
-    if deberta is not None:
-        candidate_deberta = build_rashomon_judgment(
-            client,
-            context1,
-            context2,
-            max_hops,
-            world_scorer=deberta,
-            extracted_response=extracted,
+    candidate_deberta = (
+        build_rashomon_judgment(
+            client, context1, context2, max_hops, world_scorer=deberta, extracted_response=extracted
         )
+        if deberta is not None
+        else None
+    )
 
-    shared_extraction_tokens = usage_total(extracted)
+    extraction_tokens = usage_total(extracted)
     batch_tokens = int(candidate_llm["usage"]["input_tokens"]) + int(candidate_llm["usage"]["output_tokens"])
     actual_requests = _request_log(client)[request_start:]
 
+    predictions = {
+        "direct": _prediction_view(direct.data),
+        "compute_matched_direct": _prediction_view(compute_final.data),
+        "rashomon_worlds_llm_scorer": _prediction_view(candidate_llm),
+    }
+    if candidate_deberta is not None:
+        predictions["rashomon_worlds_deberta_scorer"] = _prediction_view(candidate_deberta)
+
+    diagnostics = {
+        "compute_first_pass": compute_analysis.data,
+        "rashomon_llm": {
+            "candidate_queries": candidate_llm["candidate_queries"],
+            "evaluated_query_paths": candidate_llm["evaluated_query_paths"],
+            "world_scorer": candidate_llm["world_scorer"],
+            "decision_rule": candidate_llm.get("decision_rule"),
+            "scorer_input_policy": candidate_llm.get("scorer_input_policy"),
+            "best_contradiction_path": candidate_llm.get("best_contradiction_path"),
+            "candidates": candidate_llm.get("candidates", []),
+        },
+        "actual_requests": actual_requests,
+    }
+    if candidate_deberta is not None:
+        diagnostics["rashomon_deberta"] = {
+            "candidate_queries": candidate_deberta["candidate_queries"],
+            "evaluated_query_paths": candidate_deberta["evaluated_query_paths"],
+            "world_scorer": candidate_deberta["world_scorer"],
+            "decision_rule": candidate_deberta.get("decision_rule"),
+            "scorer_input_policy": candidate_deberta.get("scorer_input_policy"),
+            "best_contradiction_path": candidate_deberta.get("best_contradiction_path"),
+            "candidates": candidate_deberta.get("candidates", []),
+        }
+
+    condition_cost = {
+        "direct": {"logical_llm_calls": 1, "llm_tokens": usage_total(direct)},
+        "compute_matched_direct": {
+            "logical_llm_calls": 2,
+            "llm_tokens": usage_total(compute_analysis) + usage_total(compute_final),
+            "fixed_two_stage": True,
+        },
+        "rashomon_worlds_llm_scorer": {
+            "logical_llm_calls": 2,
+            "llm_tokens": extraction_tokens + batch_tokens,
+            "shared_extraction_physically_reused": True,
+            "batch_world_scoring": True,
+        },
+    }
+    if candidate_deberta is not None:
+        condition_cost["rashomon_worlds_deberta_scorer"] = {
+            "logical_llm_calls": 1,
+            "llm_tokens": extraction_tokens,
+            "shared_extraction_physically_reused": True,
+            "deberta_scoring": True,
+        }
+
     return {
-        "predictions": {
-            "direct": _prediction_view(direct.data),
-            "compute_matched_direct": _prediction_view(compute_final.data),
-            "rashomon_worlds_llm_scorer": _prediction_view(candidate_llm),
-            **(
-                {"rashomon_worlds_deberta_scorer": _prediction_view(candidate_deberta)}
-                if candidate_deberta is not None else {}
-            ),
-        },
-        "diagnostics": {
-            "compute_first_pass": compute_analysis.data,
-            "rashomon_llm": {
-                "candidate_queries": candidate_llm["candidate_queries"],
-                "evaluated_query_paths": candidate_llm["evaluated_query_paths"],
-                "world_scorer": candidate_llm["world_scorer"],
-                "decision_rule": candidate_llm.get("decision_rule"),
-                "best_contradiction_path": candidate_llm.get("best_contradiction_path"),
-                "candidates": candidate_llm.get("candidates", []),
-            },
-            **(
-                {
-                    "rashomon_deberta": {
-                        "candidate_queries": candidate_deberta["candidate_queries"],
-                        "evaluated_query_paths": candidate_deberta["evaluated_query_paths"],
-                        "world_scorer": candidate_deberta["world_scorer"],
-                        "decision_rule": candidate_deberta.get("decision_rule"),
-                        "best_contradiction_path": candidate_deberta.get("best_contradiction_path"),
-                        "candidates": candidate_deberta.get("candidates", []),
-                    }
-                }
-                if candidate_deberta is not None else {}
-            ),
-            "actual_requests": actual_requests,
-        },
+        "predictions": predictions,
+        "diagnostics": diagnostics,
         "physical_cost": {
-            "provider_calls": len(actual_requests) if actual_requests else LOGICAL_CALLS_PER_ATTEMPT,
+            "provider_calls": len(actual_requests),
             "provider_tokens": (
                 usage_total(direct)
                 + usage_total(compute_analysis)
                 + usage_total(compute_final)
-                + shared_extraction_tokens
+                + extraction_tokens
                 + batch_tokens
             ),
             "logical_provider_calls": LOGICAL_CALLS_PER_ATTEMPT,
+            "transport_retries": _count_transport_retries(actual_requests),
         },
-        "condition_cost": {
-            "direct": {"logical_llm_calls": 1, "llm_tokens": usage_total(direct)},
-            "compute_matched_direct": {
-                "logical_llm_calls": 2,
-                "llm_tokens": usage_total(compute_analysis) + usage_total(compute_final),
-                "fixed_two_stage": True,
-            },
-            "rashomon_worlds_llm_scorer": {
-                "logical_llm_calls": 2,
-                "llm_tokens": shared_extraction_tokens + batch_tokens,
-                "shared_extraction_physically_reused": True,
-                "batch_world_scoring": True,
-            },
-            **(
-                {
-                    "rashomon_worlds_deberta_scorer": {
-                        "logical_llm_calls": 1,
-                        "llm_tokens": shared_extraction_tokens,
-                        "shared_extraction_physically_reused": True,
-                        "deberta_scoring": True,
-                    }
-                }
-                if candidate_deberta is not None else {}
-            ),
-        },
+        "condition_cost": condition_cost,
     }
 
 
 def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | None) -> dict:
     model_cfg = dict(cfg["models"][model_key])
     if args.no_retries:
-        # Preserve the fixed logical-call protocol: no contract/regeneration retry.
-        # A model may explicitly allow same-payload transport retries for 5xx/504.
         model_cfg["max_retries"] = int(model_cfg.get("fixed_transport_retries", 0))
         model_cfg["contract_retries"] = 0
     client = client_from_environment(model_cfg)
@@ -183,7 +172,8 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
     cache_path = Path(args.cache_dir) / f"{model_key}.jsonl"
     failure_path = Path(args.cache_dir) / f"{model_key}.failures.jsonl"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    existing = {}
+
+    existing: dict[str, dict] = {}
     if cache_path.exists():
         for line in cache_path.read_text(encoding="utf-8").splitlines():
             if line.strip():
@@ -193,10 +183,8 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
     records: list[dict] = []
     row_failures: list[dict] = []
     processed = 0
-    failed_physical_calls = 0
     for filename in FILES:
-        rows = download_json(f"{MAGIC_BASE}/{filename}")
-        for row in rows:
+        for row in download_json(f"{MAGIC_BASE}/{filename}"):
             if args.limit and processed >= args.limit:
                 break
             key = (
@@ -217,7 +205,6 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
                 ]
             except Exception as exc:
                 actual_requests = _request_log(client)[row_request_start:]
-                failed_physical_calls += len(actual_requests)
                 failure = {
                     "key": key,
                     "file": filename,
@@ -225,6 +212,7 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
                     "model_key": model_key,
                     "error": str(exc),
                     "actual_requests": actual_requests,
+                    "transport_retries": _count_transport_retries(actual_requests),
                 }
                 with failure_path.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(failure, ensure_ascii=False) + "\n")
@@ -232,16 +220,15 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
                 processed += 1
                 continue
 
-            condition_names = list(macro_attempts[0]["predictions"])
+            names = list(macro_attempts[0]["predictions"])
             conditions = {
-                condition: aggregate_attempts([attempt["predictions"][condition] for attempt in macro_attempts])
-                for condition in condition_names
+                name: aggregate_attempts([x["predictions"][name] for x in macro_attempts])
+                for name in names
             }
-
-            condition_cost = {}
-            for condition in condition_names:
-                entries = [attempt["condition_cost"][condition] for attempt in macro_attempts]
-                condition_cost[condition] = {
+            condition_cost: dict[str, dict] = {}
+            for name in names:
+                entries = [x["condition_cost"][name] for x in macro_attempts]
+                condition_cost[name] = {
                     "logical_llm_calls": sum(int(x["logical_llm_calls"]) for x in entries),
                     "llm_tokens": sum(int(x["llm_tokens"]) for x in entries),
                 }
@@ -250,10 +237,13 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
                     "batch_world_scoring", "deberta_scoring",
                 ):
                     if any(bool(x.get(field)) for x in entries):
-                        condition_cost[condition][field] = True
+                        condition_cost[name][field] = True
 
-            physical_calls = sum(int(x["physical_cost"]["provider_calls"]) for x in macro_attempts)
-            physical_tokens = sum(int(x["physical_cost"]["provider_tokens"]) for x in macro_attempts)
+            actual_requests = [
+                req
+                for attempt in macro_attempts
+                for req in attempt["diagnostics"].get("actual_requests", [])
+            ]
             record = {
                 "key": key,
                 "file": filename,
@@ -267,13 +257,14 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
                 "conditions": conditions,
                 "cost": condition_cost,
                 "physical_provider_cost": {
-                    "calls": physical_calls,
-                    "tokens": physical_tokens,
+                    "calls": len(actual_requests),
+                    "tokens": sum(int(x["physical_cost"]["provider_tokens"]) for x in macro_attempts),
                     "logical_calls": args.attempts * LOGICAL_CALLS_PER_ATTEMPT,
+                    "transport_retries": _count_transport_retries(actual_requests),
                     "same_payload_transport_retries_allowed": int(model_cfg.get("max_retries", 0)),
                     "contract_retries_disabled": bool(args.no_retries),
                 },
-                "macro_diagnostics": [attempt["diagnostics"] for attempt in macro_attempts],
+                "macro_diagnostics": [x["diagnostics"] for x in macro_attempts],
                 "gold_audit_only": {
                     "original_triplet": row.get("original_triplet"),
                     "perturb_triplet": row.get("perturb_triplet"),
@@ -296,8 +287,11 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
     matched_id = id_rate("compute_matched_direct")
     llm_id = id_rate("rashomon_worlds_llm_scorer")
     deberta_id = id_rate("rashomon_worlds_deberta_scorer")
-    successful_physical_calls = sum(int(r["physical_provider_cost"]["calls"]) for r in records)
-    total_physical_tokens = sum(int(r["physical_provider_cost"]["tokens"]) for r in records)
+
+    success_calls = sum(int(r["physical_provider_cost"]["calls"]) for r in records)
+    failure_calls = sum(len(x.get("actual_requests", [])) for x in row_failures)
+    success_retries = sum(int(r["physical_provider_cost"].get("transport_retries", 0)) for r in records)
+    failure_retries = sum(int(x.get("transport_retries", 0)) for x in row_failures)
 
     return {
         "model_key": model_key,
@@ -313,10 +307,10 @@ def run_model(model_key: str, cfg: dict, args, deberta: DebertaWorldScorer | Non
         "delta_llm_vs_compute_matched_pp": 100 * (llm_id - matched_id) if llm_id is not None and matched_id is not None else None,
         "delta_deberta_vs_direct_pp": 100 * (deberta_id - direct_id) if deberta_id is not None and direct_id is not None else None,
         "delta_deberta_vs_llm_pp": 100 * (deberta_id - llm_id) if deberta_id is not None and llm_id is not None else None,
-        "physical_provider_calls": successful_physical_calls + failed_physical_calls,
-        "physical_provider_tokens": total_physical_tokens,
+        "physical_provider_calls": success_calls + failure_calls,
+        "physical_provider_tokens": sum(int(r["physical_provider_cost"]["tokens"]) for r in records),
         "expected_logical_calls_if_complete": processed * args.attempts * LOGICAL_CALLS_PER_ATTEMPT,
-        "transport_retry_count": max(0, successful_physical_calls + failed_physical_calls - len(records) * args.attempts * LOGICAL_CALLS_PER_ATTEMPT),
+        "transport_retry_count": success_retries + failure_retries,
         "loc_status": "pending blinded human scoring, matching MAGIC's manual LOC protocol",
         "cache": str(cache_path),
         "failure_log": str(failure_path) if row_failures else None,
@@ -356,7 +350,7 @@ def main():
     ap.add_argument("--max-hops", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--without-deberta", action="store_true")
-    ap.add_argument("--no-retries", action="store_true", help="Disable contract retries; configured same-payload transport retries may remain enabled.")
+    ap.add_argument("--no-retries", action="store_true", help="Disable contract retries; configured exact-payload transport retries may remain enabled.")
     ap.add_argument("--cache-dir", default="results/magic_peer_matrix")
     ap.add_argument("--out", default="results/magic_peer_matrix_summary.json")
     ap.add_argument("--loc-export", default="results/magic_peer_loc_blinded.json")
@@ -366,8 +360,7 @@ def main():
     selected = args.models or cfg.get("model_sets", {}).get(args.model_set, list(cfg["models"]))
     deberta = None if args.without_deberta else DebertaWorldScorer(cfg["discriminative_scorer"]["model"])
 
-    summaries = []
-    failures = []
+    summaries, failures = [], []
     for key in selected:
         try:
             summaries.append(run_model(key, cfg, args, deberta))
@@ -392,12 +385,13 @@ def main():
             "logical_provider_calls_per_attempt": LOGICAL_CALLS_PER_ATTEMPT,
             "logical_provider_call_cap": logical_cap,
             "contract_retries_disabled": bool(args.no_retries),
-            "transport_retry_policy": "Only explicitly configured transient transport retries resend the exact same payload; they do not add logical model calls.",
+            "transport_retry_policy": "All HF pilot models may resend an identical payload for configured transient transport errors; these physical retries do not add logical model calls.",
         },
         "primary_comparison": "same-model candidate-path LLM scorer vs same-model fixed two-stage compute-matched direct baseline",
-        "candidate_space_control": "LLM and DeBERTa scoring conditions share the exact same claim extraction and candidate paths per macro attempt.",
+        "candidate_space_control": "LLM and DeBERTa share the same extracted claims, candidate paths, and metadata-free semantic scorer text.",
         "decision_rule": "existential_dominant_path_contradiction",
-        "world_marginal_role": "diagnostic/ablation only; it does not control the MAGIC binary conflict decision",
+        "scorer_input_policy": "shared_semantic_triples_without_provenance_metadata",
+        "world_marginal_role": "Rashomon/possible-world marginal is diagnostic and ablation-only; it does not control the MAGIC binary conflict decision.",
         "loc_protocol": "blind human exact-localization scoring; automatic LOC is intentionally not used",
         "metric_warning": "Released MAGIC multi-hop files used here contain conflict cases, so automated ID is conflict recall rather than official full-dataset ID accuracy.",
     }
