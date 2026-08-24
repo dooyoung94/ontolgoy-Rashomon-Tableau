@@ -27,7 +27,7 @@ jobs:
         shell: bash
         run: |
           test -n "$HF_TOKEN" || { echo 'HF_TOKEN repository secret is missing'; exit 1; }
-      - name: Run bounded HF contract smoke test (GPT-OSS, Qwen3, Llama 3.3)
+      - name: Run bounded HF contract smoke test (Command A first, GPT-OSS, Qwen3)
         run: |
           python scripts/smoke_hf_contracts.py \
             --model-set hf_open_llms \
@@ -46,8 +46,8 @@ jobs:
           print('Hard provider request cap:', data['hard_provider_request_cap'])
           print('Retries enabled:', data['retries_enabled'])
           print('Task budgets:', data.get('task_budgets'))
-          for model in data['models']:
-              print(model['model_key'], model['successful_calls'], '/ 3', 'all_ok=', model['all_contracts_ok'])
+          for index, model in enumerate(data['models'], start=1):
+              print(index, model['model_key'], model['successful_calls'], '/ 3', 'all_ok=', model['all_contracts_ok'])
           PY
       - name: Upload HF smoke results
         if: always()
