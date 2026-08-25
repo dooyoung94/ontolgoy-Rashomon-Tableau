@@ -1,0 +1,52 @@
+name: MAGIC Conflict Evidence Preservation Ablation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/magic-conflict-preservation-ablation.yml'
+      - 'scripts/evaluate_magic_conflict_preservation.py'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  ablation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frozen MAGIC DeBERTa artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: magic-deberta-worlds
+          run-id: 32730398659
+          github-token: ${{ github.token }}
+          path: source_artifact
+
+      - name: Evaluate conflict evidence preservation policies
+        run: |
+          python scripts/evaluate_magic_conflict_preservation.py \
+            --input source_artifact/magic_deberta_worlds_metrics.json \
+            --output results/magic_conflict_preservation_ablation.json
+
+      - name: Show key comparison
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('results/magic_conflict_preservation_ablation.json').read_text())
+          print(json.dumps(d['protocol'], indent=2))
+          for name in ['top1','top3_tog_style','top5','rashomon_add_eps_0.03','rashomon_add_eps_0.05','rashomon_add_eps_0.10','rashomon_relative_loss_0.25','rashomon_relative_loss_0.50','no_pruning']:
+              x=d['policies'][name]['recoverable_queries']
+              print(name, 'survival=', x['gold_conflict_path_survival'], 'loss=', x['conflict_information_loss'], 'avg_selected=', x['avg_selected_paths'])
+          print(json.dumps(d['comparisons'], indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: magic-conflict-preservation-ablation
+          path: results/magic_conflict_preservation_ablation.json
+          retention-days: 90
