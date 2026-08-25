@@ -80,7 +80,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e '.[all]'
-      - name: Run ${{ matrix.variant }}
+      - name: Run ${{ matrix.variant }} relation mask
         env:
           HF_HUB_DISABLE_XET: '1'
           TOKENIZERS_PARALLELISM: 'false'
@@ -89,7 +89,8 @@ jobs:
           python scripts/run_openrca2_ablation.py \
             --data artifacts/ops_lite_20.jsonl \
             --out results/${{ matrix.variant }}.json \
-            --dataset-id 'anon-ops/ops-lite:20:telemetry_only_v1' \
+            --dataset-id 'anon-ops/ops-lite:20:relation_mask_v1' \
+            --mask-mode relation \
             --mask-ratio 0.40 \
             --seed 42 \
             --variant '${{ matrix.variant }}' \
@@ -101,7 +102,7 @@ jobs:
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: result-${{ matrix.variant }}
+          name: relation-result-${{ matrix.variant }}
           path: results/${{ matrix.variant }}.json
           retention-days: 7
 
@@ -112,10 +113,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: result-*
+          pattern: relation-result-*
           path: results
           merge-multiple: true
-      - name: Aggregate A0-A4
+      - name: Aggregate relation-mask A0-A4
         run: |
           python - <<'PY'
           import json
@@ -128,19 +129,22 @@ jobs:
               s=r['summary']
               rows.append({
                   'variant':v,
+                  'relation_accuracy':s.get('relation_accuracy'),
+                  'relation_precision':s.get('relation_precision'),
+                  'relation_recall':s.get('relation_recall'),
+                  'relation_f1':s.get('relation_f1'),
                   'node_f1':s.get('node_f1'),
                   'edge_f1':s.get('edge_f1'),
                   'path_reachability':s.get('process_path_reachability'),
                   'root_hit_at_1':s.get('root_hit_at_1'),
                   'root_hit_at_3':s.get('root_hit_at_3'),
-                  'missing_edge_f1':s.get('missing_edge_f1'),
               })
-          print('A0_A4_RESULTS')
+          print('RELATION_MASK_A0_A4_RESULTS')
           print(json.dumps(rows, indent=2))
           json.dump(rows, open('results/summary.json','w'), indent=2)
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: ops-lite-20-benchmark-results
+          name: ops-lite-20-relation-mask-results
           path: results
           retention-days: 14
