@@ -42,7 +42,7 @@ jobs:
             --epsilon 0.05 \
             --limit 50 \
             --batch-size 32 \
-            --local-neighborhood-cap 256 \
+            --local-neighborhood-cap 64 \
             --device cpu \
             --output results/wn18rr_multihop_local_tableau_pilot_50.json
       - name: Show summary
@@ -56,7 +56,7 @@ jobs:
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: wn18rr-multihop-local-tableau-50-pilot
+          name: wn18rr-multihop-local-tableau-50-pilot-cap64
           path: |
             results/wn18rr_multihop_local_tableau_pilot_50.json
             data/kg_benchmarks/WN18RR/multihop_test.jsonl
