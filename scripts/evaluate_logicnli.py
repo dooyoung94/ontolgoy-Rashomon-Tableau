@@ -39,7 +39,6 @@ def local_expr_matches(expr: dict, state: set[Atom], person: str) -> bool:
         if subj == 'all':
             vals.append(atom(person, pred, sign) in state)
         elif subj == 'exist':
-            # handled by global_expr_matches
             return False
         else:
             vals.append(atom(subj, pred, sign) in state)
@@ -53,17 +52,12 @@ def global_expr_matches(expr: dict, state: set[Atom], people: list[str]) -> tupl
     entries = expr['fact']
     has_all = any(e[0] == 'all' for e in entries)
     has_exist = any(e[0] == 'exist' for e in entries)
-
     if has_exist:
-        # LogicNLI existential templates express that at least one person satisfies
-        # the local conjunction/disjunction of existential predicates.
         vals_by_person = []
         for p in people:
             vals = []
             for subj, pred, sign in entries:
-                if subj == 'exist':
-                    vals.append(atom(p, pred, sign) in state)
-                elif subj == 'all':
+                if subj in {'exist', 'all'}:
                     vals.append(atom(p, pred, sign) in state)
                 else:
                     vals.append(atom(subj, pred, sign) in state)
@@ -71,30 +65,23 @@ def global_expr_matches(expr: dict, state: set[Atom], people: list[str]) -> tupl
             vals_by_person.append((p, ok))
         matched = [p for p, ok in vals_by_person if ok]
         return bool(matched), matched
-
     if has_all:
         matched = [p for p in people if local_expr_matches(expr, state, p)]
         return bool(matched), matched
-
     vals = [atom(subj, pred, sign) in state for subj, pred, sign in entries]
     ok = any(vals) if expr.get('conj') == 'or' else all(vals)
     return ok, []
 
 
 def derive_side(expr: dict, people: list[str], bound_people: list[str]) -> list[Atom] | None:
-    # A disjunctive consequent does not license choosing either disjunct under
-    # forward reasoning, so abstain from deriving it.
     if expr.get('conj') == 'or' and len(expr['fact']) > 1:
         return None
     out: list[Atom] = []
-    entries = expr['fact']
-    for subj, pred, sign in entries:
+    for subj, pred, sign in expr['fact']:
         if subj == 'all':
             targets = bound_people or people
             out.extend(atom(p, pred, sign) for p in targets)
         elif subj == 'exist':
-            # Existential conclusions require a witness that the dataset does not
-            # identify. We conservatively do not invent one.
             return None
         else:
             out.append(atom(subj, pred, sign))
@@ -105,8 +92,7 @@ def apply_direction(src: dict, dst: dict, state: set[Atom], people: list[str]) -
     ok, matched = global_expr_matches(src, state, people)
     if not ok:
         return set()
-    derived = derive_side(dst, people, matched)
-    return set(derived or [])
+    return set(derive_side(dst, people, matched) or [])
 
 
 def closure(instance: dict) -> set[Atom]:
@@ -135,8 +121,6 @@ def label_from_state(st: list, state: set[Atom], dual: bool) -> str:
     nq_true = nq in state
     if dual and q_true and nq_true:
         return 'self_contradiction'
-    # Single-path decision stops as soon as one support path for the statement is
-    # found, which is the exact information loss the Paradox label is designed to expose.
     if q_true:
         return 'entailment'
     if nq_true:
@@ -186,7 +170,6 @@ def main():
             direct.append(label_from_state(st, d, dual=True))
             single.append(label_from_state(st, c, dual=False))
             dual.append(label_from_state(st, c, dual=True))
-
     m_direct = metrics(gold,direct)
     m_single = metrics(gold,single)
     m_dual = metrics(gold,dual)
@@ -205,7 +188,7 @@ def main():
             'self_contradiction_f1':100*(m_dual['per_class']['self_contradiction']['f1']-m_single['per_class']['self_contradiction']['f1']),
         },
         'semantics_note':'LogicNLI defines Paradox/self_contradiction when both s and not-s are derivable. The dual-proof decision checks both proof directions instead of stopping after one supported path.',
-        'implementation_note':'This evaluator implements LogicNLI structured forward semantics for implication/equivalence, conjunction/disjunction antecedents, universal-variable templates, named constants, and existential antecedents. Disjunctive or existential consequents are handled conservatively without inventing a witness/disjunct.'
+        'implementation_note':'Structured forward evaluator for implication/equivalence, conjunction/disjunction antecedents, universal-variable templates, named constants, and existential antecedents. Disjunctive or existential consequents are conservative.'
     }
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
