@@ -40,7 +40,7 @@ def _retry_download(url: str, path: Path, max_attempts: int = 6) -> None:
     raise RuntimeError(f"download failed after {max_attempts} attempts: {url}") from last_error
 
 
-def _standard_case(name: str, cache: Path) -> RcaCase:
+def _standard_case(name: str, cache: Path, manifest_root_services: list[str]) -> RcaCase:
     folder = cache / name
     files = [
         "causal_graph.json", "env.json",
@@ -60,9 +60,8 @@ def _standard_case(name: str, cache: Path) -> RcaCase:
     normal_logs = base._load_parquet(folder / "normal_logs.parquet")
     abnormal_logs = base._load_parquet(folder / "abnormal_logs.parquet")
 
-    # The standard OpenRCA2 agent may inspect both normal and abnormal traces.
-    # Reconstruct only structural endpoint connectivity from their union; no
-    # gold causal label is used to build this candidate graph.
+    # Standard OpenRCA2 agents can inspect both normal and abnormal telemetry.
+    # This is structural endpoint discovery only; no causal label is imported.
     trace_union = pd.concat([normal_traces, abnormal_traces], ignore_index=True, sort=False)
     known_edges = base._trace_dependency_edges(trace_union)
     abnormal_start = float(env.get("ABNORMAL_START", 0.0))
@@ -76,9 +75,19 @@ def _standard_case(name: str, cache: Path) -> RcaCase:
         abnormal_start,
     )
     symptoms = base._symptoms(known_edges, evidence)
-    gold_roots, gold_edges, gold_alarms = base._gold_from_causal_graph(graph)
-    if not gold_roots or not gold_edges:
-        raise RuntimeError(f"curated case missing PAVE service gold: {name}")
+
+    # The 500-case release is manifest-driven. Its service-level root GT is
+    # manifest.root_services. causal_graph.root_causes may be expressed as a
+    # pod/container component that is intentionally absent from
+    # component_to_service, so it is not a reliable service-level root parser.
+    _graph_roots, gold_edges, gold_alarms = base._gold_from_causal_graph(graph)
+    gold_roots = [str(x) for x in manifest_root_services if str(x).strip()]
+    if not gold_roots:
+        raise RuntimeError(f"manifest missing root_services: {name}")
+    if not gold_edges:
+        raise RuntimeError(f"causal graph missing service-level edges: {name}")
+    if not gold_alarms:
+        raise RuntimeError(f"causal graph missing service-level alarm nodes: {name}")
 
     return RcaCase(
         case_id=name,
@@ -91,8 +100,10 @@ def _standard_case(name: str, cache: Path) -> RcaCase:
         metadata={
             "dataset": "anon-ops/ops-lite",
             "fault_type": graph.get("fault_type"),
-            "adapter": "openrca2_standard_telemetry_v1",
+            "adapter": "openrca2_standard_telemetry_v2",
             "topology_source": "union(normal_traces, abnormal_traces)",
+            "root_gold_source": "manifest.root_services",
+            "edge_alarm_gold_source": "causal_graph.json",
             "gold_usage": "evaluation_only",
         },
     )
@@ -112,7 +123,7 @@ def build_range(out: Path, cache: Path, start: int, end: int) -> list[RcaCase]:
     for row in rows[start:end]:
         name = str(row["name"])
         try:
-            case = _standard_case(name, cache)
+            case = _standard_case(name, cache, list(row.get("root_services") or []))
         except Exception as exc:
             errors.append({"case_id": name, "error": f"{type(exc).__name__}: {exc}"})
             print("CASE_ERROR", name, errors[-1]["error"])
@@ -128,8 +139,9 @@ def build_range(out: Path, cache: Path, start: int, end: int) -> list[RcaCase]:
             "CASE", name,
             "known", len(case.known_edges),
             "evidence", len(case.evidence),
-            "gold_roots", len(case.gold_root_causes),
+            "gold_roots", case.gold_root_causes,
             "gold_edges", len(case.gold_edges),
+            "gold_alarms", len(case.gold_alarm_nodes),
         )
 
     stats = {
