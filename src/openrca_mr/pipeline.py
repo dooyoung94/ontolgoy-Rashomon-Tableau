@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .abduction import AbductiveRelationGenerator
-from .models import Hypothesis, RcaCase
+from .models import Hypothesis, RcaCase, REL_CAUSAL
 from .semantic import apply_semantic_scores
 
 
@@ -16,7 +16,7 @@ class RcaPrediction:
 
 
 class MissingRelationRCA:
-    """Composable RCA pipeline used by all ablations."""
+    """Composable relation-recovery + RCA pipeline used by all ablations."""
 
     def __init__(
         self,
@@ -42,8 +42,28 @@ class MissingRelationRCA:
             hypotheses.sort(key=lambda h: h.final_score, reverse=True)
 
         selected = [h for h in hypotheses if h.final_score >= self.edge_threshold]
-        predicted_edges = [h.edge.key() for h in selected]
-        roots = self._rank_roots(case, selected)
+
+        # Relation masking leaves part of the ontology visible. Preserve those
+        # known causal facts and infer only the masked/unknown relations.
+        known_causal = [edge for edge in case.known_edges if edge.relation == REL_CAUSAL]
+        predicted_edges = [edge.key() for edge in known_causal]
+        predicted_edges.extend(h.edge.key() for h in selected)
+
+        # Root ranking should see both inferred and already-known causal edges.
+        root_hypotheses = list(selected)
+        for edge in known_causal:
+            root_hypotheses.append(
+                Hypothesis(
+                    edge=edge,
+                    evidence_ids=[],
+                    explanation="Known unmasked causal relation.",
+                    structural_score=1.0,
+                    temporal_score=1.0,
+                    anomaly_score=1.0,
+                    soft_logic_score=1.0,
+                )
+            )
+        roots = self._rank_roots(case, root_hypotheses)
         return RcaPrediction(
             case_id=case.case_id,
             ranked_hypotheses=hypotheses,
@@ -53,12 +73,7 @@ class MissingRelationRCA:
 
     @staticmethod
     def _rank_roots(case: RcaCase, hypotheses: list[Hypothesis]) -> list[str]:
-        """Rank root-like source nodes without using gold labels.
-
-        A plausible root is anomalous early, has strong outgoing causal mass,
-        and has little incoming causal support. This avoids ranking every middle
-        node of a high-scoring path as an equally likely root.
-        """
+        """Rank root-like source nodes without using gold labels."""
         symptoms = set(case.symptom_nodes)
         by_node = case.evidence_by_node()
         nodes = {h.edge.source for h in hypotheses if h.edge.source not in symptoms}
