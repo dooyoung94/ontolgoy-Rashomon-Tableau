@@ -13,16 +13,11 @@ class SemanticScore:
 
 
 class DebertaEvidenceScorer:
-    """NLI scorer for a causal hypothesis against its observed telemetry.
-
-    Gold root-cause/path annotations are never used. The premise is built only
-    from evidence attached to the candidate's endpoints and the candidate
-    explanation is used as the hypothesis sentence.
-    """
+    """NLI-based semantic support scorer over model-visible telemetry only."""
 
     DEFAULT_MODEL = "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
 
-    def __init__(self, model_name: str = DEFAULT_MODEL, device: str | None = None):
+    def __init__(self, model_name: str = DEFAULT_MODEL, device: str | None = None, batch_size: int = 16):
         try:
             import torch
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -37,6 +32,7 @@ class DebertaEvidenceScorer:
         self.device = torch.device(device)
         self.model.to(self.device)
         self.model.eval()
+        self.batch_size = batch_size
 
         labels = {int(k): str(v).lower() for k, v in self.model.config.id2label.items()}
         self.entail = self._label(labels, "entail")
@@ -51,28 +47,53 @@ class DebertaEvidenceScorer:
         raise RuntimeError(f"Unable to resolve {needle} label from {labels}")
 
     def score(self, case: RcaCase, hypothesis: Hypothesis) -> SemanticScore:
-        premise = self._premise(case, hypothesis)
-        encoded = self.tokenizer(
-            premise,
-            hypothesis.explanation,
-            return_tensors="pt",
-            truncation=True,
-            max_length=512,
-        )
-        encoded = {k: v.to(self.device) for k, v in encoded.items()}
-        with self.torch.no_grad():
-            probs = self.torch.softmax(self.model(**encoded).logits, dim=-1)[0].detach().cpu().tolist()
-        return SemanticScore(
-            support=float(probs[self.entail]),
-            contradiction=float(probs[self.contra]),
-            neutral=float(probs[self.neutral]),
+        return self.score_many(case, [hypothesis])[0]
+
+    def score_many(self, case: RcaCase, hypotheses: list[Hypothesis]) -> list[SemanticScore]:
+        if not hypotheses:
+            return []
+        results: list[SemanticScore] = []
+        for start in range(0, len(hypotheses), self.batch_size):
+            batch = hypotheses[start : start + self.batch_size]
+            premises = [self._premise(case, h) for h in batch]
+            claims = [self._claim(h) for h in batch]
+            encoded = self.tokenizer(
+                premises,
+                claims,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512,
+            )
+            encoded = {k: v.to(self.device) for k, v in encoded.items()}
+            with self.torch.no_grad():
+                probs = self.torch.softmax(self.model(**encoded).logits, dim=-1).detach().cpu().tolist()
+            for row in probs:
+                results.append(
+                    SemanticScore(
+                        support=float(row[self.entail]),
+                        contradiction=float(row[self.contra]),
+                        neutral=float(row[self.neutral]),
+                    )
+                )
+        return results
+
+    @staticmethod
+    def _claim(hypothesis: Hypothesis) -> str:
+        return (
+            f"The abnormal behavior at {hypothesis.edge.source} causally contributed "
+            f"to the later abnormal behavior at {hypothesis.edge.target}."
         )
 
     @staticmethod
     def _premise(case: RcaCase, hypothesis: Hypothesis) -> str:
         wanted = set(hypothesis.evidence_ids)
         selected = [e for e in case.evidence if e.evidence_id in wanted]
-        return " ".join(_evidence_text(e) for e in selected)
+        evidence = " ".join(_evidence_text(e) for e in selected)
+        return (
+            f"Telemetry evidence for a candidate path from {hypothesis.edge.source} "
+            f"to {hypothesis.edge.target}: {evidence}"
+        )
 
 
 class DeterministicEvidenceScorer:
@@ -82,18 +103,23 @@ class DeterministicEvidenceScorer:
         support = max(0.0, min(1.0, hypothesis.abductive_score))
         return SemanticScore(support=support, contradiction=1.0 - support, neutral=0.0)
 
+    def score_many(self, case: RcaCase, hypotheses: list[Hypothesis]) -> list[SemanticScore]:
+        return [self.score(case, h) for h in hypotheses]
+
 
 def apply_semantic_scores(case: RcaCase, hypotheses: list[Hypothesis], scorer) -> list[Hypothesis]:
-    for hypothesis in hypotheses:
-        score = scorer.score(case, hypothesis)
+    if hasattr(scorer, "score_many"):
+        scores = scorer.score_many(case, hypotheses)
+    else:
+        scores = [scorer.score(case, h) for h in hypotheses]
+    for hypothesis, score in zip(hypotheses, scores):
         hypothesis.semantic_support = score.support
         hypothesis.semantic_contradiction = score.contradiction
     return hypotheses
 
 
 def _evidence_text(e: Evidence) -> str:
-    if e.text:
-        return e.text
     state = "abnormal" if e.is_anomalous else "normal"
-    ts = f" at {e.timestamp}" if e.timestamp is not None else ""
-    return f"{e.node} has {state} {e.kind} signal {e.signal}{ts}; abnormality={e.abnormality:.3f}."
+    ts = f" at time {e.timestamp:.3f}" if e.timestamp is not None else ""
+    detail = e.text.strip() if e.text else f"{e.kind} signal {e.signal}"
+    return f"[{e.node}] {detail}; state={state}; abnormality={e.abnormality:.3f}{ts}."
