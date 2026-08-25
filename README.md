@@ -41,7 +41,8 @@ Rashomon preserves ambiguity; Tableau performs hard logical pruning. Semantic pl
 | Stage | Dataset | Purpose |
 |---|---|---|
 | A | DAFNA-EA Books | preliminary delayed-commitment evidence |
-| B | WN18RR, then FB15k-237 / UMLS | main multi-hop missing-relation experiment |
+| B1 | WN18RR | multi-hop relation scoring + Rashomon retention |
+| B2 | ontology-rich dataset / controlled contradiction set | Tableau consistency contribution |
 | C | MAGIC | downstream LLM ID/LOC validation |
 
 ### DAFNA preliminary result
@@ -64,8 +65,6 @@ Scorer: `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli`
 Candidate relations: 11  
 Rashomon epsilon: 0.05
 
-The evaluation subset contains held-out test triples whose head and tail remain connected by a directed 2-4 hop path in the train graph. Gold relation labels are evaluation-only.
-
 | Metric | Result |
 |---|---:|
 | Examples | 50 |
@@ -74,11 +73,9 @@ The evaluation subset contains held-out test triples whose head and tail remain 
 | Path-only Tableau gold retention | **42.0%** |
 | Path-only RT marginal Top-1 | **16.0%** |
 | Average Rashomon worlds | 3.82 |
-| Average path-only Tableau rejected worlds | **0.00** |
+| Average rejected worlds | 0.00 |
 
-Rashomon retained the gold relation for 21/50 examples while Top-1 was correct for 8/50: **13 additional gold relations, +26 percentage points absolute coverage**.
-
-### By hop
+Rashomon retained 21/50 gold relations while Top-1 recovered 8/50: **13 additional gold relations, +26 percentage points absolute coverage**.
 
 | Hop | n | Top-1 | Rashomon gold coverage |
 |---:|---:|---:|---:|
@@ -86,55 +83,73 @@ Rashomon retained the gold relation for 21/50 examples while Top-1 was correct f
 | 3 | 23 | 30.4% | **47.8%** |
 | 4 | 8 | 0.0% | **37.5%** |
 
-Result snapshot:
+Stored result:
 
 ```text
 results/wn18rr_multihop_completion_pilot_50.json
 ```
 
-## 4. What changed from MAGIC v4?
+## 4. Frozen-score Tableau-only ablation
 
-The v4 improvement was mainly **candidate retrieval + DeBERTa scoring**, not a measured Tableau gain.
+To isolate Tableau from the scorer, the executed DeBERTa scores from Run `32799621678` were frozen and reused. Candidate scores and the Rashomon set are therefore identical; only Tableau context changes.
 
-- v3 gold-relevant candidate coverage: about 25%
-- v4 usable candidate coverage after canonicalization / ontology-aware traversal: about 47-57%
-- v4 DeBERTa conditional scoring when the relevant path existed: about 88%
-- however, the old final decision still bypassed Rashomon/Tableau marginals
+Ablation Run: `32802219346`  
+Artifact: `9546885491`  
+Local context: selected path + ontology-relevant train facts touching query/path nodes, capped at 16 facts.
 
-Therefore v4 showed that better multi-hop retrieval and semantic scoring matter. It did **not** establish that Tableau itself improved final accuracy.
+| Metric | Path-only | Local-subgraph |
+|---|---:|---:|
+| Rashomon gold coverage | 42.0% | 42.0% |
+| Tableau gold retention | 42.0% | 42.0% |
+| RT Top-1 accuracy | 16.0% | 16.0% |
+| Avg rejected worlds | **0.00** | **0.00** |
+| Gold false-rejection rate | - | 0.0% |
+| Avg entropy | 1.066 | 1.066 |
+| Avg local fact count | - | 14.82 |
 
-## 5. Current Tableau ablation
+**Conclusion:** adding local graph context still produced no logical pruning. The bottleneck is not only missing context. WN18RR contains mostly positive lexical relations and provides few explicit negative, disjoint, incompatible, or other hard constraints capable of making a plausible candidate world UNSAT. Under the conservative ontology used here, most near-optimal candidates remain logically satisfiable.
 
-The first WN18RR pilot sent only the selected evidence path plus proposed relation into Tableau, so cross-path cycles and endpoint-neighborhood conflicts were invisible. This produced zero rejected worlds.
-
-The evaluator now compares two conditions while keeping the same DeBERTa scores and same Rashomon set:
+Therefore:
 
 ```text
-A. Path-only Tableau
-   selected path + proposed relation
-
-B. Local-subgraph Tableau
-   selected path
-   + ontology-relevant train facts touching h/t/path nodes
-   + proposed relation
+WN18RR -> good for relation prediction / path reasoning / Rashomon retention
+WN18RR -> weak benchmark for measuring Tableau pruning contribution
 ```
 
-The local neighborhood is bounded to keep transitive closure tractable. Current validation workflow: `WN18RR Multi-hop Rashomon-Tableau Pilot`.
+Stored result:
 
-Metrics added:
+```text
+results/wn18rr_tableau_only_ablation_50.json
+```
 
-- local Tableau gold retention
-- local RT Top-1 accuracy
-- wrong-world rejection precision
-- gold false-rejection rate
-- average rejected worlds
-- entropy before/after local logical pruning
+## 5. What MAGIC v4 actually showed
 
-## 6. WN18RR peer reference
+The v4 improvement was mainly **candidate retrieval + DeBERTa scoring**, not Tableau.
 
-Our 50-row experiment is a **multi-hop-only relation-masked subset**, so its raw percentages must not be presented as directly comparable to papers using the full WN18RR relation-prediction test protocol. The following values are peer references for the same broad `(h, ?, t)` relation-prediction task.
+- v3 gold-relevant candidate coverage: about 25%
+- v4 coverage after canonicalization / ontology-aware traversal: about 47-57%
+- v4 DeBERTa conditional scoring when a relevant path existed: about 88%
+- the final MAGIC binary decision still bypassed Rashomon/Tableau marginals
 
-Scientific Reports 2024, *A novel model for relation prediction in knowledge graphs exploiting semantic and structural feature integration* reports on WN18RR:
+Thus v4 established that retrieval and semantic scoring matter. It did not establish a causal Tableau gain.
+
+## 6. WN18RR peer relation-prediction reference
+
+Our 50-row set is a **hard multi-hop-only subset**, so its values are not apples-to-apples with papers evaluating the full WN18RR relation-prediction split. Peer results are used as scorer references, not as direct leaderboard claims.
+
+### Structure Enhanced Path Reasoning (2023)
+
+| Model | MRR | Hits@1 | Hits@3 |
+|---|---:|---:|---:|
+| TransE | 0.639 | 0.385 | 0.850 |
+| RotatE | 0.903 | 0.857 | 0.934 |
+| HAKE | 0.887 | 0.832 | 0.935 |
+| PathCon | 0.867 | 0.786 | 0.942 |
+| APR | 0.937 | 0.910 | 0.953 |
+| APR_Unified | **0.989** | **0.981** | **0.999** |
+| SPR_LSTM | 0.958 | 0.935 | 0.977 |
+
+### RP-ISS (Scientific Reports, 2024)
 
 | Model | MRR | Hits@1 | Hits@3 |
 |---|---:|---:|---:|
@@ -144,21 +159,19 @@ Scientific Reports 2024, *A novel model for relation prediction in knowledge gra
 | SimplE | 73.46 | 66.22 | 75.60 |
 | RP-ISS | **98.91** | **97.93** | **99.97** |
 
-Interpretation: generic DeBERTa is currently a weak relation-composition scorer on our hard multi-hop subset. The next controlled baseline must therefore include a trained relation-prediction/KGE scorer rather than treating DeBERTa as the performance ceiling.
+The peer literature makes one point clear: **generic DeBERTa at 16% Top-1 is not a competitive relation-prediction scorer.** The next WN18RR experiment must include a task-trained structural/path scorer such as RotatE/PathCon-style or another KGE/relation-composition baseline. Rashomon should then be tested on top of that stronger scorer.
 
-Standard WN18RR link-prediction papers that predict missing **entities** use MRR/Hits@K under `(h,r,?)` / `(?,r,t)` and are tracked separately; those scores are not directly comparable to our relation prediction.
+Note: standard WN18RR **entity link prediction** `(h,r,?)` / `(?,r,t)` is a different task and is not directly compared here.
 
-## 7. Research questions
+## 7. Current research decision
 
-**RQ1 - Delayed commitment:** does Rashomon retain the gold relation more often than early Top-1 selection?  
-Current pilot: provisionally yes, +26pp coverage.
+**Retain Rashomon.** The +26pp gold-retention signal is worth validating with stronger scorers and larger samples.
 
-**RQ2 - Logical filtering:** can Tableau reject wrong near-optimal worlds without rejecting gold worlds?  
-Current status: path-only unresolved; local-subgraph ablation in execution.
+**Do not claim Tableau gain on WN18RR.** Two controlled Tableau contexts both reject zero worlds.
 
-**RQ3 - Multi-hop difficulty:** how do Top-1, Rashomon coverage, and logical pruning change over 2/3/4 hops?
+**Move Tableau validation to an ontology-rich setting.** The next Tableau-specific benchmark should expose explicit hard constraints (incompatibility, disjointness, negative assertions, cardinality/type restrictions) through UMLS-derived semantics or a controlled contradiction-injection ablation.
 
-**RQ4 - Downstream value:** does a verified Rashomon-Tableau state improve MAGIC ID/LOC when supplied to an LLM?
+**Keep MAGIC downstream.** Once a verified reasoning state exists, test whether it improves LLM ID/LOC.
 
 ## 8. Implementation
 
@@ -167,9 +180,7 @@ src/rashomon_tableau/multihop_completion.py
 src/rashomon_tableau/kg_multihop_benchmark.py
 src/rashomon_tableau/ontology.py
 src/rashomon_tableau/tableau.py
-config/wn18rr_ontology_rules.yaml
-scripts/build_multihop_relation_benchmark.py
 scripts/evaluate_multihop_relation_completion.py
+scripts/reevaluate_tableau_from_pilot.py
+config/wn18rr_ontology_rules.yaml
 ```
-
-The measured evidence currently supports **Rashomon retention**. Tableau remains an empirical hypothesis until the local-subgraph ablation demonstrates selective pruning.
