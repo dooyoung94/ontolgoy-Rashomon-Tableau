@@ -6,7 +6,7 @@ on:
 
 concurrency:
   group: openrca-full-relation-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   unit:
@@ -14,68 +14,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install core and tests
-        run: pip install -e '.[test]'
-      - name: Run unit tests
-        run: pytest -q
+        with: {python-version: '3.11'}
+      - run: pip install -e '.[test]'
+      - run: pytest -q
 
   prepare_shard:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ops-lite-full]')
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     strategy:
       fail-fast: false
+      max-parallel: 5
       matrix:
-        include:
-          - shard: '00'
-            start: 0
-            end: 50
-          - shard: '01'
-            start: 50
-            end: 100
-          - shard: '02'
-            start: 100
-            end: 150
-          - shard: '03'
-            start: 150
-            end: 200
-          - shard: '04'
-            start: 200
-            end: 250
-          - shard: '05'
-            start: 250
-            end: 300
-          - shard: '06'
-            start: 300
-            end: 350
-          - shard: '07'
-            start: 350
-            end: 400
-          - shard: '08'
-            start: 400
-            end: 450
-          - shard: '09'
-            start: 450
-            end: 500
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: Install telemetry adapter dependencies
+        with: {python-version: '3.10'}
+      - name: Install adapter
         run: |
           python -m pip install --upgrade pip
           pip install -e .
           pip install 'pyarrow>=16'
-      - name: Scan manifest shard and normalize attributed cases
-        env:
-          HF_HUB_DISABLE_XET: '1'
+      - name: Normalize manifest shard with retry-safe downloads
+        env: {HF_HUB_DISABLE_XET: '1'}
         run: |
+          START=$(( ${{ matrix.shard }} * 50 ))
+          END=$(( START + 50 ))
           python scripts/build_ops_lite_cases_fast.py \
-            --start-index ${{ matrix.start }} \
-            --end-index ${{ matrix.end }} \
+            --start-index "$START" --end-index "$END" \
             --out artifacts/ops_lite_shard_${{ matrix.shard }}.jsonl
       - uses: actions/upload-artifact@v4
         with:
@@ -90,31 +57,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+        with: {python-version: '3.10'}
       - uses: actions/download-artifact@v4
         with:
           pattern: ops-lite-shard-*
           path: shards
           merge-multiple: true
-      - name: Install core
-        run: pip install -e .
-      - name: Merge all 500 manifest-row shards
+      - run: pip install -e .
+      - name: Merge and validate full controlled set
         run: |
-          python scripts/merge_ops_lite_shards.py \
-            --glob 'shards/*.jsonl' \
-            --out artifacts/ops_lite_full.jsonl \
-            --manifest-total 500
+          python scripts/merge_ops_lite_shards.py --glob 'shards/*.jsonl' \
+            --out artifacts/ops_lite_full.jsonl --manifest-total 500
           python - <<'PY'
           from openrca_mr.openrca2 import load_normalized_cases
-          cases = load_normalized_cases('artifacts/ops_lite_full.jsonl')
-          assert cases, 'no adapter-valid cases produced'
+          cases=load_normalized_cases('artifacts/ops_lite_full.jsonl')
+          assert cases
           assert len({c.case_id for c in cases}) == len(cases)
           assert all(c.known_edges and c.evidence and c.gold_root_causes and c.gold_edges for c in cases)
           print('ADAPTER_VALID_CASES', len(cases))
-          print('AVG_KNOWN_EDGES', sum(len(c.known_edges) for c in cases) / len(cases))
+          print('AVG_KNOWN_EDGES', sum(len(c.known_edges) for c in cases)/len(cases))
           print('MAX_KNOWN_EDGES', max(len(c.known_edges) for c in cases))
-          print('AVG_EVIDENCE', sum(len(c.evidence) for c in cases) / len(cases))
+          print('AVG_EVIDENCE', sum(len(c.evidence) for c in cases)/len(cases))
           PY
       - uses: actions/upload-artifact@v4
         with:
@@ -128,7 +91,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ops-lite-full]')
     needs: prepare_full
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       max-parallel: 15
@@ -138,47 +101,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+        with: {python-version: '3.10'}
       - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
+        with: {distribution: temurin, java-version: '17'}
       - uses: actions/download-artifact@v4
-        with:
-          name: ops-lite-full-normalized
-          path: artifacts
-      - name: Install A0-A4 inference stack
+        with: {name: ops-lite-full-normalized, path: artifacts}
+      - name: Install inference stack
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e '.[nli,psl]'
-      - name: Run A0-A4 full controlled experiment
+      - name: Run A0-A4
         env:
           HF_HUB_DISABLE_XET: '1'
           TOKENIZERS_PARALLELISM: 'false'
           MASK: ${{ matrix.mask }}
           VARIANT: ${{ matrix.variant }}
         run: |
-          RATIO=$(python - <<'PY'
-          import os
-          print(int(os.environ['MASK']) / 100.0)
-          PY
-          )
+          RATIO=$(python -c "import os; print(int(os.environ['MASK'])/100.0)")
           python scripts/run_openrca2_ablation.py \
             --data artifacts/ops_lite_full.jsonl \
             --out results/ablation-r${MASK}-${VARIANT}.json \
             --dataset-id 'anon-ops/ops-lite:full:controlled_relation_mask_v2' \
-            --mask-mode relation \
-            --mask-ratio "$RATIO" \
-            --seed 42 \
-            --variant "$VARIANT" \
-            --limit 0
+            --mask-mode relation --mask-ratio "$RATIO" --seed 42 \
+            --variant "$VARIANT" --limit 0
           python - <<'PY'
-          import json, os
-          path = f"results/ablation-r{os.environ['MASK']}-{os.environ['VARIANT']}.json"
-          r = json.load(open(path))
-          print('RESULT', r['variant'], r['mask_ratio'], json.dumps(r['summary'], sort_keys=True))
+          import json,os
+          r=json.load(open(f"results/ablation-r{os.environ['MASK']}-{os.environ['VARIANT']}.json"))
+          print('RESULT', json.dumps(r['summary'], sort_keys=True))
           print('SCORE_DIAGNOSTICS', json.dumps(r['score_diagnostics'], sort_keys=True))
           PY
       - uses: actions/upload-artifact@v4
@@ -191,45 +141,30 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ops-lite-full]')
     needs: prepare_full
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       max-parallel: 6
       matrix:
         include:
-          - mask: '20'
-            model: HuggingFaceTB/SmolLM2-360M-Instruct
-            slug: smollm2-360m
-          - mask: '40'
-            model: HuggingFaceTB/SmolLM2-360M-Instruct
-            slug: smollm2-360m
-          - mask: '60'
-            model: HuggingFaceTB/SmolLM2-360M-Instruct
-            slug: smollm2-360m
-          - mask: '20'
-            model: Qwen/Qwen2.5-0.5B-Instruct
-            slug: qwen2.5-0.5b
-          - mask: '40'
-            model: Qwen/Qwen2.5-0.5B-Instruct
-            slug: qwen2.5-0.5b
-          - mask: '60'
-            model: Qwen/Qwen2.5-0.5B-Instruct
-            slug: qwen2.5-0.5b
+          - {mask: '20', model: 'HuggingFaceTB/SmolLM2-360M-Instruct', slug: 'smollm2-360m'}
+          - {mask: '40', model: 'HuggingFaceTB/SmolLM2-360M-Instruct', slug: 'smollm2-360m'}
+          - {mask: '60', model: 'HuggingFaceTB/SmolLM2-360M-Instruct', slug: 'smollm2-360m'}
+          - {mask: '20', model: 'Qwen/Qwen2.5-0.5B-Instruct', slug: 'qwen2.5-0.5b'}
+          - {mask: '40', model: 'Qwen/Qwen2.5-0.5B-Instruct', slug: 'qwen2.5-0.5b'}
+          - {mask: '60', model: 'Qwen/Qwen2.5-0.5B-Instruct', slug: 'qwen2.5-0.5b'}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+        with: {python-version: '3.10'}
       - uses: actions/download-artifact@v4
-        with:
-          name: ops-lite-full-normalized
-          path: artifacts
-      - name: Install Hugging Face inference stack
+        with: {name: ops-lite-full-normalized, path: artifacts}
+      - name: Install Hugging Face stack
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e '.[nli]'
-      - name: Run Hugging Face LLM controlled baseline
+      - name: Run HF LLM baseline
         env:
           HF_HUB_DISABLE_XET: '1'
           TOKENIZERS_PARALLELISM: 'false'
@@ -237,26 +172,17 @@ jobs:
           MODEL: ${{ matrix.model }}
           SLUG: ${{ matrix.slug }}
         run: |
-          RATIO=$(python - <<'PY'
-          import os
-          print(int(os.environ['MASK']) / 100.0)
-          PY
-          )
+          RATIO=$(python -c "import os; print(int(os.environ['MASK'])/100.0)")
           python scripts/run_openrca2_hf_llm_baseline.py \
             --data artifacts/ops_lite_full.jsonl \
             --out results/llm-r${MASK}-${SLUG}.json \
-            --model "$MODEL" \
-            --mask-ratio "$RATIO" \
-            --seed 42 \
-            --limit 0 \
-            --max-input-tokens 4096 \
-            --max-new-tokens 128
+            --model "$MODEL" --mask-ratio "$RATIO" --seed 42 --limit 0 \
+            --max-input-tokens 4096 --max-new-tokens 128
           python - <<'PY'
-          import json, os
-          path = f"results/llm-r{os.environ['MASK']}-{os.environ['SLUG']}.json"
-          r = json.load(open(path))
+          import json,os
+          r=json.load(open(f"results/llm-r{os.environ['MASK']}-{os.environ['SLUG']}.json"))
           print('MODEL_METADATA', json.dumps(r['model_metadata'], sort_keys=True))
-          print('RESULT', r['model'], r['mask_ratio'], json.dumps(r['summary'], sort_keys=True))
+          print('RESULT', json.dumps(r['summary'], sort_keys=True))
           PY
       - uses: actions/upload-artifact@v4
         with:
@@ -271,25 +197,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        with:
-          pattern: ablation-r*
-          path: results
-          merge-multiple: true
+        with: {pattern: 'ablation-r*', path: results, merge-multiple: true}
       - uses: actions/download-artifact@v4
-        with:
-          pattern: llm-r*
-          path: results
-          merge-multiple: true
+        with: {pattern: 'llm-r*', path: results, merge-multiple: true}
       - uses: actions/download-artifact@v4
-        with:
-          name: ops-lite-full-normalized
-          path: dataset
-      - name: Aggregate full experiment and A2-vs-A3 diagnostics
+        with: {name: ops-lite-full-normalized, path: dataset}
+      - name: Aggregate results and A2-vs-A3 diagnostics
         run: |
-          python scripts/aggregate_full_experiment.py \
-            --results-dir results \
-            --out-dir summary \
-            --dataset-meta dataset/ops_lite_full.jsonl.meta.json
+          python scripts/aggregate_full_experiment.py --results-dir results \
+            --out-dir summary --dataset-meta dataset/ops_lite_full.jsonl.meta.json
           cat summary/FULL_RELATION_MASK_RESULTS.md
       - uses: actions/upload-artifact@v4
         with:

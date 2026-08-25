@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
+import urllib.request
 from pathlib import Path
 
 import build_ops_lite_cases as adapter
@@ -9,6 +11,46 @@ from openrca_mr.openrca2 import dump_normalized_cases
 
 
 _original_case = adapter._case
+
+
+def _retrying_download(url: str, path: Path, max_attempts: int = 6) -> None:
+    """Atomic retry wrapper for transient Hugging Face download failures.
+
+    The full benchmark scans many case files in parallel. A connection reset must
+    not silently remove a benchmark case. Files are first written to a temporary
+    path and promoted only after a successful non-empty download.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.stat().st_size > 0:
+        return
+    tmp = path.with_name(path.name + ".part")
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if tmp.exists():
+                tmp.unlink()
+            urllib.request.urlretrieve(url, tmp)
+            if not tmp.exists() or tmp.stat().st_size <= 0:
+                raise IOError(f"empty download: {url}")
+            tmp.replace(path)
+            return
+        except Exception as exc:
+            last_error = exc
+            if tmp.exists():
+                tmp.unlink()
+            if path.exists() and path.stat().st_size == 0:
+                path.unlink()
+            if attempt == max_attempts:
+                break
+            delay = min(16, 2 ** (attempt - 1))
+            print(f"DOWNLOAD_RETRY attempt={attempt}/{max_attempts} delay={delay}s url={url} error={type(exc).__name__}: {exc}")
+            time.sleep(delay)
+    raise RuntimeError(f"download failed after {max_attempts} attempts: {url}") from last_error
+
+
+# Replace the adapter module's downloader as well, so _original_case() uses the
+# same retry/atomic semantics for all causal graph, env and parquet files.
+adapter._download = _retrying_download
 
 
 def _prefiltered_case(name: str, cache: Path):
@@ -33,12 +75,14 @@ def _build_manifest_range(out: Path, cache: Path, start_index: int, end_index: i
     skipped_non_attributed = 0
     skipped_invalid = 0
     skipped_error = 0
+    error_names: list[str] = []
     for row in rows[start:stop]:
         name = str(row["name"])
         try:
             case = _prefiltered_case(name, cache)
         except Exception as exc:
             skipped_error += 1
+            error_names.append(name)
             print(f"SKIP_ERROR {name}: {type(exc).__name__}: {exc}")
             continue
         if case is None:
@@ -55,8 +99,7 @@ def _build_manifest_range(out: Path, cache: Path, start_index: int, end_index: i
             "gold_edges", len(case.gold_edges),
         )
 
-    dump_normalized_cases(cases, out)
-    print(json.dumps({
+    stats = {
         "manifest_total": len(rows),
         "manifest_start": start,
         "manifest_end": stop,
@@ -65,8 +108,16 @@ def _build_manifest_range(out: Path, cache: Path, start_index: int, end_index: i
         "skipped_non_attributed": skipped_non_attributed,
         "skipped_invalid": skipped_invalid,
         "skipped_error": skipped_error,
+        "error_names": error_names,
         "out": str(out),
-    }, indent=2))
+    }
+    print(json.dumps(stats, indent=2))
+    # Network/file failures are not an adapter eligibility criterion. The full
+    # benchmark must fail rather than silently shrink because of I/O errors.
+    if skipped_error:
+        raise RuntimeError(f"{skipped_error} case downloads/parses failed after retries: {error_names}")
+
+    dump_normalized_cases(cases, out)
     return cases
 
 
