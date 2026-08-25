@@ -3,11 +3,37 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rashomon-tableau"
-version = "0.2.0"
-description = "Provenance-aware logical conflict localization and truth resolution from conflicting sources"
+name = "openrca-missing-relation"
+version = "0.1.0"
+description = "Abductive missing-relation recovery with DeBERTa semantic evidence scoring and probabilistic soft-logic inference for OpenRCA 2.0"
 requires-python = ">=3.10"
-dependencies = ["PyYAML>=6.0"]
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.1",
+]
+
+[project.optional-dependencies]
+nli = [
+  "torch>=2.2",
+  "transformers>=4.50,<5",
+  "sentencepiece>=0.2",
+]
+psl = ["pslpython>=2.3"]
+test = ["pytest>=8.0"]
+all = [
+  "torch>=2.2",
+  "transformers>=4.50,<5",
+  "sentencepiece>=0.2",
+  "pslpython>=2.3",
+  "pytest>=8.0",
+]
+
+[project.scripts]
+openrca-mr = "openrca_mr.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
