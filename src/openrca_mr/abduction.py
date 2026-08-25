@@ -6,12 +6,12 @@ from .models import CausalEdge, Evidence, Hypothesis, RcaCase
 
 
 class AbductiveRelationGenerator:
-    """Generate missing causal-edge hypotheses without reading gold labels.
+    """Generate competing causal-edge hypotheses from observable telemetry only.
 
-    Candidate generation uses only observable structure and telemetry:
-    structural proximity, anomaly strength, and upstream-to-downstream timing.
-    It intentionally generates multiple competing hypotheses instead of making
-    an early single-cause commitment.
+    Existing trace/dependency edges are *not* skipped: they still need to be
+    judged as causal propagation candidates. Missing relations can also be
+    proposed when strong temporal+anomaly evidence bridges a structural gap.
+    Gold RCA labels are never read here.
     """
 
     def __init__(self, max_structural_hops: int = 2, max_candidates: int = 128):
@@ -21,7 +21,7 @@ class AbductiveRelationGenerator:
     def generate(self, case: RcaCase) -> list[Hypothesis]:
         nodes = sorted({e.node for e in case.evidence} | set(case.symptom_nodes))
         by_node = case.evidence_by_node()
-        known = {(e.source, e.target) for e in case.known_edges}
+        observed_pairs = {(e.source, e.target) for e in case.known_edges}
         distances = self._distances(case.known_edges, nodes)
         hypotheses: list[Hypothesis] = []
 
@@ -30,7 +30,7 @@ class AbductiveRelationGenerator:
             if not src_ev:
                 continue
             for target in nodes:
-                if source == target or (source, target) in known:
+                if source == target:
                     continue
                 tgt_ev = by_node.get(target, [])
                 if not tgt_ev:
@@ -39,15 +39,20 @@ class AbductiveRelationGenerator:
                 structural = self._structural_score(source, target, distances)
                 temporal = self._temporal_score(src_ev, tgt_ev)
                 anomaly = self._anomaly_score(src_ev, tgt_ev)
-                # At least one independent clue is required. This avoids
-                # manufacturing a complete graph from unrelated observations.
-                if max(structural, temporal, anomaly) < 0.5:
+
+                # Structural vicinity is the normal candidate channel. When a
+                # relation was masked/missing, allow a bridge only with both
+                # strong temporal ordering and strong endpoint anomalies.
+                structurally_plausible = structural >= 0.65
+                evidence_bridge = temporal >= 0.8 and anomaly >= 0.7
+                if not (structurally_plausible or evidence_bridge):
                     continue
 
                 evidence_ids = sorted({x.evidence_id for x in [*src_ev, *tgt_ev]})
+                observed = (source, target) in observed_pairs or (target, source) in observed_pairs
                 explanation = (
-                    f"Observed evidence suggests a possible causal propagation "
-                    f"from {source} to {target}; structure={structural:.2f}, "
+                    f"Possible causal propagation from {source} to {target}; "
+                    f"observed_dependency={observed}, structure={structural:.2f}, "
                     f"temporal={temporal:.2f}, anomaly={anomaly:.2f}."
                 )
                 hypotheses.append(
@@ -67,8 +72,8 @@ class AbductiveRelationGenerator:
     def _distances(self, edges: list[CausalEdge], nodes: list[str]) -> dict[tuple[str, str], int]:
         adjacency: dict[str, set[str]] = defaultdict(set)
         for edge in edges:
-            # Structural dependency can be traversed both ways while generating
-            # hypotheses; direction is recovered from temporal evidence later.
+            # Dependency adjacency is undirected for candidate discovery because
+            # fault propagation can run opposite to the request/call direction.
             adjacency[edge.source].add(edge.target)
             adjacency[edge.target].add(edge.source)
 
@@ -88,11 +93,16 @@ class AbductiveRelationGenerator:
                     queue.append((nxt, depth + 1))
         return out
 
-    def _structural_score(self, source: str, target: str, distances: dict[tuple[str, str], int]) -> float:
+    @staticmethod
+    def _structural_score(source: str, target: str, distances: dict[tuple[str, str], int]) -> float:
         distance = distances.get((source, target))
         if distance is None:
             return 0.0
-        return 1.0 if distance == 1 else 0.65
+        if distance == 1:
+            return 1.0
+        if distance == 2:
+            return 0.65
+        return 0.0
 
     @staticmethod
     def _temporal_score(source: list[Evidence], target: list[Evidence]) -> float:
