@@ -6,14 +6,15 @@
     "candidate_queries": 618,
     "gold_conflict_path_recoverable_queries": 420,
     "gold_conflict_path_recoverability_ceiling": 0.3977272727272727,
-    "gold_definition": "MAGIC perturb_triplet provenance; gold_path attached only after DeBERTa scoring",
+    "gold_definition": "MAGIC perturb_triplet provenance; attached after DeBERTa scoring",
     "selection_score": "support + contradiction = 1 - unresolved",
+    "validity_definition": "retained path is task-valid iff gold_path=true (covers paired MAGIC perturb evidence)",
     "deberta_model": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
     "source_run": 32730398659,
     "source_artifact": 9521415589,
-    "ablation_run": 32815760029,
-    "ablation_artifact": 9551317704,
-    "ablation_digest": "sha256:f94720659fe26f1634288ad8c572fdd73ce311b9a791d9ba248aef78c281b85a"
+    "validity_ablation_run": 32817516186,
+    "validity_ablation_artifact": 9551919328,
+    "validity_ablation_digest": "sha256:3f83fbe18da5c43c94e8f12493c166fd685c873f232cfd6d233f97e9c37bb4c8"
   },
   "deberta_semantic_verifier_prior_result": {
     "row_conflict_recall": 0.41496598639455784,
@@ -23,50 +24,52 @@
     "gain_vs_weak_lexical_query_conflict_pp": 14.678030303030305,
     "gain_vs_weak_lexical_structured_loc_pp": 8.333333333333334
   },
-  "overall_recoverable_420": {
-    "top1": {"survival": 0.8071428571428572, "information_loss": 0.19285714285714284, "avg_selected": 1.0},
-    "top3": {"survival": 0.9476190476190476, "information_loss": 0.05238095238095242, "avg_selected": 1.6},
-    "top5": {"survival": 0.9809523809523809, "information_loss": 0.01904761904761909, "avg_selected": 1.7857142857142858},
-    "rashomon_add_003": {"survival": 0.930952380952381, "information_loss": 0.06904761904761902, "avg_selected": 1.5952380952380953},
-    "rashomon_add_005": {"survival": 0.9476190476190476, "information_loss": 0.05238095238095242, "avg_selected": 1.7547619047619047},
-    "rashomon_add_010": {"survival": 0.9714285714285714, "information_loss": 0.02857142857142858, "avg_selected": 1.9404761904761905},
-    "no_pruning": {"survival": 1.0, "information_loss": 0.0, "avg_selected": 2.1476190476190475}
+  "overall_validity": {
+    "top1": {"survival": 0.8071428571, "precision": 0.8071428571, "recall": 0.8052256532, "f1": 0.8061831153, "avg_width": 1.0},
+    "top3": {"survival": 0.9476190476, "precision": 0.59375, "recall": 0.9477434679, "f1": 0.7301006404, "avg_width": 1.6},
+    "top5": {"survival": 0.9809523810, "precision": 0.5506666667, "recall": 0.9809976247, "f1": 0.7053800171, "avg_width": 1.7857142857},
+    "rashomon_add_005": {"survival": 0.9476190476, "precision": 0.5400271370, "recall": 0.9453681710, "f1": 0.6873920553, "avg_width": 1.7547619048},
+    "rashomon_add_010": {"survival": 0.9714285714, "precision": 0.5018404908, "recall": 0.9714964371, "f1": 0.6618122977, "avg_width": 1.9404761905},
+    "relative_loss_025": {"survival": 0.8380952381, "precision": 0.7426160338, "recall": 0.8361045131, "f1": 0.7865921788, "avg_width": 1.1285714286},
+    "boundary_top3_001": {"survival": 0.9785714286, "precision": 0.5530201342, "recall": 0.9786223278, "f1": 0.7066895369, "avg_width": 1.7738095238},
+    "boundary_top5_001": {"survival": 0.9880952381, "precision": 0.5292620865, "recall": 0.9881235154, "f1": 0.6893123447, "avg_width": 1.8714285714},
+    "no_pruning": {"survival": 1.0, "precision": 0.4667405765, "recall": 1.0, "f1": 0.6364323507, "avg_width": 2.1476190476}
   },
-  "high_branching": {
-    "paths_ge_3_n81": {
-      "top3": {"survival": 0.7283950617283951, "avg_selected": 3.0},
-      "top5": {"survival": 0.9012345679012346, "avg_selected": 3.962962962962963},
-      "rashomon_add_003": {"survival": 0.7654320987654321, "avg_selected": 3.5308641975308643},
-      "rashomon_add_005": {"survival": 0.8395061728395061, "avg_selected": 4.197530864197531},
-      "rashomon_add_010": {"survival": 0.9135802469135802, "avg_selected": 4.987654320987654}
-    },
-    "paths_ge_4_n46": {
-      "top3": {"survival": 0.5217391304347826, "avg_selected": 3.0},
-      "top5": {"survival": 0.8260869565217391, "avg_selected": 4.695652173913044},
-      "rashomon_add_003": {"survival": 0.8260869565217391, "avg_selected": 4.913043478260869},
-      "rashomon_add_005": {"survival": 0.8478260869565217, "avg_selected": 5.826086956521739},
-      "rashomon_add_010": {"survival": 0.9347826086956522, "avg_selected": 6.891304347826087}
-    },
-    "paths_ge_5_n32": {
-      "top3": {"survival": 0.375, "avg_selected": 3.0},
-      "top5": {"survival": 0.75, "avg_selected": 5.0},
-      "rashomon_add_003": {"survival": 0.8125, "avg_selected": 5.84375},
-      "rashomon_add_005": {"survival": 0.84375, "avg_selected": 7.0625},
-      "rashomon_add_010": {"survival": 0.96875, "avg_selected": 8.40625}
-    }
+  "high_branching_paths_ge_5": {
+    "n": 32,
+    "top3": {"survival": 0.375, "precision": 0.125, "recall": 0.375, "f1": 0.1875, "avg_width": 3.0},
+    "top5": {"survival": 0.75, "precision": 0.15, "recall": 0.75, "f1": 0.25, "avg_width": 5.0},
+    "rashomon_add_005": {"survival": 0.84375, "precision": 0.1194690265, "recall": 0.84375, "f1": 0.2093023256, "avg_width": 7.0625},
+    "rashomon_add_010": {"survival": 0.96875, "precision": 0.1152416357, "recall": 0.96875, "f1": 0.2059800664, "avg_width": 8.40625},
+    "boundary_top5_001": {"survival": 0.84375, "precision": 0.1377551020, "recall": 0.84375, "f1": 0.2368421053, "avg_width": 6.125},
+    "no_pruning": {"survival": 1.0, "precision": 0.1025641026, "recall": 1.0, "f1": 0.1860465116, "avg_width": 9.75}
   },
-  "secondary_deberta_defined_bipolar": {
-    "n": 114,
-    "top3_dual_side_retention": 0.6842105263157895,
-    "rashomon_add_010_dual_side_retention": 0.868421052631579,
-    "warning": "Secondary only. Side labels are defined by DeBERTa itself, so this is not external-gold evidence."
+  "paired_tests": {
+    "paths_ge_5_rashomon_010_vs_top5": {"n": 32, "rashomon_only_wins": 8, "top5_only_wins": 1, "both": 23, "neither": 0, "exact_two_sided_sign_p": 0.0390625},
+    "paths_ge_4_rashomon_005_vs_top3": {"n": 46, "rashomon_only_wins": 15, "top3_only_wins": 0, "both": 24, "neither": 7, "exact_two_sided_sign_p": 0.00006103515625},
+    "all_boundary_top3_001_vs_top3": {"n": 420, "boundary_only_wins": 13, "top3_only_wins": 0, "both": 398, "neither": 9, "exact_two_sided_sign_p": 0.000244140625},
+    "paths_ge_5_boundary_top5_001_vs_top5": {"n": 32, "boundary_only_wins": 3, "top5_only_wins": 0, "both": 24, "neither": 5, "exact_two_sided_sign_p": 0.25}
   },
-  "negative_findings": {
-    "overall_rashomon_not_uniformly_better": true,
-    "top5_overall_survival": 0.9809523809523809,
-    "rashomon_010_overall_survival": 0.9714285714285714,
-    "relative_loss_025_overall_survival": 0.8380952380952381,
-    "relative_loss_050_overall_survival": 0.8690476190476191,
-    "interpretation": "Near-optimal retention is most useful in high-branching/ambiguous regimes; calibration remains essential."
+  "score_ambiguity": {
+    "top2_margin_quartile_boundaries": {"q1": 0.0019663183, "q2": 0.0130690262, "q3": 0.0476895051},
+    "interpretation": "Low top-2 margin co-occurs with high branching. Current evidence supports branching as the robust risk factor; score ambiguity is descriptive and not independently causal yet."
+  },
+  "wn18rr_iterative_relative_loss": {
+    "run": 32813194834,
+    "artifact": 9550550657,
+    "digest": "sha256:8b52eecb980e610817c0a2e721765a7a6ca2e319feed40ff88e1a42c1804682a",
+    "n": 10,
+    "top3": {"success": 0.6, "regret": 0.4, "avg_width": 2.6666666667, "avg_expanded": 21.3},
+    "top5": {"success": 0.6, "regret": 0.4, "avg_width": 3.8787878788, "avg_expanded": 28.3},
+    "additive_010": {"success": 0.4, "regret": 0.6, "avg_width": 3.6176470588, "avg_expanded": 28.5},
+    "relative_loss_025": {"success": 0.5, "regret": 0.5, "avg_width": 4.0909090909, "avg_expanded": 31.4},
+    "relative_loss_050": {"success": 0.7, "regret": 0.3, "avg_width": 5.9666666667, "avg_expanded": 31.4},
+    "interpretation": "Scale-aware relative loss recovers the naive additive failure at epsilon=.50, but the gain costs more active paths."
+  },
+  "claims": {
+    "supported": "Fixed-width pruning loses externally recoverable conflict evidence, especially as candidate branching grows.",
+    "validity_tradeoff": "Higher preservation generally lowers external-gold precision because additional non-gold candidates are retained.",
+    "exploratory": "Boundary-aware delayed pruning improves survival with a smaller width increase than broad best-relative score bands; it remains an exploratory extension.",
+    "not_supported": "Rashomon-style pruning is uniformly better than Top-K, or score ambiguity independently causes pruning failure."
   }
 }
