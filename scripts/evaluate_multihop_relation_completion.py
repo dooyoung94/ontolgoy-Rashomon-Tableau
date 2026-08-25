@@ -43,6 +43,7 @@ def main() -> None:
     parser.add_argument("--epsilon", type=float, default=0.05)
     parser.add_argument("--min-score", type=float, default=0.0)
     parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--device", default=None)
     parser.add_argument("--output", default="results/wn18rr_multihop_completion_pilot.json")
     args = parser.parse_args()
@@ -60,17 +61,34 @@ def main() -> None:
     ontology = Ontology.from_yaml(args.ontology)
     scorer = DebertaWorldScorer(device=args.device)
 
+    prepared = []
+    all_queries: list[str] = []
+    all_evidence_groups: list[list[str]] = []
+    for row in benchmark_rows:
+        path = as_path(row)
+        evidence = path_evidence_text(path, mappings)
+        start = len(all_queries)
+        for relation in relations:
+            all_queries.append(candidate_relation_text(row["head"], relation, row["tail"], mappings))
+            all_evidence_groups.append(evidence)
+        prepared.append((row, path, start, len(all_queries)))
+
+    print(
+        f"batch scoring {len(benchmark_rows)} examples x {len(relations)} relations "
+        f"= {len(all_queries)} NLI pairs"
+    )
+    all_scores = scorer.score_many(
+        all_queries,
+        all_evidence_groups,
+        batch_size=max(1, args.batch_size),
+    )
+
     totals = defaultdict(float)
     by_hop: dict[int, defaultdict[str, float]] = defaultdict(lambda: defaultdict(float))
     records = []
 
-    for index, row in enumerate(benchmark_rows):
-        path = as_path(row)
-        evidence = path_evidence_text(path, mappings)
-        queries = [candidate_relation_text(row["head"], relation, row["tail"], mappings) for relation in relations]
-        evidence_groups = [evidence for _ in relations]
-        nli_scores = scorer.score_many(queries, evidence_groups, batch_size=min(32, len(relations)))
-
+    for index, (row, path, start, end) in enumerate(prepared):
+        nli_scores = all_scores[start:end]
         candidates = [
             RelationCandidate(
                 relation=relation,
@@ -144,8 +162,8 @@ def main() -> None:
                 },
             }
         )
-        if (index + 1) % 10 == 0:
-            print(f"evaluated {index + 1}/{len(benchmark_rows)}")
+        if (index + 1) % 10 == 0 or index + 1 == len(prepared):
+            print(f"assembled {index + 1}/{len(prepared)} results")
 
     def summarize(bucket: dict[str, float]) -> dict:
         n = bucket.get("n", 0.0)
@@ -167,6 +185,7 @@ def main() -> None:
             "candidate_relations": len(relations),
             "epsilon": args.epsilon,
             "min_score": args.min_score,
+            "batch_size": args.batch_size,
             "scorer": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
             "gold_policy": "gold relation used only after scoring for evaluation",
             "evidence_policy": "train-graph directed multi-hop path only",
