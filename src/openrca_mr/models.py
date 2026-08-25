@@ -50,17 +50,18 @@ class Hypothesis:
 
     @property
     def abductive_score(self) -> float:
-        return (self.structural_score + self.temporal_score + self.anomaly_score) / 3.0
+        # In the main relation-masking task, connectivity is already observed by
+        # the collector and therefore is eligibility, not evidence of causality.
+        # Causal support must come from incident-specific temporal/anomaly data.
+        return 0.55 * self.temporal_score + 0.45 * self.anomaly_score
 
     @property
     def final_score(self) -> float:
         if self.soft_logic_score is not None:
             return self.soft_logic_score
         if self.semantic_support is not None:
-            # Neutral-preserving NLI calibration. Generic NLI is often neutral on
-            # telemetry text, so semantic scoring must not erase a strong
-            # evidence/structure prior. Entailment raises the prior and
-            # contradiction lowers it; neutral evidence contributes ~0.
+            # Neutral-preserving semantic correction. DeBERTa can only move the
+            # telemetry prior through a causal-vs-noncausal preference margin.
             contradiction = self.semantic_contradiction or 0.0
             margin = self.semantic_support - contradiction
             return max(0.0, min(1.0, self.abductive_score + 0.25 * margin))
