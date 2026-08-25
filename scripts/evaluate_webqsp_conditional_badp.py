@@ -16,6 +16,7 @@ from __future__ import annotations
 """
 
 import importlib.util
+import sys
 from pathlib import Path
 
 
@@ -24,6 +25,8 @@ spec = importlib.util.spec_from_file_location("webqsp_base", BASE_PATH)
 if spec is None or spec.loader is None:
     raise RuntimeError(f"기존 WebQSP 평가기를 불러올 수 없습니다: {BASE_PATH}")
 base = importlib.util.module_from_spec(spec)
+# Python 3.12 dataclass가 동적 모듈의 __module__을 조회할 수 있도록 선등록한다.
+sys.modules[spec.name] = base
 spec.loader.exec_module(base)
 
 
@@ -69,11 +72,9 @@ def select(paths, state, scores):
     score_k1 = base.path_score(ranked[k], scores)
     margin = score_k - score_k1
 
-    # 경계가 충분히 분리되면 기존 Top-K를 그대로 사용한다.
     if margin > tau:
         return ranked[:k]
 
-    # 경계가 불확실할 때만 K번째 점수 주변을 제한적으로 추가 보존한다.
     threshold = score_k - delta
     return [p for p in ranked if base.path_score(p, scores) >= threshold][: state.max_width]
 
