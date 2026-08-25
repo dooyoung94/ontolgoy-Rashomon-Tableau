@@ -1,0 +1,65 @@
+name: WebQSP Conditional BADP 20
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/evaluate_webqsp_conditional_badp.py'
+      - 'scripts/evaluate_webqsp_pruning_wikidata.py'
+      - '.github/workflows/webqsp-conditional-badp-20.yml'
+
+jobs:
+  webqsp20:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 의존성 설치
+        run: |
+          pip install -e .
+          pip install -r requirements-nli.txt
+      - name: ToG 공식 WebQSP 데이터 내려받기
+        run: |
+          mkdir -p data/webqsp
+          curl -L --retry 3 \
+            https://raw.githubusercontent.com/DataArcTech/ToG/7ccbb92e17579f934bb778386230de47eca0ab67/data/WebQSP.json \
+            -o data/webqsp/WebQSP.json
+      - name: Wikidata 공개 API 호출 제한 완화
+        run: |
+          sed -i 's/sleep_seconds: float = 0.15, retries: int = 4/sleep_seconds: float = 1.5, retries: int = 8/' scripts/evaluate_webqsp_pruning_wikidata.py
+          sed -i 's/time.sleep((attempt + 1) \* 1.0)/time.sleep((attempt + 1) * 4.0)/' scripts/evaluate_webqsp_pruning_wikidata.py
+      - name: WebQSP 20질의 조건부 BADP 비교
+        run: |
+          python scripts/evaluate_webqsp_conditional_badp.py \
+            --webqsp data/webqsp/WebQSP.json \
+            --limit 20 --max-hops 2 --max-edges-per-node 10 \
+            --max-gold-answers 5 --batch-size 32 --device cpu \
+            --output results/webqsp_conditional_badp_20.json
+      - name: 결과 요약
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('results/webqsp_conditional_badp_20.json').read_text())
+          keys=[k for k in d['summary'] if k in {
+            'top3','top5','global_0.10','relative_0.50',
+            'badp_top3_0.005','badp_top5_0.010',
+            'conditional_badp_top3_tau_0.005_delta_0.005',
+            'conditional_badp_top3_tau_0.010_delta_0.005',
+            'conditional_badp_top3_tau_0.020_delta_0.010',
+            'conditional_badp_top5_tau_0.010_delta_0.010',
+            'conditional_badp_top5_tau_0.020_delta_0.010'
+          }]
+          for k in keys:
+              print(k, json.dumps(d['summary'][k], ensure_ascii=False))
+          print(json.dumps(d['diagnostics'], ensure_ascii=False, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webqsp-conditional-badp-20
+          path: results/webqsp_conditional_badp_20.json
+          retention-days: 90
