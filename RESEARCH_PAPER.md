@@ -2,175 +2,178 @@
 
 ## Abstract
 
-Multi-hop knowledge-graph reasoning systems control combinatorial search by repeatedly pruning candidate paths. This is necessary for efficiency, but pruning can irreversibly remove evidence that a later semantic or logical verifier would need. The problem is especially important when multiple plausible branches compete or when one branch carries evidence that contradicts the current claim.
+Multi-hop knowledge-graph reasoning systems repeatedly prune candidate paths to control combinatorial search. Pruning is necessary for efficiency, but it is irreversible: once a competing or contradictory evidence branch is removed, a downstream semantic or logical verifier cannot inspect it. This work separates **preservation** from **resolution** and asks a prior question: **when is it unsafe to prune a reasoning path?**
 
-This paper separates **preservation** from **resolution**. Rather than deciding which conflicting claim is ultimately true, we ask a prior question: **when is it unsafe to prune a reasoning path?** We compare fixed-width Top-K retention with Rashomon-inspired near-optimal score-band retention under frozen scorers and candidate spaces. We define conflict-path survival and conflict information loss using external benchmark provenance, so the semantic scorer does not define its own gold labels.
+We compare fixed-width Top-K retention with several uncertainty-aware alternatives under frozen candidate spaces and scorers. Conflict-path survival is evaluated using external MAGIC `perturb_triplet` provenance, not labels produced by the semantic scorer. We additionally measure the validity of retained sets through benchmark-gold precision, recall, F1, and search width, because preserving more paths is not useful if most additions are irrelevant noise.
 
-The empirical study uses two complementary settings. A WN18RR relation-level diagnostic initially shows that near-optimal retention can preserve more gold hypotheses than fixed Top-K at similar average width. However, a 10-query iterative WN18RR experiment provides an important negative result: naive additive epsilon pruning reaches only 40% search success versus 60% for Top-3 and Top-5, demonstrating that score-band retention is not automatically superior and depends on scorer calibration. We then evaluate conflict-evidence preservation on MAGIC multi-hop conflict cases using frozen DeBERTa scores. Of 1,056 queries, 420 contain an externally-gold contradictory path recoverable before pruning. On this full recoverable set, Top-5 is already strong at 98.10% survival, while epsilon=.10 reaches 97.14%. The key effect appears in high-branching regimes: with at least five candidate paths, Top-3 preserves 37.50% and Top-5 75.00% of gold conflict paths, whereas epsilon=.10 preserves 96.88%, at increased search width. These results support a regime-dependent claim: fixed-width pruning becomes brittle as candidate competition grows, and adaptive hypothesis preservation can substantially reduce irreversible conflict-evidence loss when ambiguity/branching is high.
+The experiments reveal a conditional rather than universal result. On 420 MAGIC queries where externally-gold contradictory evidence is recoverable before pruning, fixed Top-5 already preserves 98.10% of gold conflict paths. However, its survival falls to 75.00% when at least five candidate paths compete, while broad epsilon=.10 retention reaches 96.88%. This preservation gain is accompanied by lower gold precision and larger active sets. A new exploratory boundary-aware policy retains candidates close to the actual Top-K cutoff rather than the global best: on the full MAGIC recoverable set, Top-3 survival rises from 94.76% to 97.86% while average retained width increases only from 1.60 to 1.77. Separately, a 10-query iterative WN18RR pilot shows that naive additive score bands can fail, while a scale-aware relative-loss criterion reaches 70% search success versus 60% for Top-3/Top-5, at higher cost. Taken together, the evidence supports a regime-dependent thesis: **fixed-width pruning becomes brittle under high candidate branching, but effective delayed pruning must balance evidence preservation, retained-set validity, and search cost.**
 
 ---
 
 ## 1. Research problem
 
-Suppose a query or claim `q` induces multiple multi-hop paths:
+Suppose claim `q` induces multiple reasoning paths:
 
 ```text
 q
-├── p1 : evidence compatible with q
+├── p1 : supporting evidence
 ├── p2 : another plausible explanation
-├── p3 : evidence contradicting q
+├── p3 : contradictory evidence
 └── p4 : unresolved / weak evidence
 ```
 
-A pruning algorithm must choose which paths survive to the next search step. Once `p3` is removed, downstream conflict detection cannot recover it even if `p3` would have provided the decisive contradiction.
+The final task may eventually need to decide which side is true, but that decision is impossible if the relevant competing branch was deleted earlier.
 
-The paper therefore asks:
-
-> **Can a multi-hop reasoner control search cost without prematurely deleting competing or contradictory evidence that remains plausible under the current scorer?**
-
-This is intentionally different from final truth resolution.
+The current work therefore studies:
 
 ```text
-Current paper:  Preserve competing evidence
-Follow-up:      Resolve competing evidence
+Paper 1: Preserve competing evidence
+Paper 2: Resolve preserved competing evidence
 ```
+
+Research question:
+
+> **Can multi-hop search control combinatorial cost without prematurely destroying useful competing evidence?**
+
+The central failure mode is **pruning-caused information loss**, not final truth-classification error.
 
 ---
 
-## 2. Relationship to ToG-style search
+## 2. Relationship to ToG-style graph search
 
-ToG-style reasoning repeatedly searches and prunes candidate relations/entities. It already retains multiple candidates, so the contribution cannot be framed as `Top-1 versus multiple paths`.
+ToG-style reasoning already performs iterative graph exploration and pruning and keeps multiple candidates. Hence the contribution is not `Top-1 versus multiple paths`.
 
-Let `P_k` denote active partial paths at depth `k` and let
+For active set `P_k`:
 
 ```text
-C_(k+1) = Expand(P_k, G)
+C_(k+1) = Expand(P_k,G)
 ```
 
-be the candidate set after expansion. A scorer assigns
+and scorer:
 
 ```text
 s_theta(p,q)
 ```
 
-to each candidate.
-
-A fixed beam retains:
+fixed-width pruning is:
 
 ```text
 P_(k+1)^TopK = TopK(C_(k+1), s_theta, K)
 ```
 
-The cardinality boundary is independent of whether the score distribution is clear or ambiguous.
+The K/K+1 boundary is determined by cardinality, irrespective of whether the scores are clearly separated.
 
-The alternative considered here is near-optimal retention:
+### 2.1 Best-relative score band
 
 ```text
 s* = max_p s_theta(p,q)
-R_epsilon = {p in C | s_theta(p,q) >= s* - epsilon}
+R_eps = {p : s_theta(p,q) >= s* - eps}
 ```
 
-with an optional computational cap.
+This is the initial Rashomon-inspired preservation rule.
 
-The conceptual difference is:
+### 2.2 Relative-loss score band
+
+To reduce raw-score-scale sensitivity:
 
 ```text
-Fixed Top-K:
-    survive because rank <= K
-
-Near-optimal retention:
-    survive because current evidence does not separate the path
-    sufficiently from the best candidate
+L(p)=1-s(p)
+R_eps^loss = {p : L(p) <= (1+eps)L*}
 ```
 
-The paper does not assume the second policy is always better. Instead, it tests **which search regimes make fixed-width pruning risky**.
+### 2.3 Boundary-aware delayed pruning — exploratory
+
+The most direct fixed-beam failure occurs at the pruning boundary itself. Let `s_(K)` be the K-th ranked score. Then:
+
+```text
+B_(K,eps) = {p : s(p) >= s_(K) - eps}
+```
+
+when at least K candidates exist; otherwise all available candidates are retained.
+
+This means:
+
+```text
+Top-K
++
+only candidates nearly tied with the K-th cutoff
+```
+
+rather than retaining a broad band around the global best.
+
+The boundary variant is introduced as an **exploratory extension** motivated by the validity/noise analysis. It is not yet presented as the final validated method.
 
 ---
 
-## 3. Preservation before resolution
+## 3. Preservation and external-gold validity
 
-For a benchmark query `i`, let `G_i^-` be the externally identified family of paths that contain the contradictory evidence.
+For query `i`, let `G_i^-` denote externally identified contradictory paths and let `C_i` be the pre-pruning candidate set.
 
-Let `C_i` be the candidate set before pruning and `P_i` the selected set after pruning.
-
-A query is **recoverable** if:
+A query is recoverable iff:
 
 ```text
-G_i^- intersects C_i != empty
+G_i^- ∩ C_i != empty
 ```
 
-Primary evaluation is conditioned on recoverability. This is necessary because otherwise retrieval failure would be incorrectly counted as pruning failure.
+Only recoverable queries enter the primary pruning analysis. This prevents retrieval failures from being misclassified as pruning failures.
 
-Conflict-path survival is:
-
-```text
-CPS_i = 1[G_i^- intersects P_i != empty]
-```
-
-Conflict Information Loss is:
+For selected set `P_i`:
 
 ```text
+CPS_i = 1[G_i^- ∩ P_i != empty]
 CIL_i = 1 - CPS_i
 ```
 
-Dataset-level values are the means over recoverable queries.
+where CPS is Conflict-Path Survival and CIL is Conflict Information Loss.
 
-This gives a direct causal interpretation under frozen candidates and scores:
+### 3.1 Why survival alone is insufficient
+
+A no-pruning policy trivially maximizes survival. Therefore we additionally define retained-set quality against MAGIC's externally paired conflict evidence.
+
+Let retained candidate paths be `P` and benchmark-gold conflict paths be `G`:
 
 ```text
-gold evidence exists before prune
-             +
-only selection policy changes
-             +
-gold evidence absent after prune
-             ↓
-information loss caused by pruning
+Precision_gold = |P ∩ G| / |P|
+Recall_gold    = |P ∩ G| / |G|
+F1_gold       = harmonic_mean(Precision_gold, Recall_gold)
+NoiseRate     = 1 - Precision_gold
 ```
+
+Search cost is represented by average active width and, in iterative experiments, the number of expanded candidates.
+
+The real objective is therefore multi-dimensional:
+
+```text
+maximize conflict evidence preservation
+maximize retained-set validity
+minimize search cost
+```
+
+A crucial scope caveat is that MAGIC marks the paired injected conflict evidence, not every semantically useful alternative path. Thus `gold precision` is **task-specific preservation precision**, not universal truth/relevance precision.
 
 ---
 
-## 4. Semantic scorer
+## 4. Semantic scorer and non-circular evaluation
 
-The pruning framework is scorer-agnostic:
-
-```text
-s_theta = semantic NLI model
-s_theta = KGE / structural scorer
-s_theta = path model
-s_theta = LLM relevance scorer
-```
-
-The current experiments retain DeBERTa because prior MAGIC runs show that it is useful as a **semantic verifier**, even though it is weak as a generic WN18RR relation predictor.
-
-### 4.1 DeBERTa output
-
-For path `p` and claim `q`:
+DeBERTa provides semantic evidence scores:
 
 ```text
-D(p,q) = (S_p, C_p, U_p)
+D(p,q)=(S_p,C_p,U_p)
 ```
 
-where:
-
-- `S_p`: support probability,
-- `C_p`: contradiction probability,
-- `U_p`: unresolved probability.
-
-For the MAGIC preservation experiment we require a side-agnostic path relevance score. Therefore:
+For conflict preservation, support and contradiction are both informative. We therefore use the side-agnostic score:
 
 ```text
-r(p,q) = S_p + C_p = 1 - U_p
+r(p,q)=S_p+C_p=1-U_p
 ```
 
-This deliberately treats strong support and strong contradiction as equally worth preserving.
-
-Gold path labels are **not** derived from DeBERTa.
+Gold conflict paths are defined independently by MAGIC `original_triplet ↔ perturb_triplet` provenance and attached after scoring. Therefore DeBERTa does not generate the labels used to evaluate its own pruning output.
 
 ---
 
-## 5. Existing DeBERTa semantic-verifier evidence
+## 5. Prior evidence that DeBERTa is a meaningful semantic verifier
 
-Executed source run:
+Source run:
 
 ```text
 Run      32730398659
@@ -180,110 +183,84 @@ Rows     588
 Queries  1,056
 ```
 
-Compared with the prior weak lexical scoring condition:
+Compared with a weak lexical relation prior:
 
-| Metric | Weak lexical | DeBERTa | Gain |
+| Metric | Lexical | DeBERTa | Gain |
 |---|---:|---:|---:|
 | Row conflict recall | 22.79% | **41.50%** | **+18.71pp** |
 | Query conflict recall | 16.86% | **31.53%** | **+14.68pp** |
-| Structured row exact LOC | 7.14% | **15.48%** | **+8.33pp** |
+| Structured exact LOC | 7.14% | **15.48%** | **+8.33pp** |
 
-This is retained in the paper for one reason only:
-
-> **when candidate paths are available, DeBERTa provides meaningfully better semantic path discrimination than the weak lexical prior.**
-
-It does not establish end-to-end pruning superiority.
+This result is retained as **scorer-validity evidence**: when a useful candidate path is available, DeBERTa distinguishes semantically relevant conflict structure better than the weak lexical prior. It does not establish end-to-end graph-search superiority.
 
 ---
 
-## 6. Experiment A — WN18RR relation-hypothesis diagnostic
+## 6. Experiment A — WN18RR frozen relation-hypothesis diagnostic
 
-### 6.1 Protocol
+A 50-example hard 2–4-hop WN18RR subset scored all 11 relation candidates with DeBERTa, after which only the retention policy changed.
 
-A previously executed 50-example hard 2–4-hop WN18RR subset scored all 11 relation candidates with DeBERTa. The gold relation was evaluation-only. We froze those scores and changed only the retention policy.
+| Policy | Gold survival | Avg width |
+|---|---:|---:|
+| Top-1 | 16% | 1.00 |
+| Top-3 | 32% | 3.00 |
+| Top-5 | 40% | 5.00 |
+| Additive eps=.05 | 42% | 3.82 |
+| Additive eps=.10 | **58%** | 5.08 |
+| No prune | 100% | 11.00 |
 
-### 6.2 Result
+This established a candidate-retention signal but was not iterative graph search.
 
-| Policy | Gold survival | Pruning regret | Avg active hypotheses |
+---
+
+## 7. Experiment B — iterative WN18RR: calibration matters
+
+The pruning operator was then moved inside repeated 2–4 hop expansion. New edges were scored by DeBERTa, and path score was the mean edge support.
+
+### 7.1 Naive additive result
+
+| Policy | Search success | Pruning regret | Avg width |
 |---|---:|---:|---:|
-| Top-1 | 16% | 84% | 1.00 |
-| Top-3 | 32% | 68% | 3.00 |
-| Top-5 | 40% | 60% | 5.00 |
-| Rashomon eps=.05 | **42%** | **58%** | 3.82 |
-| Rashomon eps=.10 | **58%** | **42%** | 5.08 |
-| No pruning | 100% | 0% | 11.00 |
+| Top-3 | **60%** | **40%** | 2.67 |
+| Top-5 | **60%** | **40%** | 3.88 |
+| Additive eps=.05 | 40% | 60% | 2.65 |
+| Additive eps=.10 | 40% | 60% | 3.62 |
 
-The strongest preliminary comparison was:
+Thus raw `best - epsilon` does not automatically improve iterative search.
+
+### 7.2 Relative-loss result
+
+Executed run:
 
 ```text
-Top-5            40% survival / width 5.00
-Rashomon eps=.10 58% survival / width 5.08
+Run      32813194834
+Artifact 9550550657
+Digest   sha256:8b52eecb980e610817c0a2e721765a7a6ca2e319feed40ff88e1a42c1804682a
+n        10
 ```
 
-This motivated the pruning study, but it was only a **relation-hypothesis diagnostic**, not repeated path search.
-
----
-
-## 7. Experiment B — iterative WN18RR negative result
-
-We next placed the selection policy inside repeated multi-hop expansion.
-
-The incremental scorer evaluated new edges with DeBERTa and used mean edge support as the path score.
-
-10-query pilot:
-
-| Policy | Search success | Query pruning regret | Avg width | Avg expanded |
+| Policy | Search success | Pruning regret | Avg width | Avg expanded |
 |---|---:|---:|---:|---:|
-| Top-1 | 20% | 80% | 1.00 | 10.9 |
-| **Top-3** | **60%** | **40%** | 2.67 | 21.3 |
-| **Top-5** | **60%** | **40%** | 3.88 | 28.1 |
-| Additive Rashomon .05 | 40% | 60% | 2.65 | 23.7 |
-| Additive Rashomon .10 | 40% | 60% | 3.59 | 28.5 |
+| Top-3 | 60% | 40% | 2.67 | 21.3 |
+| Top-5 | 60% | 40% | 3.88 | 28.3 |
+| Additive eps=.10 | 40% | 60% | 3.62 | 28.5 |
+| Relative-loss eps=.25 | 50% | 50% | 4.09 | 31.4 |
+| **Relative-loss eps=.50** | **70%** | **30%** | **5.97** | 31.4 |
 
-### 7.1 Why this matters
-
-The result falsifies the naive claim:
-
-```text
-near-optimal retention is always better than fixed Top-K
-```
-
-Inspection showed cases in which the best support score itself was low. A fixed additive tolerance then became too narrow relative to score scale and removed viable paths.
-
-Therefore:
-
-> **a preservation rule is only as good as its scoring/calibration assumptions.**
-
-This negative result is retained explicitly in the paper.
+The scale-aware variant recovers the failure at `eps=.50`, but it does so by keeping substantially more states. Because `n=10`, this is a pilot and supports only the statement that **calibration changes the preservation/cost trade-off**, not a final performance claim.
 
 ---
 
-## 8. Experiment C — MAGIC external-gold conflict preservation
+## 8. Experiment C — MAGIC external-gold preservation and validity
 
-### 8.1 Why MAGIC
-
-WN18RR is useful for path/relation reasoning but weak as an explicit contradiction benchmark. MAGIC provides structured multi-hop conflict cases with paired:
+Latest executed ablation:
 
 ```text
-original_triplet
-perturb_triplet
+Run      32817516186
+Artifact 9551919328
+Digest   sha256:3f83fbe18da5c43c94e8f12493c166fd685c873f232cfd6d233f97e9c37bb4c8
 ```
 
-The original triple defines the claim side; the perturb chain identifies contradictory evidence independently from DeBERTa.
-
-This enables a non-circular preservation evaluation.
-
-### 8.2 Protocol
-
-Executed ablation:
-
-```text
-Run      32815760029
-Artifact 9551317704
-Digest   sha256:f94720659fe26f1634288ad8c572fdd73ce311b9a791d9ba248aef78c281b85a
-```
-
-Source:
+Data:
 
 ```text
 588 rows
@@ -292,245 +269,193 @@ Source:
 420 queries with >=1 externally-gold conflict path before pruning
 ```
 
-Thus the primary evaluation set is `n=420` recoverable queries.
+Thus primary evaluation is conducted on `n=420` recoverable queries with frozen candidate paths and DeBERTa scores.
 
-All candidate paths and DeBERTa scores are frozen. Only the selection policy changes.
+### 8.1 Overall preservation-validity-cost result
 
-Path-selection score:
+| Policy | Survival ↑ | Gold precision ↑ | Gold recall ↑ | F1 ↑ | Avg width ↓ |
+|---|---:|---:|---:|---:|---:|
+| Top-1 | 80.71% | **80.71%** | 80.52% | **80.62%** | **1.00** |
+| Top-3 | 94.76% | 59.38% | 94.77% | 73.01% | 1.60 |
+| Top-5 | 98.10% | 55.07% | 98.10% | 70.54% | 1.79 |
+| Additive eps=.05 | 94.76% | 54.00% | 94.54% | 68.74% | 1.75 |
+| Additive eps=.10 | 97.14% | 50.18% | 97.15% | 66.18% | 1.94 |
+| Relative-loss eps=.25 | 83.81% | 74.26% | 83.61% | 78.66% | 1.13 |
+| **Boundary Top-3+.01** | **97.86%** | 55.30% | **97.86%** | 70.67% | **1.77** |
+| Boundary Top-5+.01 | 98.81% | 52.93% | 98.81% | 68.93% | 1.87 |
+| No pruning | 100% | 46.67% | 100% | 63.64% | 2.15 |
 
-```text
-r(p) = S_p + C_p = 1 - U_p
-```
+Three observations follow.
 
-Gold:
+First, Top-1 has the highest benchmark-gold precision/F1 but loses 19.29% of recoverable conflict queries. It is clean but over-prunes.
 
-```text
-MAGIC perturb_triplet provenance
-```
+Second, broad epsilon retention raises preservation but lowers precision because it carries more non-gold alternatives. For example, eps=.10 retains 97.14% of conflict paths but precision falls to 50.18%.
 
-Gold is attached only after scoring/selection.
-
-### 8.3 Overall recoverable result
-
-| Policy | Conflict-path survival ↑ | Information loss ↓ | Avg selected paths |
-|---|---:|---:|---:|
-| Top-1 | 80.71% | 19.29% | 1.00 |
-| **Top-3** | **94.76%** | 5.24% | 1.60 |
-| **Top-5** | **98.10%** | **1.90%** | 1.79 |
-| Rashomon .03 | 93.10% | 6.90% | 1.60 |
-| Rashomon .05 | 94.76% | 5.24% | 1.75 |
-| Rashomon .10 | 97.14% | 2.86% | 1.94 |
-| No pruning | 100% | 0% | 2.15 |
-
-The aggregate result is deliberately not described as a Rashomon win. Most MAGIC queries in this recoverable set contain only a small number of paths; therefore Top-5 is close to no pruning.
-
-### 8.4 Candidate branching changes the result
-
-When candidate competition is larger, fixed cardinality becomes much more brittle.
-
-| Recoverable subset | n | Top-3 | Top-5 | Rashomon .03 | Rashomon .05 | Rashomon .10 |
-|---|---:|---:|---:|---:|---:|---:|
-| paths >=3 | 81 | 72.84% | 90.12% | 76.54% | 83.95% | **91.36%** |
-| paths >=4 | 46 | 52.17% | 82.61% | 82.61% | 84.78% | **93.48%** |
-| paths >=5 | 32 | 37.50% | 75.00% | 81.25% | 84.38% | **96.88%** |
-
-The Top-3 degradation is especially clear:
+Third, boundary-aware Top-3 provides an encouraging intermediate point:
 
 ```text
-overall recoverable: 94.76%
-paths >=3:           72.84%
-paths >=4:           52.17%
-paths >=5:           37.50%
+Top-3               94.76% survival / 1.60 width
+Boundary Top-3+.01  97.86% survival / 1.77 width
 ```
 
-Top-5 also degrades:
+It rescues 13 queries lost by Top-3 while Top-3 rescues none lost by the boundary variant. The exact paired sign test gives `p=0.000244`, but this must be interpreted as exploratory because the boundary rule and epsilon were examined after earlier ablations.
+
+### 8.2 High-branching regime
+
+Candidate count is the clearest current risk factor.
+
+Previously observed survival:
 
 ```text
-98.10% → 90.12% → 82.61% → 75.00%
+Top-3: 94.76% overall → 72.84% (>=3) → 52.17% (>=4) → 37.50% (>=5)
+Top-5: 98.10% overall → 90.12% (>=3) → 82.61% (>=4) → 75.00% (>=5)
 ```
 
-In contrast, epsilon=.10 remains:
+For `paths >=5` (`n=32`), adding retained-set validity reveals the full trade-off:
+
+| Policy | Survival ↑ | Gold precision ↑ | Gold F1 ↑ | Avg width ↓ |
+|---|---:|---:|---:|---:|
+| Top-3 | 37.50% | 12.50% | 18.75% | 3.00 |
+| **Top-5** | 75.00% | **15.00%** | **25.00%** | 5.00 |
+| Additive eps=.05 | 84.38% | 11.95% | 20.93% | 7.06 |
+| Additive eps=.10 | **96.88%** | 11.52% | 20.60% | 8.41 |
+| Boundary Top-5+.01 | 84.38% | 13.78% | 23.68% | 6.13 |
+| No pruning | 100% | 10.26% | 18.60% | 9.75 |
+
+This prevents an overclaim. Epsilon=.10 almost eliminates conflict-path loss, but at the cost of substantial noise and width. Top-5 retains fewer gold conflict queries but has the best gold-path F1 among these high-branching policies.
+
+Paired query-level survival for eps=.10 vs Top-5:
 
 ```text
-97.14% → 91.36% → 93.48% → 96.88%
+Rashomon-only wins: 8
+Top-5-only wins:    1
+Both:              23
+Neither:            0
+exact sign p = 0.0391
 ```
 
-This does not mean epsilon=.10 is free. On `paths >=5` it retains 8.41 paths on average, versus 5.0 for Top-5. The correct interpretation is:
-
-> **adaptive preservation trades additional search for substantially lower conflict-information loss in high-branching regimes.**
-
-### 8.5 Row-level preservation
-
-Among 176 rows for which every constituent query had a recoverable gold conflict path:
-
-| Policy | Exact row preservation |
-|---|---:|
-| Top-1 | 79.55% |
-| Top-3 | 94.32% |
-| Top-5 | **99.43%** |
-| Rashomon .03 | 93.18% |
-| Rashomon .05 | 95.45% |
-| Rashomon .10 | 96.59% |
-| No pruning | 100% |
-
-Again, full-set Top-5 is already near the recoverability ceiling. The paper therefore focuses on **where pruning becomes unsafe**, not on global average dominance.
+Again, this is exploratory (`n=32`, multiple policies examined).
 
 ---
 
-## 9. Secondary dual-side diagnostic
+## 9. Candidate branching vs score ambiguity
 
-A secondary analysis labels a candidate path as support-dominant or contradiction-dominant using the DeBERTa S/C/U outputs themselves. Among 114 queries where both DeBERTa-defined sides existed before pruning:
+We also measure top-2 semantic relevance margin as an ambiguity proxy. Quartile cut points among branching recoverable queries are approximately:
 
 ```text
-Top-3 dual-side retention       68.42%
-Rashomon eps=.10 retention      86.84%
+0.00197 / 0.01307 / 0.04769
 ```
 
-This is useful as a mechanism diagnostic but **not primary evidence**, because DeBERTa defines both the side labels and the score. The primary result remains the MAGIC-provenance conflict-path survival evaluation.
+Small margins occur disproportionately in queries with many candidate paths. Descriptive stratification suggests that near-tie preservation can help in these groups. However, current analysis does **not** establish score ambiguity as an independent causal factor once branching is considered.
+
+Therefore:
+
+```text
+SUPPORTED:
+high candidate branching → fixed-width pruning becomes brittle
+
+NOT YET ESTABLISHED:
+score ambiguity alone → pruning failure independent of branching
+```
+
+A larger controlled experiment should vary branching and score margin separately.
 
 ---
 
-## 10. Empirical claim supported so far
+## 10. Updated hypotheses
 
-The executed results support the following claim:
-
-> **Fixed-width pruning causes irreversible loss of recoverable conflicting evidence, and the risk grows sharply when many candidate paths compete. Near-optimal score-band retention can preserve substantially more conflict evidence in these high-branching regimes, but it incurs additional search cost and is not uniformly superior when the candidate set is small or the scorer is poorly calibrated.**
-
-This is intentionally narrower than:
-
-```text
-Rashomon always beats Top-K
-```
-
-and narrower than:
-
-```text
-we resolve conflicting claims
-```
-
----
-
-## 11. Hypotheses
-
-### H1 — Pruning-caused information loss
+### H1 — pruning-caused conflict loss
 
 For recoverable conflict evidence:
 
 ```text
-CIL(Top-K) > 0
+CIL_TopK > 0
 ```
 
-This is directly observed in MAGIC.
+This is directly supported in MAGIC.
 
-### H2 — Branching-risk hypothesis
+### H2 — branching sensitivity
 
 ```text
-CIL(Top-K | high branching)
->
-CIL(Top-K | low branching)
+CIL_TopK increases as candidate branching increases
 ```
 
-The executed MAGIC results strongly support this descriptive relationship.
+This is the strongest current empirical pattern.
 
-### H3 — Adaptive-preservation hypothesis
+### H3 — preservation-validity trade-off
 
-In high-branching regimes:
+Policies that broaden retention improve conflict-path recall but can reduce retained-set precision and increase cost.
 
-```text
-CPS(near-optimal retention)
->
-CPS(fixed Top-K)
-```
+The target is therefore a useful Pareto point, not maximal survival alone.
 
-for a corresponding increase in retained paths/search cost.
+### H4 — boundary-aware delayed pruning
 
-### H4 — Cost trade-off
+When candidates near the K-th cutoff are nearly tied, retaining those boundary-near candidates can recover conflict evidence more efficiently than broad best-relative preservation.
 
-Preservation must be evaluated jointly with:
+This hypothesis is **exploratory** and requires a larger pre-specified iterative experiment.
 
-```text
-active width
-expansion count
-model calls / token cost
-```
+### H5 — scorer independence
 
-### H5 — Scorer dependence
-
-A pruning policy can fail when its scores are poorly calibrated. The iterative WN18RR negative result establishes this as a required control rather than a theoretical footnote.
+The branching/preservation result should be repeated with at least one structural/path scorer before claiming scorer independence.
 
 ---
 
-## 12. What remains to prove
+## 11. What the paper can and cannot claim
 
-The current evidence is strong enough for a research direction, but a final paper still needs:
+### Supported
 
-1. larger iterative multi-hop runs rather than the current 10-query iterative pilot;
-2. an explicit score-ambiguity stratification, not only candidate-count stratification;
-3. at least one stronger structural/path scorer to test scorer independence;
-4. matched-cost comparisons or a Pareto frontier between preservation and search cost;
-5. statistical uncertainty / paired significance tests over the final evaluation set;
-6. ideally a closer ToG implementation using the same expansion/scoring interface.
+- Pruning can destroy externally recoverable conflicting evidence.
+- The risk is small when candidate sets are small but rises sharply under high branching.
+- DeBERTa provides useful semantic verification compared with a weak lexical prior.
+- Broad preservation can recover conflict evidence, but it introduces noise and cost.
+- Scale-aware scoring changes iterative pruning behavior.
 
-These are validation requirements, not changes to the core research question.
+### Not supported yet
 
----
-
-## 13. Follow-up paper: resolution
-
-The current paper deliberately outputs a preserved reasoning state:
-
-```text
-H(q) = {supporting / contradictory / unresolved candidate paths}
-```
-
-A follow-up can then study:
-
-```text
-H(q)
-  ↓
-Semantic verification
-  ↓
-Possible worlds
-  ↓
-Ontology constraints
-  ↓
-Tableau SAT / UNSAT
-  ↓
-Conflict resolution
-```
-
-Thus the earlier Tableau idea is not discarded. It moves to the logically subsequent question:
-
-> **Once competing hypotheses survive search, how should they be resolved?**
-
-The current paper establishes the prerequisite:
-
-> **A resolver cannot reason over evidence that pruning has already deleted.**
+- Rashomon-style pruning is universally better than Top-K.
+- DeBERTa is a competitive general KG-completion model.
+- Score ambiguity independently causes pruning failure.
+- Boundary-aware pruning is a final validated algorithm.
+- The current paper resolves which conflicting claim is true.
+- Current pilots constitute a full ToG reproduction or head-to-head KGQA benchmark.
 
 ---
 
-## 14. Reproducibility
+## 12. Next experiment
 
-Key files:
+The next decisive experiment should validate **boundary-aware delayed pruning inside iterative multi-hop search**, rather than only on frozen candidate sets.
 
-```text
-scripts/evaluate_pruning_policies.py
-scripts/evaluate_iterative_pruning_search_incremental.py
-scripts/evaluate_iterative_pruning_relative_loss.py
-scripts/evaluate_magic_deberta_worlds.py
-scripts/evaluate_magic_conflict_preservation.py
-
-results/wn18rr_pruning_policy_ablation_50.json
-results/magic_deberta_worlds_summary.json
-results/magic_conflict_preservation_summary.json
-
-.github/workflows/wn18rr-pruning-policy-ablation.yml
-.github/workflows/magic-conflict-preservation-ablation.yml
-```
-
-Current core principle:
+Pre-specify before evaluation:
 
 ```text
-Preserve first.
-Resolve later.
+Policies:
+- Top-3
+- Top-5
+- best-relative epsilon
+- relative-loss epsilon
+- boundary Top-3 + delta
+- boundary Top-5 + delta
+- no-prune upper bound
+
+Metrics:
+- viable/conflict path survival@hop
+- pruning regret@hop
+- external-gold precision / recall / F1
+- average active width
+- total expanded paths
+- final search success
 ```
+
+Evaluation requirements:
+
+1. increase high-branching sample size;
+2. fix epsilon/delta using development data, then freeze them for test;
+3. stratify by branching level;
+4. separately stratify score-margin ambiguity where sample size permits;
+5. use paired statistical tests on pre-specified comparisons;
+6. repeat with one stronger structural/path scorer;
+7. only then pass preserved competing hypotheses to the subsequent semantic/logical resolution study.
+
+The paper's working thesis is therefore:
+
+> **The relevant question in multi-hop reasoning is not simply how aggressively to prune, but when a fixed rank boundary becomes epistemically unsafe. In high-branching competing-evidence regimes, delayed pruning can preserve otherwise lost conflict evidence, but the retained set must be evaluated for validity and cost as well as survival.**
