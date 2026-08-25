@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "openrca-missing-relation"
 version = "0.1.0"
-description = "Abductive missing-relation recovery with DeBERTa semantic evidence scoring and probabilistic soft-logic inference for OpenRCA 2.0"
+description = "Abductive relation recovery with DeBERTa semantic evidence scoring and probabilistic soft-logic inference for OpenRCA 2.0"
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.26",
@@ -19,12 +19,14 @@ nli = [
   "sentencepiece>=0.2",
 ]
 psl = ["pslpython>=2.3"]
+llm = ["openai>=1.100"]
 test = ["pytest>=8.0"]
 all = [
   "torch>=2.2",
   "transformers>=4.50,<5",
   "sentencepiece>=0.2",
   "pslpython>=2.3",
+  "openai>=1.100",
   "pytest>=8.0",
 ]
 
