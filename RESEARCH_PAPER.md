@@ -1,364 +1,426 @@
-# Rashomon-Tableau: Uncertainty-Aware Multi-Hop Relation Completion over Incomplete Ontologies
+# Prune or Preserve? Rashomon Delayed Pruning for Multi-Hop Knowledge Graph Reasoning
 
 ## Abstract
 
-Knowledge graphs and ontologies are incomplete by construction. Two entities can be connected through several intermediate relations while their direct relation remains missing or ambiguous. Conventional completion methods typically rank candidate relations and commit to one Top-1 prediction. This can discard plausible alternatives and can also select a high-scoring relation that violates hard ontology constraints.
+Multi-hop knowledge-graph reasoning systems repeatedly expand candidate paths and prune them to control search cost. Fixed-width beam pruning is effective for efficiency, but it can remove plausible hypotheses when several candidates receive nearly indistinguishable scores. This paper studies a narrower question: **when should a multi-hop reasoner prune?**
 
-We propose **Rashomon-Tableau**, an uncertainty-aware multi-hop relation reasoning framework. The method keeps near-optimal `(multi-hop path, candidate relation)` interpretations as possible worlds, preserves them through an adaptive Rashomon set, checks them with ontology-guided Tableau reasoning, and marginalizes surviving worlds into a relation belief. Semantic plausibility and logical validity are deliberately separated: DeBERTa, KGE, path-reasoning models, or LLMs may provide candidate scores, while Tableau is used only for hard consistency filtering.
+We formulate pruning as a hypothesis-retention problem. Given candidate paths or relation hypotheses scored by a semantic or structural model, fixed Top-K pruning retains a constant number of hypotheses, whereas the proposed Rashomon delayed-pruning rule retains every hypothesis whose score lies within epsilon of the current best score, optionally subject to a computational cap. The resulting active-set size therefore adapts to score ambiguity rather than being fixed in advance.
 
-The empirical program has three stages. DAFNA-EA Books supplies preliminary delayed-commitment evidence. WN18RR is used to study multi-hop relation scoring and Rashomon retention. In an executed 50-example hard multi-hop subset, DeBERTa Top-1 accuracy is 16%, while the epsilon Rashomon set contains the gold relation for 42% of examples, preserving 13 additional gold relations (+26 percentage points). A scorer-frozen Tableau-only ablation then compares path-only and bounded local-subgraph contexts under identical candidates and scores. Both reject zero worlds and remain at 16% final Top-1, showing that WN18RR under conservative lexical ontology rules does not provide enough hard inconsistency to demonstrate Tableau pruning. Tableau contribution must therefore be evaluated separately on an ontology-rich or controlled contradiction benchmark. MAGIC remains a downstream natural-language validation.
+A first diagnostic experiment reuses the exact DeBERTa scores from an executed 50-example WN18RR 2-4 hop relation benchmark and changes only the pruning policy. Gold survival is 16% for Top-1, 32% for fixed Top-3, and 40% for fixed Top-5. Rashomon pruning with epsilon=0.05 reaches 42% survival with 3.82 active hypotheses on average, slightly exceeding Top-5 while retaining 1.18 fewer hypotheses. With epsilon=0.10, gold survival reaches 58% with an average width of 5.08, compared with 40% at width 5 for fixed Top-5. These results are preliminary relation-hypothesis diagnostics, not yet a full iterative ToG comparison. The next experiment evaluates the policy inside repeated multi-hop search using gold-path survival, pruning regret, search cost, and final task accuracy.
 
 ---
 
-## 1. Research Problem
+## 1. Research Question
 
-Observed graph:
+The study asks:
+
+> Does fixed-width early pruning discard plausible reasoning hypotheses too aggressively, and can a near-optimal Rashomon retention rule reduce pruning regret at comparable search cost?
+
+The contribution is **not** that multi-hop search should maintain multiple paths; beam-search systems already do this. The proposed distinction is the criterion used to decide which hypotheses survive.
 
 ```text
-h --r1--> e1 --r2--> ... --rk--> t
+Fixed-width pruning
+    keep exactly K highest-ranked hypotheses
+
+Rashomon delayed pruning
+    keep every hypothesis currently indistinguishable
+    from the best within epsilon
 ```
 
-Missing direct relation:
+---
+
+## 2. Multi-Hop Search
+
+For a query q and graph G, let P_k be the active partial-path set after depth k.
+
+Expansion produces:
 
 ```text
-q = (h, ?, t)
+C_(k+1) = Expand(P_k, G)
 ```
 
-Early commitment:
+Each candidate p receives a score:
 
 ```text
-r* = argmax_r score(path, r)
+s_theta(p,q)
 ```
 
-Rashomon retention:
+The scorer is interchangeable. It may be a semantic model such as DeBERTa, a structural KGE model, a path-reasoning model, or an LLM relevance scorer.
+
+The paper therefore separates:
 
 ```text
-R_epsilon(q) = {
-  candidate |
-  score(candidate) >= best_score - epsilon
+scoring model
+from
+pruning policy
+```
+
+This separation is essential for controlled comparison.
+
+---
+
+## 3. Baseline: Fixed-Width Pruning
+
+A fixed beam of width K retains:
+
+```text
+P_(k+1)^TopK = TopK(C_(k+1), s_theta, K)
+```
+
+Its cardinality is fixed by design:
+
+```text
+|P_(k+1)^TopK| <= K
+```
+
+This is efficient, but ranking uncertainty is ignored. The K-th and (K+1)-th hypotheses are treated differently even if their scores are almost identical.
+
+Example:
+
+```text
+p1  0.91
+p2  0.90
+p3  0.89
+p4  0.88
+```
+
+With K=3, p4 is removed despite being only 0.03 below the best score.
+
+---
+
+## 4. Proposed Method: Rashomon Delayed Pruning
+
+Let the best candidate score at depth k be:
+
+```text
+s*_k = max_p s_theta(p,q)
+```
+
+The Rashomon active set is:
+
+```text
+R_epsilon^k(q) = {
+  p in C_k
+  | s_theta(p,q) >= s*_k - epsilon
 }
 ```
 
-World construction and logical filtering:
+The principle is:
+
+> Do not prune a hypothesis if the current scorer cannot separate it from the best hypothesis by more than epsilon.
+
+Unlike Top-K, the number of retained hypotheses adapts to score ambiguity.
+
+Clear score distribution:
 
 ```text
-W(path,r) = observed_graph + proposed_relation(h,r,t)
-W_RT(q)   = { W(path,r) | Tableau(ontology + W(path,r)) = SAT }
+0.95, 0.62, 0.44, 0.21
 ```
 
-The central question is whether preserving near-optimal interpretations, followed by logical consistency filtering where hard constraints are available, yields a better and more faithful reasoning state than immediate Top-1 collapse.
+A small epsilon may retain only one path.
+
+Ambiguous distribution:
+
+```text
+0.91, 0.90, 0.89, 0.88
+```
+
+The same epsilon may retain several paths.
+
+For bounded computation, an optional cap can be imposed:
+
+```text
+|R_epsilon^k| <= B_max
+```
+
+The epsilon rule remains the selection principle; B_max is only a safety constraint.
 
 ---
 
-## 2. Hypotheses
+## 5. DeBERTa's Role
 
-### H1 - Delayed commitment
-Rashomon retention preserves the gold relation more often than immediate Top-1 selection.
+DeBERTa is not the proposed algorithm. It is the first scorer used to instantiate s_theta.
 
-### H2 - Logical filtering
-When the ontology contains discriminative hard constraints, Tableau rejects high-scoring but logically inconsistent worlds while retaining valid gold worlds.
+For a multi-hop evidence path p and candidate relation r, DeBERTa estimates semantic support:
 
-### H3 - Multi-hop difficulty
-The value of uncertainty preservation remains observable as multi-hop relation prediction becomes harder.
+```text
+s_D(p,r) = Support_DeBERTa(p,r)
+```
 
-### H4 - Downstream utility
-A verified world state improves LLM multi-hop contradiction ID/LOC relative to raw-context and compute-matched baselines.
+The pruning policy then operates on these scores.
 
-H2 is intentionally conditional on the benchmark exposing relevant logical constraints. A dataset on which all plausible candidates remain satisfiable cannot establish the value of a consistency checker.
+Controlled experiments therefore compare:
+
+```text
+same DeBERTa scores + Top-K
+vs
+same DeBERTa scores + Rashomon
+```
+
+A stronger structural/path scorer must later be substituted for DeBERTa to test whether observed gains are scorer-independent.
 
 ---
 
-## 3. Method
+## 6. Pruning Regret
 
-### 3.1 Candidate representation
+Let p*_(1:k) denote the gold reasoning-path prefix at depth k.
 
-```text
-candidate_i = (path_i, relation_i, semantic_score_i)
-```
-
-Candidate paths are obtained from the observed graph. Candidate relations may come from the full relation vocabulary, KGE/path models, ontology rules, or LLM proposals.
-
-### 3.2 Semantic scorer
-
-The first pilot uses DeBERTa NLI:
+Gold path survival is:
 
 ```text
-Premise    = natural-language rendering of the multi-hop path
-Hypothesis = candidate direct relation between h and t
-
-S(path,r) = support
-C(path,r) = contradiction
-U(path,r) = unresolved
+Survive_k = 1[p*_(1:k) is retained after pruning]
 ```
 
-`S(path,r)` supplies the initial plausibility. This scorer is interchangeable and is not the novelty claim.
-
-### 3.3 Rashomon set
+If the gold hypothesis exists before pruning but is removed by the pruning operator:
 
 ```text
-R_epsilon(q) = {
-  candidate |
-  score(candidate) >= best_score - epsilon
-  and score(candidate) >= min_score
-}
+PR_k = 1[
+  p*_(1:k) in C_k
+  AND
+  p*_(1:k) not in P_k
+]
 ```
 
-The set adapts to score ambiguity instead of fixing one prediction prematurely.
-
-### 3.4 Tableau filtering
-
-Each retained candidate defines a possible world. Tableau tests the world against configured ontology semantics.
-
-Current implementation supports:
-
-- positive/negative clashes;
-- incompatible and exclusive relations;
-- hierarchy;
-- transitivity;
-- symmetry and inverse relations;
-- relation composition;
-- irreflexivity;
-- antisymmetry.
+Dataset-level pruning regret is:
 
 ```text
-Rashomon = uncertainty preservation
-Tableau  = hard logical pruning
+PruningRegret_k = mean_i PR_k^(i)
 ```
 
-### 3.5 Relation marginal
-
-For valid worlds:
+The primary hypothesis is:
 
 ```text
-P(W_i | q) = score_i / sum(score_j over valid worlds)
-P(r | q)   = sum P(W_i | q) for valid worlds whose relation is r
-H(q)       = - sum_r P(r|q) * log(P(r|q))
+PruningRegret_Rashomon < PruningRegret_TopK
 ```
+
+subject to a reasonable increase in search cost.
 
 ---
 
-## 4. Experimental Program
+## 7. Search Cost
 
-### Stage A - DAFNA-EA Books
+Retaining more hypotheses is not free. Search efficiency is measured separately from accuracy/survival.
 
-Preliminary truth-discovery experiment:
-
-| Method | Exact Truth Accuracy | Author F1 |
-|---|---:|---:|
-| **Rashomon Worlds - Marginal Reliability** | **62.00%** | **84.13%** |
-| Rashomon Worlds - Hard Commit | 61.00% | 84.04% |
-| Prior Atomic Resolution | 61.00% | 82.88% |
-| TruthFinder - official DAFNA-EA | 57.00% | 66.85% |
-| AccuSim - official DAFNA-EA | 57.00% | 66.18% |
-
-Gold truth occurs in the generated candidate-world set for 93% of the evaluated books. DAFNA supports the delayed-commitment motivation but is not a multi-hop relation benchmark.
-
-### Stage B1 - WN18RR multi-hop relation prediction
-
-A held-out target is retained only when its head/tail remain connected through a directed 2-4 hop train-graph path. Gold relation is evaluation-only.
-
-Primary comparison:
+Active-state cost:
 
 ```text
-Top-1 scorer
-    -> scorer + Rashomon
-    -> scorer + Rashomon + Tableau
+Cost_active = sum_k |P_k|
 ```
 
-WN18RR is now treated primarily as a **relation prediction / path reasoning / Rashomon retention** benchmark rather than the sole Tableau benchmark.
-
-### Stage B2 - Tableau-specific logical benchmark
-
-Because WN18RR contains mostly positive lexical relation facts and few explicit hard constraints, Tableau contribution will be evaluated in an ontology-rich setting exposing incompatibility, disjointness, negative assertions, type restrictions, or controlled contradictions. Candidate directions include UMLS-derived semantics and a label-blind contradiction-injection ablation.
-
-### Stage C - MAGIC downstream validation
+Expansion cost:
 
 ```text
-Natural-language contexts
-      -> claim / KG extraction
-      -> Rashomon-Tableau reasoning state
-      -> LLM
-      -> ID + LOC + explanation
+Cost_expand = sum_k |C_k|
 ```
 
-Key comparison:
+For LLM-based scoring, token/call cost should also be recorded.
+
+The paper therefore studies a trade-off rather than survival alone:
 
 ```text
-Direct LLM
-vs Compute-Matched LLM
-vs Rashomon-Tableau only
-vs Rashomon-Tableau -> LLM
+Gold survival / pruning regret
+vs
+search cost
 ```
 
 ---
 
-## 5. Executed WN18RR Results
+## 8. Executed WN18RR Diagnostic
 
-### 5.1 Multi-hop 50-row pilot
+### 8.1 Protocol
 
-Workflow Run: `32799621678`  
-Artifact: `9546119681`  
+Source workflow run: `32799621678`  
+Source artifact: `9546119681`  
+Dataset: WN18RR 50-example hard 2-4 hop relation subset  
 Candidate relations: 11  
-Scorer: `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli`  
-Epsilon: 0.05
+Scorer: `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli`
 
-| Metric | Result |
-|---|---:|
-| DeBERTa Top-1 accuracy | **16.0% (8/50)** |
-| Rashomon gold coverage | **42.0% (21/50)** |
-| Path-only Tableau retention | 42.0% |
-| Path-only RT Top-1 | 16.0% |
-| Average Rashomon set size | 3.82 |
-| Average rejected worlds | 0.00 |
+The exact executed DeBERTa support scores are reused. Gold labels are used only after pruning for evaluation.
 
-The Rashomon set retains **13 gold relations that Top-1 loses**, corresponding to **+26 percentage points** absolute gold coverage.
+This experiment changes only the **relation-hypothesis retention policy**. It is not yet an iterative ToG path-search benchmark.
 
-By hop:
+### 8.2 Overall result
 
-| Hop | n | Top-1 | Rashomon coverage |
-|---:|---:|---:|---:|
-| 2 | 19 | 5.3% | **36.8%** |
-| 3 | 23 | 30.4% | **47.8%** |
-| 4 | 8 | 0.0% | **37.5%** |
+| Policy | Gold survival | Pruning regret | Avg active hypotheses |
+|---|---:|---:|---:|
+| Top-1 | 16% | 84% | 1.00 |
+| **Top-3 fixed width** | **32%** | 68% | 3.00 |
+| Top-5 fixed width | 40% | 60% | 5.00 |
+| Threshold >= 0.7 | 70% | 30% | 7.08 |
+| Threshold >= 0.5 | 78% | 22% | 8.40 |
+| Rashomon eps=.01 | 16% | 84% | 1.98 |
+| Rashomon eps=.03 | 26% | 74% | 3.22 |
+| **Rashomon eps=.05** | **42%** | **58%** | **3.82** |
+| **Rashomon eps=.10** | **58%** | **42%** | **5.08** |
+| No pruning | 100% | 0% | 11.00 |
+
+### 8.3 Cost-matched interpretation
+
+Against fixed Top-3:
+
+```text
+Rashomon eps=.05
+survival gain = +10pp
+average active-set increase = +0.82
+```
+
+Against fixed Top-5:
+
+```text
+Rashomon eps=.05
+survival gain = +2pp
+average active-set change = -1.18
+```
+
+Thus eps=.05 is Pareto-better than Top-5 in this diagnostic: it preserves slightly more gold while keeping fewer hypotheses on average.
+
+A closer width-matched comparison is:
+
+```text
+Top-5:
+  survival = 40%
+  avg width = 5.00
+
+Rashomon eps=.10:
+  survival = 58%
+  avg width = 5.08
+```
+
+This produces +18pp survival for only +0.08 average active hypotheses.
+
+### 8.4 Hop-level signal
+
+For epsilon=.05:
+
+| Hop | n | Top-1 survival | Rashomon survival | Avg Rashomon size |
+|---:|---:|---:|---:|---:|
+| 2 | 19 | 5.3% | 36.8% | 5.26 |
+| 3 | 23 | 30.4% | 47.8% | 2.91 |
+| 4 | 8 | 0.0% | 37.5% | 3.00 |
+
+This suggests that near-optimal retention may protect hypotheses that would otherwise be removed under aggressive ranking, but the sample is too small to establish a monotonic hop-depth effect.
 
 Stored result:
 
 ```text
-results/wn18rr_multihop_completion_pilot_50.json
+results/wn18rr_pruning_policy_ablation_50.json
 ```
 
-### 5.2 Scorer-frozen Tableau-only ablation
+Reproduction:
 
-To isolate Tableau, all DeBERTa candidate scores from Run `32799621678` are frozen. Thus candidate rankings and Rashomon membership are identical between conditions.
+```text
+scripts/evaluate_pruning_policies.py
+```
 
-Workflow Run: `32802219346`  
-Artifact: `9546885491`  
-Artifact SHA-256: `88d8a5ed9e1fd430f90ba3b68f0666b9bfa2ffcc8313a1a4697d536a01c4a973`
+---
+
+## 9. Relationship to ToG
+
+The proposed method is not contrasted with ToG as "single path versus multiple paths." ToG already maintains a beam and repeatedly performs search and pruning.
+
+The distinction is:
+
+```text
+ToG-style fixed-width retention:
+  relative rank determines survival
+
+Rashomon delayed pruning:
+  near-optimality determines survival
+```
+
+Therefore the correct empirical comparison is not the current Top-1 pilot alone. It must place both pruning operators inside the same repeated search process with the same scorer and expansion rules.
+
+The current 50-row result is evidence for the **premature-pruning hypothesis**, not evidence of superiority over full ToG.
+
+---
+
+## 10. Hypotheses
+
+### H1 — Gold survival
+
+```text
+GoldSurvival(Rashomon) > GoldSurvival(Fixed Top-K)
+```
+
+at comparable average active-set size.
+
+### H2 — Pruning regret
+
+```text
+PruningRegret(Rashomon) < PruningRegret(Fixed Top-K)
+```
+
+because near-tied hypotheses are not removed solely by a rank boundary.
+
+### H3 — Efficiency
+
+The survival gain remains useful after accounting for active-state, expansion, and model-scoring cost.
+
+### H4 — Scorer independence
+
+The advantage, if real, persists with at least one stronger structural/path scorer rather than appearing only with DeBERTa.
+
+---
+
+## 11. Required Next Experiment
+
+Implement both policies inside identical iterative multi-hop search.
+
+```text
+Query
+  ↓
+Expand
+  ↓
+Score
+  ↓
+Top-K OR Rashomon
+  ↓
+Expand next hop
+  ↓
+...
+```
 
 Conditions:
 
 ```text
-Path-only:
-  selected evidence path + proposed relation
-
-Local-subgraph:
-  same path
-  + ontology-relevant train facts touching h/t/path nodes
-  + proposed relation
-  local cap = 16 facts
+Top-1
+Top-3
+Top-5
+absolute threshold
+Rashomon epsilon sweep
+No pruning
 ```
 
-| Metric | Path-only | Local-subgraph |
-|---|---:|---:|
-| Rashomon gold coverage | 42.0% | 42.0% |
-| Tableau gold retention | 42.0% | 42.0% |
-| RT Top-1 | 16.0% | 16.0% |
-| Avg rejected worlds | **0.00** | **0.00** |
-| Gold false rejection | - | 0.0% |
-| Avg entropy | 1.066 | 1.066 |
-| Avg local fact count | - | 14.82 |
-
-The local-subgraph condition changes neither validity nor posterior ranking. This eliminates the simple explanation that path-only context alone caused the absence of pruning.
-
-The stronger diagnosis is **benchmark/ontology mismatch for H2**: WN18RR provides mainly positive WordNet relation triples. Candidate relations such as `_also_see`, `_similar_to`, domain relations, meronymy, and hypernymy often coexist without violating the conservative transitivity/symmetry/irreflexivity/antisymmetry rules. There are few explicit negative or disjoint facts that would make a near-optimal world UNSAT.
-
-Therefore no Tableau performance gain is claimed on WN18RR.
-
-Stored result:
+At each depth report:
 
 ```text
-results/wn18rr_tableau_only_ablation_50.json
+Gold Path Survival@k
+Pruning Regret@k
+Active hypotheses@k
+Expanded hypotheses@k
+Final relation / QA accuracy
+Runtime and scoring cost
 ```
 
----
-
-## 6. WN18RR Peer Group
-
-The present 50-row set is deliberately restricted to targets with 2-4 hop alternative paths, so its percentages are **not directly leaderboard-comparable** with full-test WN18RR relation-prediction papers. Peer results serve as reference baselines for scorer strength.
-
-### 6.1 Structure Enhanced Path Reasoning, 2023
-
-This work explicitly evaluates relation prediction on WN18RR and reports:
-
-| Model | MRR | Hits@1 | Hits@3 | Hits@5 |
-|---|---:|---:|---:|---:|
-| TransE | 0.639 | 0.385 | 0.850 | 0.943 |
-| RotatE | 0.903 | 0.857 | 0.934 | 0.960 |
-| HAKE | 0.887 | 0.832 | 0.935 | 0.953 |
-| PathCon | 0.867 | 0.786 | 0.942 | 0.975 |
-| APR | 0.937 | 0.910 | 0.953 | 0.969 |
-| APR_Unified | **0.989** | **0.981** | **0.999** | **0.999** |
-| SPR_LSTM | 0.958 | 0.935 | 0.977 | 0.992 |
-
-This peer is particularly relevant because it uses relation paths and relational contexts rather than treating relation prediction as plain text NLI.
-
-### 6.2 RP-ISS, Scientific Reports 2024
-
-Full WN18RR relation-prediction results include:
-
-| Model | MRR | Hits@1 | Hits@3 |
-|---|---:|---:|---:|
-| TransE | 78.26 | 67.13 | 87.47 |
-| DistMult | 84.83 | 78.82 | 88.85 |
-| RotatE | 80.01 | 73.27 | 81.94 |
-| SimplE | 73.46 | 66.22 | 75.60 |
-| RP-ISS | **98.91** | **97.93** | **99.97** |
-
-The absolute scales differ across protocols, but the scientific conclusion is robust: **a generic DeBERTa NLI scorer at 16% Top-1 is not a competitive WN18RR relation-prediction baseline.** The next experiment must incorporate a task-trained structural/path scorer such as RotatE, PathCon-style reasoning, or another relation-composition/KGE model, then ask whether Rashomon retention adds value on top of that stronger scorer.
-
-Standard WN18RR entity link prediction `(h,r,?)` / `(?,r,t)` is a different task and is not mixed with these relation-prediction comparisons.
+Then repeat using a stronger KGE/path scorer.
 
 ---
 
-## 7. Relation to Previous MAGIC v4
+## 12. Current Evidence Boundary
 
-The previous MAGIC v4 gains came from **better candidate retrieval and DeBERTa path scoring**, not a demonstrated Tableau effect.
+Supported now:
 
-- v3 relevant-path coverage: ~25%
-- v4 relevant candidate coverage: ~47-57%
-- v4 conditional DeBERTa scoring when a relevant path was present: ~88%
-- final binary decision still bypassed Rashomon/Tableau marginals
-
-Thus the WN18RR result does not contradict v4. They measure different components:
-
-```text
-MAGIC v4: retrieval/scoring improved
-WN18RR:   Rashomon retention improves coverage
-WN18RR:   Tableau pruning not activated by available hard constraints
-```
-
----
-
-## 8. Current Scientific Evidence Boundary
-
-Supported provisionally:
-
-- delayed commitment can preserve additional gold interpretations;
-- on the WN18RR hard subset, Rashomon coverage is +26pp above DeBERTa Top-1.
+- fixed-width policy materially changes gold survival under identical DeBERTa scores;
+- epsilon-based retention yields an adaptive active-set size;
+- epsilon=.05 exceeds Top-5 survival while using fewer hypotheses on average in the current 50-row diagnostic;
+- epsilon=.10 substantially exceeds Top-5 survival at nearly identical average width.
 
 Not supported yet:
 
-- Tableau improves WN18RR relation-prediction accuracy;
-- final Rashomon marginal beats strong task-trained relation-prediction peers;
-- redesigned pipeline improves MAGIC ID/LOC.
+- full ToG superiority;
+- iterative multi-hop path-pruning advantage;
+- final task-accuracy improvement;
+- scorer-independent gain;
+- statistically robust conclusions on larger datasets.
 
-Next controlled sequence:
-
-```text
-1. Replace/augment DeBERTa with strong path/KGE relation scorer on WN18RR.
-2. Re-test Top-1 vs scorer+Rashomon on a larger stratified multi-hop subset.
-3. Validate Tableau separately on ontology-rich / contradiction-bearing data.
-4. Feed verified world state to MAGIC LLM downstream evaluation.
-```
-
----
-
-## 9. Falsification Criteria
-
-Narrow or reject the framework if:
-
-- Rashomon coverage gain disappears with strong scorers;
-- an ontology-rich benchmark still yields no useful Tableau pruning;
-- Tableau pruning removes gold worlds as often as wrong worlds;
-- final marginal ranking cannot improve against strong relation-prediction controls;
-- MAGIC downstream utility is absent.
+The paper will claim only what these controlled experiments establish.
