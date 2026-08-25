@@ -1,590 +1,422 @@
-# Boundary-Aware Delayed Pruning for Multi-Hop Knowledge Graph Reasoning
+# 다중 홉 지식그래프 추론에서 경계 불확실성을 고려한 지연 가지치기
 
-## Abstract
+## 초록
 
-Multi-hop knowledge-graph reasoning requires aggressive search-space control. Fixed-width beam search is a common solution: after each expansion, only the highest-scoring `K` paths survive. The rule is efficient but creates an irreversible cardinality boundary. A path ranked `K+1` is removed even when its score is nearly indistinguishable from rank `K`, although later hops may reveal that the removed path was the only viable or contradictory evidence chain. This work studies **pruning-caused information loss** separately from final answer generation and asks whether pruning should be delayed specifically when the score boundary itself is uncertain.
+다중 홉 지식그래프 추론은 탐색 깊이가 증가할수록 후보 경로가 빠르게 증가하므로 가지치기(pruning)가 필수적이다. 고정 폭 빔 탐색은 매 단계에서 점수가 높은 상위 `K`개 경로만 유지하여 계산량을 안정적으로 제어하지만, `K`번째와 `K+1`번째 경로의 점수가 거의 동일한 경우에도 순위 하나의 차이만으로 후자를 비가역적으로 제거한다. 제거된 경로가 이후 단계에서 정답 또는 상반 증거로 연결되는 유일한 경로라면 후속 의미 검증기나 논리 추론기는 해당 정보를 복구할 수 없다.
 
-We formalize **Pruning Regret**, which occurs when at least one viable reasoning prefix exists before selection but no viable prefix remains afterward. We compare fixed Top-K beam search with global near-optimal score bands, relative-loss bands, and a proposed **Boundary-Aware Delayed Pruning (BADP)** operator. BADP preserves the Top-K core and additionally retains only candidates whose score lies within `delta` of the K-th cutoff. Unlike broad global preservation, the operator targets the actual irreversible decision boundary. Evaluation considers three axes jointly: evidence/search survival, retained-set validity, and search cost.
+본 연구는 이러한 현상을 **가지치기 후회(Pruning Regret)**로 정식화하고, Top-K의 실제 제거 경계에서 점수 차이가 작은 후보만 선택적으로 추가 보존하는 **경계 인식 지연 가지치기(Boundary-Aware Delayed Pruning, BADP)**를 제안한다. BADP는 최고점 주변 후보를 광범위하게 유지하는 전역 점수대 방식과 달리, `K`번째 cutoff를 중심으로 국소적으로 보존 범위를 확장한다. 평가는 증거 생존율뿐 아니라 보존 집합의 유효성 및 탐색 비용을 함께 고려한다.
 
-Existing experiments motivate the formulation. On 420 recoverable MAGIC multi-hop conflict queries, fixed Top-3 preserves 94.76% of externally identified conflict paths, while an exploratory boundary-aware Top-3 rule reaches 97.86% with average retained width increasing from 1.60 to 1.77. Broad global retention obtains high survival in high-branching cases but also retains substantially more non-gold paths. A prior 10-query iterative WN18RR pilot further shows that a naive global score band can underperform Top-K and that scale-aware retention can recover search success only at additional cost. The main confirmatory direction is therefore not “adaptive pruning is better,” since recent graph-retrieval work already uses adaptive pruning. The narrower hypothesis is that **uncertainty at the Top-K cutoff is a distinct source of irreversible search error and can be handled by selective delayed commitment under a matched search budget**.
+MAGIC의 외부 골드 상충 경로가 가지치기 이전에 존재하는 420개 질의에서 Top-3는 94.76%의 경로 생존율을 보였으며, 탐색적으로 적용한 BADP Top-3는 평균 보존 폭을 1.60에서 1.77로 증가시키면서 생존율을 97.86%로 높였다. 특히 후보 경로가 5개 이상인 고분기 구간에서 Top-3와 Top-5의 생존율은 각각 37.50%와 75.00%까지 하락하였다. WN18RR 20질의 반복 탐색에서는 Top-5의 성공률 55%, 가지치기 후회 45%에 비해 BADP Top-5(`δ=.010`)가 60%, 40%를 보였고, `δ=.050`에서는 65%, 35%를 기록하였다. 다만 보존 폭이 증가할수록 비유효 후보도 증가하므로 BADP의 효과는 단일 정확도가 아니라 성공–유효성–비용의 파레토 관계로 평가해야 한다.
 
----
-
-## 1. Research Question
-
-Given a graph `G`, query `q`, and a sequence of multi-hop candidate expansions, the study asks:
-
-> **When the scorer cannot clearly distinguish the K-th path from adjacent candidates, can selective delay of the Top-K pruning decision reduce pruning regret at comparable search cost?**
-
-The paper separates two stages:
-
-```text
-Current study: Preserve viable / competing evidence during search
-Future study:  Resolve competing evidence semantically or logically
-```
-
-The contribution is therefore about the **search-state transition operator**, not Tableau reasoning, final truth resolution, or a new semantic encoder.
+**주요어:** 지식그래프, 다중 홉 추론, 가지치기, 빔 탐색, 가지치기 후회, 경계 불확실성, 증거 보존
 
 ---
 
-## 2. Problem Formulation
+## 1. 서론
 
-Let the knowledge graph be
+대규모 지식그래프에서 다중 홉 질의를 해결하려면 시작 개체로부터 여러 관계와 개체를 반복적으로 탐색해야 한다. 탐색 깊이가 증가함에 따라 가능한 경로 수는 조합적으로 증가하므로 실제 시스템은 관계 또는 경로 점수를 이용해 낮은 순위 후보를 제거한다. Think-on-Graph(ToG) 계열을 포함한 다수의 지식그래프 추론 시스템은 제한된 후보 집합을 반복적으로 확장하는 방식으로 계산 비용을 통제한다.
 
-```text
-G = (V,E,R)
-```
+고정 Top-K 방식은 단순하고 안정적인 비용 상한을 제공하지만, 후보의 상대적 점수 차이를 제거 결정에 충분히 반영하지 못한다. 예를 들어 `K`번째 경로와 `K+1`번째 경로의 점수가 각각 0.812와 0.809라면, 두 경로의 구분은 매우 작음에도 후자는 즉시 제거된다. 다중 홉 탐색에서 이러한 결정은 비가역적이다. 이후 홉에서 제거된 경로가 유일한 정답 경로나 상반 증거 경로였음이 드러나더라도 다시 탐색되지 않는다.
 
-and let `P_k` denote the active partial paths after depth `k`.
+본 연구의 출발점은 최종 정답 생성보다 앞선 **증거 보존 단계의 오류**이다. 초기 연구에서는 가능한 여러 해석을 Rashomon/가능세계로 유지한 뒤 온톨로지와 Tableau로 상충을 해결하고자 하였다. 그러나 MAGIC과 DAFNA-EA 실험에서 유효한 후보가 생성되어도 의미 점수화 또는 중간 선택에서 손실되는 현상이 반복적으로 나타났다. 이에 본 연구는 “어떤 설명이 참인가?”라는 최종 해결 문제보다 “해결에 필요한 경로가 그 전에 제거되고 있지 않은가?”를 먼저 다룬다.
 
-### 2.1 Expansion
+본 연구의 연구 질문은 다음과 같다.
 
-At depth `k+1`:
+> **Top-K의 제거 경계가 불확실할 때 경계 주변 후보에 한해 가지치기를 지연하면, 전역적으로 탐색 폭을 확장하지 않고도 비가역적인 유효 경로 손실을 줄일 수 있는가?**
 
-```text
-C_(k+1) = Expand(P_k, G)
-```
+본 연구의 기여는 다음과 같다.
 
-where `C_(k+1)` is the set of candidate extensions before pruning.
-
-### 2.2 Path scoring
-
-A scorer assigns:
-
-```text
-s_theta(p,q) in [0,1]
-```
-
-The current iterative WN18RR implementation uses DeBERTa support for each newly explored edge and aggregates path evidence as:
-
-```text
-s_theta(p,q) = (1 / |p|) sum_(e in p) s_theta(e,q)
-```
-
-The scorer is identical for every pruning policy in a comparison. This isolates the effect of the retention operator.
+1. 가지치기 이전에 유효 경로가 존재했으나 이후 모두 사라지는 현상을 **가지치기 후회**로 정식화한다.
+2. Top-K의 `K/K+1` 경계를 별도의 불확실성 지점으로 정의하고, 경계 인접 후보만 추가 보존하는 BADP를 제안한다.
+3. 증거 생존율만이 아니라 보존 집합의 정밀도·재현율·F1과 평균 활성 폭·확장 후보 수를 함께 평가한다.
+4. MAGIC 외부 골드와 WN18RR 반복 탐색을 이용해 고분기 조건과 실제 다단계 탐색에서 가지치기 손실을 분석한다.
+5. WebQSP/CWQ 기반 공통 KGQA 비교를 위한 평가 프로토콜을 제시하고, 실제 질의 기반 외적 타당성 검증을 확장한다.
 
 ---
 
-## 3. Retention Operators
+## 2. 관련 연구
 
-### 3.1 Fixed-width Top-K
+### 2.1 고정 폭 지식그래프 탐색
 
-Sort candidates so that:
+ToG는 LLM을 이용해 관계와 개체를 반복적으로 평가하고 상위 후보를 유지하면서 그래프를 탐색한다. 이는 고정 폭 기반 다중 경로 추론의 대표적인 방법이다. 본 연구는 ToG가 단일 경로만 유지한다고 가정하지 않는다. 차이는 다중 경로의 존재 여부가 아니라 **고정된 순위 경계를 언제 신뢰할 것인가**에 있다.
 
-```text
-s_(1) >= s_(2) >= ... >= s_(|C|)
-```
+ToG 2.0은 지식그래프와 문서 문맥을 결합하여 검색과 추론을 반복한다. 전체 구조는 BADP보다 넓지만 후보 축소가 반복된다는 점에서 외적 비교 대상으로 사용한다.
 
-Fixed-width pruning retains:
+### 2.2 경로 및 커뮤니티 가지치기
 
-```text
-T_K(C) = {p_(1), ..., p_(min(K,|C|))}
-```
+Paths-over-Graph는 다중 홉 경로를 그래프 구조, LLM 및 언어모델 점수를 이용해 여러 단계로 필터링한다. FastToG는 탐색 단위를 그래프 커뮤니티로 확장하여 거친 단계와 세밀한 단계의 가지치기를 수행한다. 이들 연구는 효율적인 탐색을 위해 후보 집합을 동적으로 축소하지만, 가지치기 직전에 존재한 유효 경로가 제거되는 사건 자체를 별도 오류로 정의하지는 않는다.
 
-or equivalently:
+### 2.3 적응형 탐색과 결정 경계
 
-```text
-P_(k+1)^TopK = TopK(C_(k+1), s_theta, K)
-```
+Plan-on-Graph, Query-Driven Adaptive Graph Retrieval 등은 질의 난이도나 현재 검색 상태에 따라 탐색 폭을 조절한다. Flow-RAG는 점수 분포에 기반한 적응형 결정 경계를 사용한다. 따라서 본 연구는 “최초의 적응형 가지치기” 또는 “최초의 동적 빔 폭”을 주장하지 않는다.
 
-The cutoff is determined by cardinality alone.
-
-### 3.2 Global additive near-optimality
-
-Let:
-
-```text
-s* = max_(p in C) s_theta(p,q)
-```
-
-Then:
-
-```text
-R_eps(C) = {p in C : s_theta(p,q) >= s* - eps}
-```
-
-This is the original Rashomon-inspired ablation. It preserves candidates near the global best, but can either become too narrow when scores are poorly calibrated or too broad when many candidates cluster near the maximum.
-
-### 3.3 Relative-loss near-optimality
-
-Define:
-
-```text
-L(p,q) = 1 - s_theta(p,q)
-L*     = min_(p in C) L(p,q)
-```
-
-Retain:
-
-```text
-R_eps^loss(C) = {p in C : L(p,q) <= (1+eps)L*}
-```
-
-Since `L*=1-s*`, the equivalent score threshold is:
-
-```text
-s_theta(p,q) >= s* - eps(1-s*)
-```
-
-This makes the allowed score gap depend on the current confidence scale.
-
-### 3.4 Proposed Boundary-Aware Delayed Pruning
-
-Let `b_K(C)` be the K-th ranked score:
-
-```text
-b_K(C) = s_(K),  if |C| >= K
-```
-
-For uncertainty tolerance `delta >= 0`:
-
-```text
-B_(K,delta)(C)
-  = {p in C : s_theta(p,q) >= b_K(C) - delta},  if |C| > K
-  = C,                                           otherwise
-```
-
-Thus:
-
-```text
-B_(K,0) contains the Top-K core
-```
-
-and `delta>0` delays deletion only for candidates adjacent to the actual beam boundary.
-
-An equivalent decomposition is:
-
-```text
-B_(K,delta)(C)
-= T_K(C)
-  union
-  {p_(j), j>K : s_(K)-s_(j) <= delta}
-```
-
-This formulation captures the intended decision rule directly:
-
-> A candidate should not be irreversibly deleted solely because it is ranked `K+1` when the scorer provides insufficient separation from rank `K`.
-
-### 3.5 Boundary uncertainty
-
-Define the immediate boundary margin:
-
-```text
-Delta_K(C) = s_(K) - s_(K+1)
-```
-
-for `|C|>K`.
-
-Small `Delta_K` indicates a near-tie at the pruning decision. BADP can therefore also be interpreted as a rank-boundary uncertainty rule.
-
-The current implementation uses score inclusion `s >= s_(K)-delta`, which may preserve more than `K+1` paths if several candidates cluster near the cutoff.
+BADP의 차별점은 적응성 자체보다 **고정 Top-K가 실제로 후보를 버리는 `K/K+1` 경계를 비가역적 오류가 발생하는 의사결정 지점으로 다룬다**는 것이다. 또한 해당 오류를 가지치기 후회로 직접 측정하고, 전체 분포가 아닌 경계 주변 후보만 국소적으로 보존한다.
 
 ---
 
-## 4. Failure Mode: Pruning Regret
+## 3. 문제 정의
 
-A partial path is **viable** at depth `k` if it can still reach the target evidence/entity within the remaining hop budget.
+지식그래프를
 
-Let:
+\[
+G=(V,E,R)
+\]
 
-```text
+라 하고, 질의 `q`에 대해 깊이 `k`까지 살아남은 부분 경로 집합을 `P_k`라 한다.
+
+### 3.1 후보 확장
+
+다음 깊이의 후보 집합은
+
+\[
+C_{k+1}=\operatorname{Expand}(P_k,G)
+\]
+
+으로 생성한다.
+
+각 경로 `p`에는 질의 관련 점수
+
+\[
+s_\theta(p,q)\in[0,1]
+\]
+
+가 부여된다. 현재 WN18RR 반복 실험에서는 각 edge에 대한 DeBERTa support 점수를 계산하고 경로 평균으로 집계한다.
+
+\[
+s_\theta(p,q)=\frac{1}{|p|}\sum_{e\in p}s_\theta(e,q)
+\]
+
+모든 정책 비교에서 점수기와 후보 생성은 동일하게 유지한다.
+
+### 3.2 고정 Top-K
+
+후보를 점수 내림차순으로
+
+\[
+s_{(1)}\ge s_{(2)}\ge\cdots\ge s_{(|C|)}
+\]
+
+정렬했을 때 고정 Top-K는
+
+\[
+T_K(C)=\{p_{(1)},\ldots,p_{(\min(K,|C|))}\}
+\]
+
+을 유지한다.
+
+### 3.3 가지치기의 비가역성
+
+부분 경로 `p`가 남은 홉 예산 안에서 목표까지 도달 가능할 때
+
+\[
 v_k(p)=1
-```
+\]
 
-when path `p` is viable, otherwise `0`.
+이라 하자. 가지치기 전 후보 집합에 유효 경로가 존재했으나 보존 집합에는 하나도 남지 않으면 해당 단계에서 정보가 비가역적으로 손실된다.
 
-For candidate set `C_k` and retained set `P_k`, define depth-level pruning regret:
+---
 
-```text
-PR_(i,k)
- = 1[
-      exists p in C_(i,k) with v_k(p)=1
-      AND
-      for all p in P_(i,k), v_k(p)=0
-    ]
-```
+## 4. 제안 방법
 
-Query-level pruning regret is:
+### 4.1 전역 가산 점수대
 
-```text
-QPR_i = 1[max_k PR_(i,k) = 1]
-```
+초기 Rashomon-inspired 기준은 최고점
 
-and dataset regret rate:
+\[
+s^*=\max_{p\in C}s_\theta(p,q)
+\]
 
-```text
-QPR = (1/N) sum_i QPR_i
-```
+을 기준으로
 
-This metric has an important interpretation under frozen graph, scorer, hop budget, and candidate generation:
+\[
+R_\epsilon(C)=\{p\in C:s_\theta(p,q)\ge s^*-\epsilon\}
+\]
 
-```text
-viable evidence existed before pruning
-+
-only the retention policy changed
-+
-viable evidence disappeared afterward
+을 유지하였다. 이 방식은 최고점 주변의 near-optimal 후보를 보존하지만 점수 스케일에 따라 지나치게 좁거나 넓어질 수 있다.
+
+### 4.2 상대 손실 점수대
+
+점수 스케일 문제를 완화하기 위해
+
+\[
+L(p,q)=1-s_\theta(p,q)
+\]
+
+를 정의하고
+
+\[
+R_\epsilon^{loss}(C)
 =
-pruning-caused irreversible information loss
-```
+\{p:L(p,q)\le(1+\epsilon)L^*\}
+\]
+
+을 사용한다. 이는 다음 점수 임계값과 동치다.
+
+\[
+s_\theta(p,q)\ge s^*-\epsilon(1-s^*)
+\]
+
+### 4.3 경계 인식 지연 가지치기
+
+BADP는 최고점이 아니라 실제 제거 경계인 `K`번째 점수를 기준으로 한다.
+
+\[
+b_K(C)=s_{(K)}
+\]
+
+이라 하면,
+
+\[
+B_{K,\delta}(C)
+=
+\{p\in C:s_\theta(p,q)\ge b_K(C)-\delta\}
+\]
+
+로 후보를 유지한다. `|C|\le K`이면 모든 후보를 유지한다.
+
+동일한 정의를 다음처럼 쓸 수 있다.
+
+\[
+B_{K,\delta}(C)
+=
+T_K(C)
+\cup
+\{p_{(j)}:j>K,\;s_{(K)}-s_{(j)}\le\delta\}
+\]
+
+따라서 BADP는 Top-K core를 항상 포함하면서, 경계와 충분히 가까운 후보만 지연 보존한다.
+
+### 4.4 경계 불확실성
+
+즉시 다음 순위와의 차이를
+
+\[
+\Delta_K(C)=s_{(K)}-s_{(K+1)}
+\]
+
+로 정의한다. `\Delta_K`가 작은 경우 scorer가 `K`번째와 `K+1`번째를 명확히 구분하지 못한 상태로 해석한다.
+
+본 연구의 핵심 가설은 모든 후보를 넓게 보존하는 것이 아니라, 이러한 **경계 불확실성이 큰 순간에만 지연 결정을 적용하는 것이 비용 효율적일 수 있다**는 것이다.
 
 ---
 
-## 5. Retained-Set Validity
+## 5. 평가 지표
 
-Survival alone is insufficient because no-pruning trivially maximizes survival.
+### 5.1 가지치기 후회
 
-### 5.1 Iterative graph-search validity
+질의 `i`, 깊이 `k`에서
 
-At every pruning step define:
+\[
+PR_{i,k}
+=
+\mathbb{1}
+\left[
+\exists p\in C_{i,k}:v_k(p)=1
+\land
+\nexists p\in P_{i,k}:v_k(p)=1
+\right]
+\]
 
-```text
-V_C = {p in C : v_k(p)=1}
-V_P = {p in P : v_k(p)=1}
-```
+로 정의한다.
 
-Then:
+질의 단위 후회는
 
-```text
-ViabilityPrecision = |V_P| / |P|
-ViabilityRecall    = |V_P| / |V_C|
-ViabilityF1        = 2PR / (P+R)
-```
+\[
+QPR_i=\mathbb{1}[\max_kPR_{i,k}=1]
+\]
 
-These quantify whether the retained search state contains useful prefixes rather than only additional states.
+이고, 데이터셋 후회율은
 
-### 5.2 MAGIC external-gold validity
+\[
+QPR=\frac{1}{N}\sum_iQPR_i
+\]
 
-For the MAGIC conflict benchmark, viability is evaluated independently using released conflict provenance. Let `G_i^-` be the externally identified perturb-path family.
+이다.
 
-A query is recoverable when:
+### 5.2 보존 집합 유효성
 
-```text
-G_i^- intersect C_i != empty
-```
+가지치기 전 유효 후보 집합을 `V_C`, 보존 후 유효 후보 집합을 `V_P`라 하면
 
-Conflict Path Survival:
+\[
+Precision_v=\frac{|V_P|}{|P|}
+\]
 
-```text
-CPS_i = 1[G_i^- intersect P_i != empty]
-```
+\[
+Recall_v=\frac{|V_P|}{|V_C|}
+\]
 
-Conflict Information Loss:
+\[
+F1_v=\frac{2Precision_vRecall_v}{Precision_v+Recall_v}
+\]
 
-```text
-CIL_i = 1 - CPS_i
-```
+를 사용한다.
 
-and retained-set gold precision/recall are:
+MAGIC에서는 그래프 도달 가능성 대신 외부 `perturb_triplet` provenance를 이용해 골드 경로 정밀도·재현율·F1을 계산한다.
 
-```text
-Precision_gold = |P intersect G^-| / |P|
-Recall_gold    = |P intersect G^-| / |G^-|
-```
+### 5.3 탐색 비용
 
-Gold comes from MAGIC provenance and is attached after DeBERTa scoring, avoiding scorer-defined evaluation labels.
+평균 활성 폭은
 
----
+\[
+W=\frac{1}{K_{step}}\sum_k|P_k|
+\]
 
-## 6. Search Cost and Budget Matching
+로 정의하고, 총 확장량은
 
-Let:
+\[
+X=\sum_k|C_k|
+\]
 
-```text
-W = (1/K_steps) sum_k |P_k|
-```
-
-be mean active width and:
-
-```text
-X = sum_k |C_k|
-```
-
-be total candidate expansions.
-
-We also record unique semantic scoring calls.
-
-The optimization is multi-objective:
-
-```text
-maximize SearchSuccess / EvidenceSurvival
-maximize RetainedValidity
-minimize ActiveWidth / ExpansionCost
-```
-
-### 6.1 Budget anchors
-
-We use fixed beams as cost anchors:
-
-```text
-A_3 = Top-3
-A_5 = Top-5
-```
-
-For each adaptive policy family `F`, parameter grid `Lambda_F`, and anchor `A`, choose the exploratory width-matched configuration:
-
-```text
-lambda*_F(A)
- = argmin_(lambda in Lambda_F)
-   | W(F_lambda) - W(A) |
-```
-
-Tie-breaking uses expansion-cost proximity.
-
-The main comparison reports:
-
-```text
-Delta Success
-Delta Pruning Regret
-Delta Viability Precision
-Delta Viability Recall
-Delta Viability F1
-Delta Active Width
-Delta Expanded Candidates
-```
-
-A Pareto frontier of search success versus expansion cost is also reported.
-
-**Methodological safeguard:** parameter selection on the same evaluation set is exploratory only. A final paper must tune `epsilon/delta` on a development split and freeze them before confirmatory test evaluation.
+로 정의한다. 추가로 의미 점수 계산 횟수, LLM 호출, 토큰, 지연시간을 기록한다.
 
 ---
 
-## 7. Hypotheses
+## 6. 연구 가설
 
-### H1 — Fixed-width pruning produces measurable regret
+**H1.** 고정 Top-K는 유효 경로가 존재하는 상황에서도 비영(非零)의 가지치기 후회를 발생시킨다.
 
-```text
-QPR_TopK > 0
-```
+\[
+QPR_{TopK}>0
+\]
 
-when viable prefixes exist before pruning.
+**H2.** 후보 분기가 증가할수록 고정 Top-K의 유효 경로 손실 위험이 증가한다.
 
-### H2 — Branching increases fixed-width brittleness
+**H3.** 경계 여유 `\Delta_K`가 작은 구간에서 고정 Top-K의 가지치기 후회가 증가한다.
 
-For larger pre-pruning candidate cardinality `|C_k|`, the probability of Top-K pruning regret increases.
+**H4.** 유사한 탐색 비용에서 BADP는 전역 점수대 방식보다 낮은 가지치기 후회 또는 높은 증거 생존율을 달성한다.
 
-```text
-P(PR=1 | |C| large) > P(PR=1 | |C| small)
-```
-
-This is strongly suggested by the current MAGIC analysis.
-
-### H3 — Boundary uncertainty identifies unsafe Top-K decisions
-
-For small boundary margin:
-
-```text
-Delta_K = s_(K)-s_(K+1)
-```
-
-fixed Top-K should incur more avoidable regret than when the boundary is clearly separated.
-
-This remains a hypothesis until controlled iterative results are sufficiently large.
-
-### H4 — Boundary-aware delay is more cost-efficient than broad global preservation
-
-At comparable active-search budget:
-
-```text
-QPR_BADP <= QPR_GlobalBand
-```
-
-and/or:
-
-```text
-SearchSuccess_BADP >= SearchSuccess_GlobalBand
-```
-
-while preserving higher retained-set validity.
-
-This is the main proposed-method hypothesis.
-
-### H5 — No single policy should dominate all three objectives
-
-The expected outcome is a Pareto trade-off rather than universal dominance:
-
-```text
-Preservation <-> Validity <-> Cost
-```
-
-This hypothesis is already consistent with MAGIC results.
+**H5.** 보존율, 보존 집합 유효성, 탐색 비용 사이에는 단일 정책이 모든 축을 지배하지 않는 파레토 관계가 존재한다.
 
 ---
 
-## 8. Experimental Design
+## 7. 실험 설정
 
-### Experiment A — MAGIC conflict preservation
+### 7.1 MAGIC 상충 증거 보존
 
-Purpose:
-- prove that pruning can delete externally identified competing evidence;
-- measure preservation-versus-noise trade-off;
-- identify high-branching regimes.
+MAGIC 다중 홉 상충 데이터의 588개 행, 1,056개 질의를 사용하였다. 후보 경로가 존재하는 질의는 618개였고, 이 중 외부 골드 상충 경로가 가지치기 전에 존재한 420개 질의를 주요 분석 대상으로 삼았다. 골드는 DeBERTa 출력과 독립적인 `perturb_triplet` provenance로 정의하였다.
 
-Executed primary set:
+의미 점수는 support와 contradiction을 모두 증거로 취급하기 위해
 
-```text
-588 rows
-1,056 queries
-618 queries with candidate paths
-420 recoverable conflict queries
-```
+\[
+r(p)=Support(p)+Contradiction(p)=1-Unresolved(p)
+\]
 
-Key result:
+을 사용하였다.
 
-| Policy | Conflict survival | Gold precision | Gold F1 | Avg width |
-|---|---:|---:|---:|---:|
-| Top-3 | 94.76% | 59.38% | 73.01% | 1.60 |
-| Top-5 | 98.10% | 55.07% | 70.54% | 1.79 |
-| Global eps=.10 | 97.14% | 50.18% | 66.18% | 1.94 |
-| Relative-loss eps=.25 | 83.81% | 74.26% | 78.66% | 1.13 |
-| Boundary Top-3+.01 | **97.86%** | 55.30% | 70.67% | **1.77** |
-| No pruning | 100% | 46.67% | 63.64% | 2.15 |
+### 7.2 WN18RR 반복 탐색
 
-The boundary result is exploratory; `delta=.01` was inspected after earlier ablations.
+WN18RR에서 2~4홉 경로를 실제로 반복 확장한다. DeBERTa edge support와 평균 경로 점수를 모든 정책에 동일하게 사용한다. 비교군은 Top-3, Top-5, 전역 점수대, 상대 손실, BADP이다.
 
-### Experiment B — WN18RR iterative search
+현재 검증된 20질의 실험은 adaptive 정책에 최대 폭 10의 공통 상한을 두고 실행하였다.
 
-Purpose:
-- move pruning inside actual repeated path expansion;
-- measure search success, pruning regret, viability, and expansion cost.
+### 7.3 공통 KGQA 외적 검증
 
-Previous 10-query pilot:
+ToG 계열과 동일한 질의 수준 외적 타당성을 확인하기 위해 WebQSP와 CWQ를 사용한다. 공개 ToG 데이터의 WebQSP 시험 집합은 1,639개 질의를 포함한다. 직접 재현에서는 정답 집합 EM, Macro/Micro F1, Hit@1과 함께 탐색 비용을 계산한다.
 
-| Policy | Search success | Query regret | Avg width |
+현재 1차 WebQSP 파일럿은 공식 ToG 질문 및 `qid_topic_entity`를 사용하되 Wikidata를 탐색하므로 Freebase 기반 ToG 공개 점수와 직접적인 head-to-head 비교로 해석하지 않는다.
+
+---
+
+## 8. 실험 결과
+
+### 8.1 MAGIC 전체 recoverable 질의
+
+| 정책 | 상충 경로 생존율 | 골드 정밀도 | 골드 재현율 | 골드 F1 | 평균 폭 |
+|---|---:|---:|---:|---:|---:|
+| Top-1 | 80.71% | **80.71%** | 80.52% | **80.62%** | 1.00 |
+| Top-3 | 94.76% | 59.38% | 94.77% | 73.01% | 1.60 |
+| Top-5 | 98.10% | 55.07% | 98.10% | 70.54% | 1.79 |
+| 전역 `.05` | 94.76% | 54.00% | 94.54% | 68.74% | 1.75 |
+| 전역 `.10` | 97.14% | 50.18% | 97.15% | 66.18% | 1.94 |
+| 상대 손실 `.25` | 83.81% | 74.26% | 83.61% | 78.66% | 1.13 |
+| **BADP Top-3** | **97.86%** | 55.30% | **97.86%** | 70.67% | **1.77** |
+| 무가지치기 | 100% | 46.67% | 100% | 63.64% | 2.15 |
+
+BADP Top-3는 Top-3보다 평균 폭을 약 0.17 증가시키면서 상충 경로 생존율을 3.10%p 높였다. paired 분석에서 BADP만 골드 경로를 보존한 질의는 13개, Top-3만 보존한 질의는 0개였다. 다만 BADP 규칙은 이전 결과를 관찰한 뒤 도입되었으므로 이 결과는 탐색적 증거로 취급한다.
+
+### 8.2 후보 분기에 따른 손실
+
+| 조건 | Top-3 생존율 | Top-5 생존율 | 전역 `.10` |
 |---|---:|---:|---:|
-| Top-3 | 60% | 40% | 2.67 |
-| Top-5 | 60% | 40% | 3.88 |
-| Global eps=.10 | 40% | 60% | 3.62 |
-| Relative-loss eps=.50 | 70% | 30% | 5.97 |
+| 전체 | 94.76% | 98.10% | 97.14% |
+| 후보 ≥3 | 72.84% | 90.12% | 91.36% |
+| 후보 ≥4 | 52.17% | 82.61% | 93.48% |
+| 후보 ≥5 | **37.50%** | **75.00%** | **96.88%** |
 
-This falsifies a simplistic `global Rashomon > Top-K` claim and motivates both cost matching and boundary-specific retention.
+고정 Top-K의 생존율은 후보 경쟁이 증가할수록 급격히 하락하였다. 이는 현재 가장 강하게 지지되는 조건부 결과다.
 
-### Experiment C — 50-query budget-matched iterative study
+그러나 후보 ≥5 구간에서 전역 `.10`의 골드 정밀도는 11.52%에 불과했다. 따라서 높은 생존율은 많은 noise를 함께 유지한 결과일 수 있다.
 
-Current workflow:
+### 8.3 WN18RR 반복 탐색 20질의
 
-```text
-.github/workflows/wn18rr-iterative-pruning-budgeted.yml
-scripts/evaluate_iterative_pruning_budgeted.py
-Run 32818825584
-```
+| 정책 | 성공률 | 후회 ↓ | 유효성 정밀도 | 유효성 재현율 | 유효성 F1 | 평균 폭 | 확장 수 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Top-3 | 50% | 50% | **24.46%** | 53.57% | **33.58%** | 2.71 | 24.80 |
+| Top-5 | 55% | 45% | 20.22% | 57.89% | 29.97% | 4.06 | 32.35 |
+| BADP Top-3 `.005` | 55% | 45% | 22.32% | 56.82% | 32.05% | 3.34 | 27.15 |
+| BADP Top-5 `.010` | 60% | 40% | 18.18% | 61.86% | 28.10% | 5.00 | 35.10 |
+| BADP Top-5 `.050` | **65%** | **35%** | 16.24% | **67.74%** | 26.20% | 6.16 | 38.25 |
 
-Policy grid:
+Top-5 대비 BADP `.010`은 성공률을 5%p 높이고 후회를 5%p 줄였으나 평균 폭이 4.06에서 5.00으로 증가하였다. `.050`은 성공률과 후회를 각각 10%p 개선했지만 평균 폭이 6.16까지 증가하고 유효성 정밀도가 하락하였다.
 
-```text
-Top-3 / Top-5
-Global epsilon       .01 .03 .05 .10
-Relative-loss epsilon .10 .25 .50
-Boundary K=3/5 delta .001 .005 .010 .020 .050
-No pruning ceiling
-```
+이는 H5의 파레토 관계와 일치한다.
 
-Primary metrics:
+### 8.4 음의 결과: 전역 가산 점수대
 
-```text
-Search Success
-Query Pruning Regret
-Viable-prefix Survival by depth
-Viability Precision / Recall / F1
-Average Active Width
-Average Expanded Candidates
-Semantic scoring calls
-Pareto frontier
-```
+이전 10질의 반복 탐색에서는 Top-3/Top-5가 각각 60%의 성공률을 보인 반면 전역 가산 `.05`와 `.10`은 모두 40%였다. 고정 점수 진단에서 유망했던 방식이 실제 반복 탐색에서는 실패했다.
+
+이 결과는 raw score의 절대 간격에 의존하는 보존 규칙이 점수 스케일과 calibration에 민감함을 보여준다. 본 연구는 이 음의 결과를 제외하지 않으며, BADP를 전역 Rashomon 방식의 단순한 개선판이 아니라 **실제 pruning boundary를 대상으로 하는 별도 의사결정 규칙**으로 구분한다.
 
 ---
 
-## 9. Peer Group and Positioning
+## 9. 논의
 
-The closest work should be separated into **fixed-beam graph reasoning**, **multi-stage pruning**, and **adaptive-scale graph retrieval**.
+### 9.1 현재 지지되는 주장
 
-| Method | Venue/year | Search/pruning idea | Typical task | Relation to this paper |
-|---|---|---|---|---|
-| **Think-on-Graph (ToG)** | ICLR 2024 | iterative KG beam search; repeated relation/entity ranking and Top-N pruning | KGQA | fixed-width reference; demonstrates that multiple paths are already standard |
-| **Think-on-Graph 2.0 (ToG-2)** | ICLR 2025 | tightly coupled graph/context iterative retrieval | knowledge-intensive QA/KGQA | stronger ToG-family system; architecture broader than pruning-policy isolation |
-| **Paths-over-Graph (PoG)** | 2024 | dynamic multi-hop path exploration with graph, LLM, and PLM-based three-stage pruning | KGQA | path-pruning peer; focuses retrieval quality rather than pruning regret |
-| **Fast Think-on-Graph (FastToG)** | AAAI 2025 | community search with coarse/fine community pruning | KGQA | efficiency peer; pruning unit is community, not Top-K path boundary |
-| **Query-Driven Adaptive Graph Retrieval** | Electronics 2026 | adaptive `K*` from query complexity and path score distribution | multi-hop QA | proves adaptive scale is not novel by itself |
-| **Flow-RAG** | Knowledge-Based Systems 2026 | distribution-aware context-adaptive pruning boundary using log-space clustering | WebQSP/CWQ KGQA | especially close conceptual peer for dynamic boundaries; learned flow framework differs from operator-level regret study |
+첫째, 가지치기 후회는 실제로 관찰된다. 둘째, MAGIC에서는 고분기 조건에서 고정 Top-K의 증거 손실이 크게 증가한다. 셋째, 보존 범위를 넓히면 생존율은 높아질 수 있지만 정밀도와 계산 비용이 악화된다. 넷째, BADP는 MAGIC과 WN18RR 반복 탐색에서 경계 국소 보존이 유망할 수 있다는 반복된 양의 신호를 보였다.
 
-### 9.1 What cannot be claimed
+### 9.2 아직 확정되지 않은 주장
 
-The paper must **not** claim:
+경계 여유 `\Delta_K`가 후보 분기와 독립적으로 가지치기 후회의 원인인지는 아직 입증되지 않았다. 또한 현재 BADP 파라미터 중 일부는 탐색적 실험에서 결과를 관찰한 뒤 선택되었다. 최종 논문에서는 개발 집합에서 파라미터를 고정한 후 별도의 시험 집합에서 재검증해야 한다.
 
-```text
-first adaptive pruning
-first multi-path graph reasoning
-Top-K always worse
-Rashomon always better
-```
+### 9.3 점수기 의존성
 
-Recent adaptive methods explicitly change retrieval scale according to query complexity or score distributions.
+현재 주요 반복 탐색은 DeBERTa NLI 점수에 의존한다. DeBERTa는 lexical prior 대비 MAGIC conflict discrimination을 유의미하게 향상시켰지만, 특정 모델의 calibration 특성이 가지치기 결과에 영향을 줄 수 있다. 따라서 후속 실험에서는 구조 기반 scorer 또는 다른 의미 모델을 이용한 재검증이 필요하다.
 
-### 9.2 Proposed novelty claim
+### 9.4 비교 연구와의 관계
 
-The defensible contribution is:
-
-> **Identify the Top-K cutoff as an irreversible uncertainty boundary, quantify the loss it causes through pruning regret, and evaluate a minimal boundary-local delayed-pruning operator under retained-validity and matched-cost constraints.**
-
-The novelty is therefore the combination of:
-
-```text
-boundary-local decision criterion
-+
-pruning-regret formalization
-+
-retained-set validity
-+
-budget-matched search evaluation
-```
-
-rather than generic adaptivity.
+Plan-on-Graph와 Flow-RAG 등은 이미 적응형 폭 또는 분포 기반 경계를 사용한다. 따라서 신규성은 adaptive search 자체가 아니라 **Top-K 경계에서 발생한 비가역적 경로 손실의 명시적 정식화와 측정**, 그리고 해당 경계에 한정한 delayed commitment에 있다.
 
 ---
 
-## 10. Comparison Metrics against Peer Methods
+## 10. 한계
 
-Direct peer comparison requires a shared KGQA benchmark. WN18RR is retained as a controlled search-policy stress test and should not be compared numerically with published WebQSP/CWQ answer scores.
+현재 연구의 한계는 다음과 같다.
 
-For a later apples-to-apples WebQSP/CWQ experiment, use:
-
-| Evaluation level | Metrics |
-|---|---|
-| Final answer | Exact Match, F1, Hits@1 where applicable |
-| Evidence/path retrieval | Gold path recall, supporting-fact precision/recall/F1 |
-| Pruning behavior | Gold/viable path survival by depth, pruning regret rate |
-| Search efficiency | expanded nodes/paths, average active width, scorer/LLM calls |
-| Context efficiency | retrieved context tokens, redundant evidence ratio |
-| Runtime | retrieval latency, end-to-end latency |
-| Robustness | hop depth, branching factor, boundary margin, score ambiguity |
-| Trade-off | answer/search success versus expansion/context cost Pareto frontier |
-
-The most important methodological rule is:
-
-> **Compare pruning policies with the same scorer and comparable search budget before attributing gains to the pruning operator.**
+1. WN18RR 반복 탐색의 검증 규모가 아직 작다.
+2. MAGIC은 상충 증거 보존에는 적합하지만 일반 KGQA와 목적이 다르다.
+3. BADP 파라미터의 confirmatory dev/test 분리가 완료되지 않았다.
+4. DeBERTa 단일 의미 점수기에 대한 의존성이 존재한다.
+5. WebQSP/CWQ에서 ToG와 동일한 Freebase 전체 환경의 직접 재현이 추가로 필요하다.
+6. 최종 LLM 답변 생성 단계와의 상호작용은 현재 연구 범위 밖이다.
 
 ---
 
-## 11. Expected Contribution Structure
+## 11. 결론
 
-If Experiment C and a later shared KGQA benchmark confirm the effect, the paper contribution should be written as four points:
+본 연구는 다중 홉 지식그래프 추론에서 가지치기를 단순한 계산량 제어 연산이 아니라 **향후 복구가 불가능한 정보 선택 단계**로 본다. 고정 Top-K는 비용을 안정적으로 제한하지만, 경계 후보의 점수 차이가 작을 때에도 순위에 의해 즉시 제거 결정을 내린다. MAGIC과 WN18RR 실험은 이러한 결정이 실제 유효 경로 손실로 이어질 수 있으며, 특히 후보 분기가 큰 조건에서 위험이 증가함을 보여준다.
 
-1. **Failure definition:** formalize pruning regret as irreversible removal of all viable evidence despite pre-pruning recoverability.
-2. **Method:** propose Boundary-Aware Delayed Pruning, which preserves Top-K plus only candidates near the K-th cutoff.
-3. **Validity-aware evaluation:** distinguish useful preservation from indiscriminate candidate retention using viable/gold precision, recall, and F1.
-4. **Cost-controlled evidence:** evaluate fixed and adaptive policies under matched search budgets and report Pareto trade-offs rather than raw survival alone.
+제안한 BADP는 Top-K를 기본 구조로 유지하면서 `K`번째 cutoff와 가까운 후보만 추가 보존한다. 현재 결과는 BADP가 일부 조건에서 성공률과 가지치기 후회를 개선할 가능성을 보여주지만, 동시에 탐색 비용과 비유효 후보도 증가할 수 있음을 확인하였다. 따라서 본 연구의 목표는 BADP가 모든 상황에서 Top-K보다 우수하다는 것을 보이는 것이 아니라, **가지치기가 안전하지 않은 조건을 식별하고 그 조건에서 국소적 지연이 더 나은 성공–유효성–비용 균형을 제공하는지 검증하는 것**이다.
 
-The central claim is intentionally conditional:
-
-> **Fixed-width pruning is efficient when the rank boundary is clear, but can be unsafe when adjacent candidates are score-indistinguishable. Selective delayed commitment at that boundary is a more targeted response than globally retaining all near-best paths.**
+향후 WebQSP/CWQ의 공통 KGQA 환경에서 개발·시험 분리, 동일 비용 비교, 경계 여유별 후회 분석을 수행함으로써 외적 타당성을 확장한다.
 
 ---
 
-## 12. References / Peer Group
+## 참고 문헌
 
-- Sun, J. et al. **Think-on-Graph: Deep and Responsible Reasoning of Large Language Model on Knowledge Graph.** ICLR 2024. arXiv:2307.07697.
-- Ma, S. et al. **Think-on-Graph 2.0: Deep and Faithful Large Language Model Reasoning with Knowledge-guided Retrieval Augmented Generation.** ICLR 2025. arXiv:2407.10805.
-- Tan, X. et al. **Paths-over-Graph: Knowledge Graph Empowered Large Language Model Reasoning.** arXiv:2410.14211, 2024.
-- Liang, X.; Gu, Z. **Fast Think-on-Graph: Wider, Deeper and Faster Reasoning of Large Language Model on Knowledge Graph.** AAAI 2025, 39(23), 24558-24566. DOI: 10.1609/aaai.v39i23.34635.
-- Wang, H. et al. **A Query-Driven Graph Retrieval Framework with Adaptive Pruning for Multi-Hop Question Answering.** Electronics 2026, 15(6), 1263. DOI: 10.3390/electronics15061263.
-- Zhang, W. et al. **Flow-RAG: Retrieval-augmented generation for knowledge graph question answering via gated flow propagation.** Knowledge-Based Systems 348 (2026), 116400. DOI: 10.1016/j.knosys.2026.116400.
+1. Sun, J. et al. *Think-on-Graph: Deep and Responsible Reasoning of Large Language Model on Knowledge Graph*. ICLR, 2024.
+2. Ma, S. et al. *Think-on-Graph 2.0: Deep and Faithful Large Language Model Reasoning with Knowledge-guided Retrieval Augmented Generation*. ICLR, 2025.
+3. Tan, X. et al. *Paths-over-Graph: Knowledge Graph Empowered Large Language Model Reasoning*. WWW, 2025.
+4. Liang, X. and Gu, Z. *Fast Think-on-Graph: Wider, Deeper and Faster Reasoning of Large Language Model on Knowledge Graph*. AAAI, 2025.
+5. Wang, H. et al. *A Query-Driven Graph Retrieval Framework with Adaptive Pruning for Multi-Hop Question Answering*. Electronics, 2026.
+6. Zhang, W. et al. *Flow-RAG: Retrieval-Augmented Generation for Knowledge Graph Question Answering via Gated Flow Propagation*. Knowledge-Based Systems, 2026.
