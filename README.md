@@ -92,9 +92,9 @@ A4  Abduction + DeBERTa + PSL   <- Full
 
 추가 비교:
 
-- Tableau hard-logic verifier
 - DeBERTa-only local ranking
 - graph shortest/reachable path baseline
+- Tableau hard-logic verifier는 과거 방식 비교용 ablation으로만 사용
 - 공개 가능한 OpenRCA 2.0 baseline / leaderboard 결과
 
 ## 원칙
@@ -107,6 +107,6 @@ A4  Abduction + DeBERTa + PSL   <- Full
 
 ## 이전 연구
 
-MAGIC, WN18RR, WebQSP, Rashomon Worlds, Tableau, BADP 기반 이전 연구와 실험 결과는 [`STUDY_CASE.md`](STUDY_CASE.md)에만 보존한다.
+MAGIC, WN18RR, WebQSP, Rashomon Worlds, Tableau, BADP 기반 이전 연구와 실험 결과는 [`studycase.md`](studycase.md)에만 보존한다.
 
 전체 전환 전 코드는 브랜치 `archive/pre-openrca2-rewrite-20260825`에서 확인할 수 있다.
