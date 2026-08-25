@@ -1,0 +1,69 @@
+dataset:
+  name: OpenRCA-2.0
+  normalized_path: data/openrca2/cases.jsonl
+  gold_policy: evaluation_only
+
+tracks:
+  standard:
+    enabled: true
+    description: Same OpenRCA 2.0 inputs; compare official node/edge/path metrics where protocol matches.
+  missing_relation:
+    enabled: true
+    mask_ratios: [0.0, 0.2, 0.4, 0.6, 0.8]
+    seeds: [11, 23, 47, 89, 131]
+
+abduction:
+  max_structural_hops: 2
+  max_candidates: 128
+  preserve_top_n: 32
+
+semantic:
+  model: MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli
+  max_length: 512
+  batch_size: 16
+
+psl:
+  # Weights are development-set parameters. Freeze before test evaluation.
+  structural_weight: 1.0
+  temporal_weight: 1.2
+  anomaly_weight: 1.2
+  semantic_weight: 2.0
+  contradiction_weight: 2.0
+
+prediction:
+  edge_threshold: 0.5
+  max_root_causes: 3
+
+ablations:
+  - name: graph_only
+    abduction: false
+    deberta: false
+    psl: false
+  - name: abduction
+    abduction: true
+    deberta: false
+    psl: false
+  - name: abduction_deberta
+    abduction: true
+    deberta: true
+    psl: false
+  - name: abduction_psl
+    abduction: true
+    deberta: false
+    psl: true
+  - name: full
+    abduction: true
+    deberta: true
+    psl: true
+
+metrics:
+  - node_f1
+  - edge_f1
+  - path_accuracy
+  - missing_edge_precision
+  - missing_edge_recall
+  - missing_edge_f1
+  - root_hit_at_1
+  - root_hit_at_3
+  - exact_root_set
+  - path_reachability
