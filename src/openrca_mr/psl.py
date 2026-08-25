@@ -6,12 +6,7 @@ from .models import Hypothesis, RcaCase
 
 
 class SoftLogicApproximation:
-    """Dependency-free approximation of the PSL objective for smoke tests.
-
-    The paper experiments should use :class:`PslGlobalInference`. This fallback
-    keeps the same score semantics so ablations and unit tests do not require a
-    Java/PSL runtime.
-    """
+    """Dependency-free approximation used only for smoke/unit tests."""
 
     def infer(self, case: RcaCase, hypotheses: list[Hypothesis]) -> list[Hypothesis]:
         outgoing: dict[str, list[Hypothesis]] = defaultdict(list)
@@ -22,27 +17,27 @@ class SoftLogicApproximation:
 
         symptoms = set(case.symptom_nodes)
         for h in hypotheses:
-            local = 0.45 * h.abductive_score + 0.45 * h.semantic_support - 0.35 * h.semantic_contradiction
-            # Global consistency reward: edges that can participate in an
-            # evidence-supported chain toward a symptom receive extra mass.
+            semantic = h.semantic_support if h.semantic_support is not None else 0.0
+            contradiction = h.semantic_contradiction if h.semantic_contradiction is not None else 0.0
+            local = 0.45 * h.abductive_score + 0.45 * semantic - 0.35 * contradiction
             chain = 0.0
             if h.edge.target in symptoms:
                 chain += 0.15
             if outgoing.get(h.edge.target):
-                chain += 0.10 * max(x.semantic_support for x in outgoing[h.edge.target])
+                chain += 0.10 * max((x.semantic_support or 0.0) for x in outgoing[h.edge.target])
             if incoming.get(h.edge.source):
-                chain += 0.05 * max(x.semantic_support for x in incoming[h.edge.source])
+                chain += 0.05 * max((x.semantic_support or 0.0) for x in incoming[h.edge.source])
             h.soft_logic_score = max(0.0, min(1.0, local + chain))
 
-        return sorted(hypotheses, key=lambda h: h.soft_logic_score, reverse=True)
+        return sorted(hypotheses, key=lambda h: h.soft_logic_score or 0.0, reverse=True)
 
 
 class PslGlobalInference:
     """Probabilistic Soft Logic inference over candidate causal relations.
 
-    Predicates are soft observations derived from structure, temporal alignment,
-    anomaly strength and DeBERTa support. ``CAUSES`` is the open predicate. The
-    resulting truth values become the final candidate-edge scores.
+    Structural proximity, temporal order and anomaly co-occurrence are always
+    available. DeBERTa predicates are included only when semantic scoring was
+    actually run, keeping the Abduction+PSL ablation independent of DeBERTa.
     """
 
     def __init__(self):
@@ -63,12 +58,12 @@ class PslGlobalInference:
             return []
 
         model = self.Model("openrca_missing_relation")
-        structural = self.Predicate("STRUCTURAL", closed=True, size=2)
-        temporal = self.Predicate("TEMPORAL", closed=True, size=2)
-        anomaly = self.Predicate("ANOMALYPAIR", closed=True, size=2)
-        semantic = self.Predicate("SEMANTIC", closed=True, size=2)
-        contradiction = self.Predicate("CONTRADICTION", closed=True, size=2)
-        causes = self.Predicate("CAUSES", closed=False, size=2)
+        structural = self.Predicate("STRUCTURAL", size=2)
+        temporal = self.Predicate("TEMPORAL", size=2)
+        anomaly = self.Predicate("ANOMALYPAIR", size=2)
+        semantic = self.Predicate("SEMANTIC", size=2)
+        contradiction = self.Predicate("CONTRADICTION", size=2)
+        causes = self.Predicate("CAUSES", size=2)
         for pred in [structural, temporal, anomaly, semantic, contradiction, causes]:
             model.add_predicate(pred)
 
@@ -77,18 +72,26 @@ class PslGlobalInference:
         structural.add_data(obs, [[h.edge.source, h.edge.target, h.structural_score] for h in hypotheses])
         temporal.add_data(obs, [[h.edge.source, h.edge.target, h.temporal_score] for h in hypotheses])
         anomaly.add_data(obs, [[h.edge.source, h.edge.target, h.anomaly_score] for h in hypotheses])
-        semantic.add_data(obs, [[h.edge.source, h.edge.target, h.semantic_support] for h in hypotheses])
-        contradiction.add_data(obs, [[h.edge.source, h.edge.target, h.semantic_contradiction] for h in hypotheses])
+
+        has_semantic = any(h.semantic_support is not None for h in hypotheses)
+        if has_semantic:
+            semantic.add_data(obs, [[h.edge.source, h.edge.target, h.semantic_support or 0.0] for h in hypotheses])
+            contradiction.add_data(
+                obs,
+                [[h.edge.source, h.edge.target, h.semantic_contradiction or 0.0] for h in hypotheses],
+            )
+
         causes.add_data(targets, [[h.edge.source, h.edge.target] for h in hypotheses])
 
-        # Weights are development-set hyperparameters, never test-set tuned.
-        model.add_rule(self.Rule("1.0: STRUCTURAL(A,B) -> CAUSES(A,B) ^2"))
-        model.add_rule(self.Rule("1.2: TEMPORAL(A,B) -> CAUSES(A,B) ^2"))
-        model.add_rule(self.Rule("1.2: ANOMALYPAIR(A,B) -> CAUSES(A,B) ^2"))
-        model.add_rule(self.Rule("2.0: SEMANTIC(A,B) -> CAUSES(A,B) ^2"))
-        model.add_rule(self.Rule("2.0: CONTRADICTION(A,B) -> ~CAUSES(A,B) ^2"))
+        # Development-set hyperparameters. Freeze before any test evaluation.
+        model.add_rule(self.Rule("1.0: STRUCTURAL(A, B) -> CAUSES(A, B) ^2"))
+        model.add_rule(self.Rule("1.2: TEMPORAL(A, B) -> CAUSES(A, B) ^2"))
+        model.add_rule(self.Rule("1.2: ANOMALYPAIR(A, B) -> CAUSES(A, B) ^2"))
+        if has_semantic:
+            model.add_rule(self.Rule("2.0: SEMANTIC(A, B) -> CAUSES(A, B) ^2"))
+            model.add_rule(self.Rule("2.0: CONTRADICTION(A, B) -> !CAUSES(A, B) ^2"))
 
-        inferred = model.infer()
+        inferred = model.infer(psl_options={"runtime.log.level": "ERROR"})
         frame = inferred[causes]
         scores: dict[tuple[str, str], float] = {}
         for row in frame.itertuples(index=False):
@@ -97,4 +100,4 @@ class PslGlobalInference:
 
         for h in hypotheses:
             h.soft_logic_score = scores.get((h.edge.source, h.edge.target), 0.0)
-        return sorted(hypotheses, key=lambda h: h.soft_logic_score, reverse=True)
+        return sorted(hypotheses, key=lambda h: h.soft_logic_score or 0.0, reverse=True)
