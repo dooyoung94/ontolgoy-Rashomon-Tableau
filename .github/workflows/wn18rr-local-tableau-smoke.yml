@@ -1,0 +1,54 @@
+name: WN18RR Local Tableau Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/wn18rr-local-tableau-smoke.yml'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          pip install -e .
+          pip install -r requirements-nli.txt
+      - run: python scripts/download_relation_benchmarks.py --dataset WN18RR
+      - run: |
+          python scripts/build_multihop_relation_benchmark.py \
+            --dataset-dir data/kg_benchmarks/WN18RR \
+            --target-split test \
+            --min-hops 2 \
+            --max-hops 4 \
+            --max-examples 10 \
+            --max-paths-per-target 1 \
+            --output data/kg_benchmarks/WN18RR/multihop_test.jsonl
+      - run: |
+          python scripts/evaluate_multihop_relation_completion.py \
+            --dataset-dir data/kg_benchmarks/WN18RR \
+            --benchmark data/kg_benchmarks/WN18RR/multihop_test.jsonl \
+            --ontology config/wn18rr_ontology_rules.yaml \
+            --epsilon 0.05 \
+            --limit 10 \
+            --batch-size 32 \
+            --local-neighborhood-cap 16 \
+            --device cpu \
+            --output results/wn18rr_local_tableau_smoke_10.json
+      - run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('results/wn18rr_local_tableau_smoke_10.json').read_text())
+          print(json.dumps({'protocol':d['protocol'],'overall':d['overall'],'by_hop':d['by_hop']},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wn18rr-local-tableau-smoke-10
+          path: results/wn18rr_local_tableau_smoke_10.json
+          retention-days: 90
