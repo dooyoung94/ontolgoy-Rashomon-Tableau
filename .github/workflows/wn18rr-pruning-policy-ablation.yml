@@ -1,0 +1,51 @@
+name: WN18RR Pruning Policy Ablation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/wn18rr-pruning-policy-ablation.yml'
+      - 'scripts/evaluate_pruning_policies.py'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  ablation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download source 50-row scorer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wn18rr-multihop-rashomon-tableau-50-pilot
+          run-id: 32799621678
+          github-token: ${{ github.token }}
+          path: source_artifact
+
+      - name: Evaluate pruning policies
+        run: |
+          python scripts/evaluate_pruning_policies.py \
+            --input source_artifact/results/wn18rr_multihop_completion_pilot.json \
+            --output results/wn18rr_pruning_policy_ablation_50.json
+
+      - name: Show key comparison
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('results/wn18rr_pruning_policy_ablation_50.json').read_text())
+          for name in ['top1','top3_tog_style','top5','rashomon_eps_0.05','rashomon_eps_0.10','no_pruning']:
+              x=d['policies'][name]
+              print(name, 'survival=', x['gold_survival'], 'avg_active=', x['avg_active_hypotheses'])
+          print(json.dumps(d['comparisons'], indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wn18rr-pruning-policy-ablation-50
+          path: results/wn18rr_pruning_policy_ablation_50.json
+          retention-days: 90
