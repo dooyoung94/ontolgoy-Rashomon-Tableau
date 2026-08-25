@@ -1,205 +1,226 @@
-# Rashomon Worlds: Provenance-Aware Possible-World Reasoning for Multi-Hop Conflict and Truth Adjudication
+# Rashomon-Tableau: Uncertainty-Aware Multi-Hop Relation Completion over Incomplete Ontologies
 
 ## Abstract
 
-Multi-source knowledge systems often contain mutually incompatible claims whose conflicts emerge only through multi-hop relations. A single-world reasoner faces two coupled problems: incomplete relation semantics can prevent formal closure, while early selection of one interpretation can discard a viable explanation. We propose **Rashomon Worlds**, a provenance-aware possible-world framework that keeps uncertain relation interpretations defeasible, constructs multiple internally consistent worlds, verifies them with Tableau reasoning, and adjudicates among them with explicit world scoring and provenance-aware reliability. The framework separates **world construction** from **world selection** rather than treating graph-path discovery, contradiction verification, and truth discovery as one metric. On 588 released MAGIC multi-hop conflict rows (1,056 query conflicts), static Tableau verifies 4.45% of query conflicts, while possible-world construction retains a paired gold conflicting explanation for 39.39% of queries and 29.42% of rows under strict structured exact localization. Weak lexical world weighting reduces final exact localization to 7.14%, exposing world ranking as the bottleneck. Replacing only that ranking layer with a DeBERTa-v3 NLI discriminator raises row conflict recall from 22.79% to **41.50%**, query conflict recall from 16.86% to **31.53%**, and structured exact localization from 7.14% to **15.48%**. On the DAFNA-EA Books AuthorsNamesList 100-book gold subset, candidate generation contains the gold truth world for 93% of books; posterior/marginal source reliability reaches **62% exact truth accuracy and 84.13% author F1**, compared with 61%/84.04% for early hard commitment and 57% exact for official TruthFinder and AccuSim under the shared evaluation. The results support a narrow conclusion: maintaining alternative worlds materially improves explanation retention, and final performance depends strongly on how those worlds are ranked and adjudicated.
+Knowledge graphs and ontologies are incomplete by construction: a relation between two entities may be unobserved even when the entities are connected through several intermediate relations. Conventional knowledge-graph completion typically ranks candidate relations and commits to a single Top-1 prediction. This early commitment is problematic when multiple multi-hop explanations are similarly plausible and when a high-scoring neural prediction violates hard ontology constraints. We propose **Rashomon-Tableau**, an uncertainty-aware relation-reasoning framework that represents near-optimal `(multi-hop path, candidate relation)` interpretations as alternative possible worlds, preserves them using a Rashomon set, rejects logically inconsistent worlds through ontology-guided Tableau reasoning, and marginalizes the surviving worlds into a relation belief rather than immediately collapsing to a single interpretation. Semantic plausibility is deliberately separated from logical validity: a DeBERTa-v3 NLI model is one interchangeable scorer, while Tableau is the consistency mechanism. The empirical program has three stages. First, DAFNA-EA Books provides preliminary evidence that delayed commitment can improve truth adjudication: marginal Rashomon inference achieves 62% exact truth accuracy and 84.13% author F1 on the evaluated 100-book subset, compared with 61%/84.04% for early hard commitment and 57% exact for official TruthFinder and AccuSim. Second, the main experiment evaluates 2–4 hop relation-masked subsets of FB15k-237, WN18RR, and UMLS, measuring not only Hits/MRR but gold-relation coverage, Tableau retention, valid-world ratio, and calibration. Third, MAGIC is used as a downstream natural-language test of whether verified Rashomon-Tableau world information improves multi-hop contradiction identification and localization when supplied to an LLM. Earlier MAGIC v2–v4 pilots are retained as diagnostics: after correcting representation leakage and candidate retrieval, DeBERTa reached roughly 88% conditional scoring on gold-relevant paths, while the previous pipeline still failed to make Tableau world marginals control the final decision. This motivated the present redesign in which Rashomon and Tableau become the core reasoning mechanism rather than an auxiliary diagnostic.
 
 ---
 
 ## 1. Research Problem
 
-The target problem is not merely contradiction detection. With multi-hop evidence, three uncertainties interact:
+The target problem is **uncertainty-aware multi-hop relation completion under incomplete ontology semantics**.
 
-1. the relevant evidence path may be indirect;
-2. the composition of relations on that path may be uncertain;
-3. multiple sources may support mutually incompatible interpretations with different reliability.
+Let an observed graph contain one or more paths between entities `h` and `t`:
 
-A conventional pipeline often commits early by merging all claims, selecting one path/relation interpretation, or ranking sources before preserving alternative explanations. Under incomplete semantics, this can destroy a correct but lower-ranked explanation before it can be evaluated.
+\[
+p=(h \xrightarrow{r_1} e_1 \xrightarrow{r_2} \cdots \xrightarrow{r_k} t),
+\]
 
-We therefore study:
+while the direct relation is missing:
 
-> **Can a system preserve alternative, internally consistent explanations long enough to compare them using logical consistency and provenance-aware reliability, and does this improve conflict explanation retention and final truth recovery?**
+\[
+q=(h, ?, t).
+\]
+
+A standard completion system ranks candidate relations and returns:
+
+\[
+r^*=\arg\max_r s(p,r).
+\]
+
+This formulation hides two distinct uncertainties:
+
+1. **path uncertainty:** several 2–4 hop paths may connect `h` and `t`;
+2. **relation uncertainty:** several relations may receive near-identical semantic scores for the same path.
+
+A third issue is logical consistency. A neural or embedding model can assign a high score to a relation that conflicts with hard ontology axioms, explicit negation, incompatibility, exclusivity, symmetry/inverse constraints, or derived closure.
+
+The research question is therefore:
+
+> **Can multi-hop relation completion improve when near-optimal path/relation interpretations are preserved as alternative worlds, logically invalid worlds are removed by Tableau reasoning, and final belief is obtained by marginalizing the surviving worlds instead of committing early to one Top-1 prediction?**
 
 ---
 
 ## 2. Central Hypotheses
 
-### H1 — World construction
-Defeasible relation interpretations should retain valid multi-hop conflict explanations that a static hard ontology leaves unresolved.
+### H1 — Delayed commitment
+Retaining multiple near-optimal `(path, relation)` interpretations should preserve the gold relation more often than immediate Top-1 selection.
 
-### H2 — Delayed commitment
-Keeping multiple consistent worlds should preserve viable explanations that would be lost by choosing a single interpretation early.
+### H2 — Logical filtering
+Ontology-guided Tableau should reject high-scoring but logically inconsistent relation worlds while retaining logically compatible gold worlds.
 
-### H3 — World selection / adjudication
-Given the same candidate-world space, stronger evidence-aware world scoring or posterior reliability should improve final conflict localization and truth recovery over weak lexical weighting or early MAP commitment.
+### H3 — Multi-hop benefit
+The value of Rashomon retention should increase with path ambiguity and hop count because longer paths create more competing interpretations and spurious explanations.
 
-The paper is falsifiable: H1 fails if the gold explanation is not recovered more often; H2 fails if multiple worlds provide no retention benefit; H3 fails if replacing the ranking/adjudication mechanism does not improve same-protocol selection.
+### H4 — Downstream utility
+Providing verified relation marginals, valid/rejected worlds, uncertainty, and proof information to an LLM should improve natural-language multi-hop contradiction identification/localization relative to raw-context and compute-matched LLM baselines.
+
+The hypotheses are falsifiable. H1 fails if Rashomon retention does not improve gold coverage; H2 fails if Tableau removes gold worlds as often as it removes incorrect worlds; H3 fails if gains do not vary with ambiguity/hop count; H4 fails if verified world information does not improve MAGIC ID/LOC.
 
 ---
 
 ## 3. Method
 
-### 3.1 Possible-world representation
+### 3.1 Candidate space
 
-A world is defined as:
-
-\[
-W=(C,S,R,D)
-\]
-
-where `C` is a set of claims, `S` their source provenance, `R` selected relation interpretations, and `D` their derivations/proofs.
-
-A candidate world is retained only when:
+For each missing-relation query `q=(h,?,t)`, candidate generation provides a set:
 
 \[
-Tableau(W)=SAT.
+\mathcal C(q)=\{c_i=(p_i,r_i,s_i)\}_{i=1}^{n},
 \]
 
-Logical inconsistency therefore separates worlds instead of forcing all evidence into one inconsistent knowledge base.
+where:
 
-### 3.2 Hard and defeasible relation semantics
+- `p_i` is a multi-hop evidence path;
+- `r_i` is a candidate direct relation between `h` and `t`;
+- `s_i∈[0,1]` is semantic plausibility.
 
-Trusted ontology axioms remain hard. Uncertain relation composition is represented separately as a defeasible hypothesis:
+Candidate generation is intentionally modular. Paths can come from deterministic graph traversal; candidate relations can come from the relation vocabulary, KGE Top-K predictions, ontology rules, or an LLM proposal mechanism.
+
+### 3.2 Semantic plausibility
+
+The core does not require one scoring model. A scorer estimates how compatible a candidate relation is with the evidence path.
+
+For the NLI condition, DeBERTa-v3 receives a naturalized path as premise and the candidate relation as hypothesis:
 
 \[
-r_1(x,y)\land r_2(y,z)\Rightarrow q(x,z)
+Score_{NLI}(p,r)=\big(S(p,r),C(p,r),U(p,r)\big).
 \]
 
-or
+`S` is used as semantic plausibility for relation completion; `C` and `U` remain diagnostic/calibration signals. DeBERTa does not create worlds and does not determine logical validity.
+
+### 3.3 Rashomon relation set
+
+Let:
 
 \[
-r_1(x,y)\land r_2(y,z)\Rightarrow \neg q(x,z).
+s^*=\max_{c\in\mathcal C(q)}s(c).
 \]
 
-An explicit unresolved alternative is also allowed. A relation interpretation is therefore a variable of a world rather than a benchmark-specific ontology axiom. For MAGIC, arbitrary multi-hop path hypotheses are endpoint- and direction-bound.
-
-### 3.3 World scoring
-
-World construction and world scoring are intentionally separate. The candidate world set can therefore be held fixed while the ranking layer is ablated.
-
-The first MAGIC scorer is a weak frozen lexical relation prior. The second uses `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli` as a discriminative NLI scorer:
+The epsilon Rashomon set is:
 
 \[
-Score_{NLI}(W,q)=\{P(entail),P(contradict),P(neutral)\}.
+\mathcal R_\epsilon(q)=\{c\in\mathcal C(q): s(c)\ge s^*-\epsilon \land s(c)\ge\tau\}.
 \]
 
-These map to support, contradiction, and unresolved world mass. DeBERTa does not generate claims, paths, or worlds; it only ranks the worlds already produced by the same Rashomon pipeline.
+This differs from ordinary Top-K retention. The set size adapts to score ambiguity: a clear winner can yield one world, while a flat score landscape retains several plausible interpretations.
 
-### 3.4 Truth worlds and posterior reliability
+### 3.4 Relation worlds
 
-For truth-discovery data, a possible world corresponds to a candidate multi-valued truth. In DAFNA Books, candidate author worlds are generated from observed author sets and bounded combinations of source-supported atomic authors, with a maximum of 256 worlds per object. Gold truth is never used to generate or score candidate worlds.
-
-Three DAFNA variants use the identical candidate world space:
-
-- **Uniform:** all sources have equal reliability;
-- **Hard Commit:** source reliability is updated against the current MAP world;
-- **Marginal Reliability:** source reliability is updated from expected compatibility over all posterior worlds.
-
-Conceptually:
+Each retained candidate defines a world:
 
 \[
-Rel(s)\leftarrow E_{W\sim P(W)}[Compat(c_s,W)].
+W_{p,r}=G_{obs}\cup\{r(h,t)\}.
 \]
 
-The key ablation is therefore delayed posterior commitment versus early MAP commitment, not a change in candidate generation.
+Path provenance is retained as evidence for that world, while the proposed direct relation is the world variable.
+
+### 3.5 Tableau consistency filtering
+
+Given ontology `O`, each world is checked:
+
+\[
+Tableau(O\cup W_{p,r})\in\{SAT,UNSAT\}.
+\]
+
+UNSAT worlds are rejected. The current relational Tableau detects/derives explicit negation clashes, ontology-declared incompatible predicates, exclusive-relation conflicts, hierarchy, transitivity, symmetry, inverse relations, and configured composition rules.
+
+The valid set is:
+
+\[
+\mathcal W_{RT}(q)=\{W_{p,r}:W_{p,r}\in\mathcal R_\epsilon(q)\land SAT(O\cup W_{p,r})\}.
+\]
+
+This gives the two key operations complementary roles:
+
+\[
+Rashomon = ambiguity\ preservation,
+\]
+
+\[
+Tableau = logical\ pruning.
+\]
+
+### 3.6 World posterior and relation marginal
+
+A valid world receives normalized weight:
+
+\[
+P(W_i\mid q)=\frac{s_i}{\sum_{W_j\in\mathcal W_{RT}(q)}s_j}.
+\]
+
+Multiple paths can support the same relation. The relation posterior is therefore marginalized:
+
+\[
+P(r\mid q)=\sum_{W_i\in\mathcal W_{RT}(q)}P(W_i\mid q)\mathbf 1[r_i=r].
+\]
+
+The method also reports entropy:
+
+\[
+H(q)=-\sum_r P(r\mid q)\log P(r\mid q),
+\]
+
+which quantifies residual relation uncertainty after logical filtering.
 
 ---
 
-## 4. Experimental Decomposition
+## 4. Implementation
 
-### 4.1 MAGIC structured track — world construction and ranking
+The redesigned model-agnostic core is implemented in:
 
-We evaluate all 588 released multi-hop conflict rows, corresponding to 1,056 query conflicts. Because these files contain conflict cases, conflict values are **recall**, not full official MAGIC ID accuracy.
+```text
+src/rashomon_tableau/multihop_completion.py
+```
 
-A strict structured localization diagnostic requires every `original_triplet[i]` to be associated with a selected conflicting path covering its paired `perturb_triplet[i]`. This is not the published natural-language human-scored LOC metric.
+Main objects:
 
-The structured track answers two distinct questions:
+```text
+RelationCandidate
+RelationWorld
+CompletionResult
+```
 
-1. **Construction:** is the gold-compatible conflicting world retained?
-2. **Selection:** does the scorer select the correct conflicting world?
+Main functions:
 
-### 4.2 DAFNA-EA Books — truth-world adjudication
+```text
+select_rashomon_candidates(...)
+complete_missing_relation(...)
+candidates_from_nli(...)
+```
 
-We use the 100-book `AuthorsNamesList` subset:
+The implementation separates semantic scoring from symbolic reasoning. `RelationCandidate.score` can be supplied by DeBERTa, KGE, LLM, or another calibrated scorer without changing Rashomon/Tableau logic.
+
+Unit tests in:
+
+```text
+tests/test_multihop_completion.py
+```
+
+verify:
+
+1. near-optimal candidates survive epsilon selection;
+2. a high-scoring ontology-incompatible world is rejected by Tableau;
+3. multiple paths supporting the same relation are marginalized into one relation posterior.
+
+---
+
+## 5. Experimental Program
+
+The empirical design contains **three linked stages with different purposes**.
+
+### 5.1 Stage A — DAFNA-EA Books: preliminary delayed-commitment evidence
+
+DAFNA evaluates competing truth assignments rather than missing KG relations. It is therefore used as preliminary evidence for the value of preserving multiple plausible worlds.
+
+On the evaluated `AuthorsNamesList` 100-book subset:
 
 - 100 gold books;
 - 1,999 collapsed source-object claims;
 - 227 sources;
-- shared surname + first-initial benchmark-side normalization.
+- gold truth excluded from candidate generation and source-reliability updates.
 
-The official DAFNA-EA Java implementations are cloned, built, executed, and re-evaluated under the same normalized comparison. Gold is evaluation-only.
-
-### 4.3 MAGIC natural-language paired model-effect track
-
-For direct comparison with MAGIC LLM peers, the next track consumes only the original natural-language `context1/context2`. Gold structured fields are unavailable to prediction.
-
-For each base LLM we compare:
-
-1. Direct;
-2. Compute-Matched Direct;
-3. Rashomon Worlds + the same LLM as world scorer;
-4. Rashomon Worlds + DeBERTa-v3 as world scorer.
-
-The primary method-effect comparison is within the same base model. Compute-Matched Direct controls for extra LLM inference budget. LOC predictions are exported for blinded human scoring consistent with MAGIC's manual localization protocol.
-
-The current-model track is configured for GPT-5.5, GPT-5.4 mini, Claude Sonnet 5, Mistral Small 4, and Llama 3.3 70B Instruct. The historical MAGIC peer checkpoints remain a separate reproduction track.
-
----
-
-## 5. Results
-
-### 5.1 MAGIC — world construction and weak selection
-
-Validated workflow: `32725453943`; artifact `9519356207`.
-
-| Variant | Row conflict recall | Query conflict recall | Gold-world query recall | Structured row exact LOC |
-|---|---:|---:|---:|---:|
-| B1 Static Tableau | **5.44%** | 4.45% | — | — |
-| B2 Early-commit single world | **29.93%** | 22.63% | — | — |
-| B3 Possible-world retention | — | — | **39.39%** | **29.42%** |
-| B4 Weak lexical weighting | **22.79%** | 16.86% | — | **7.14%** |
-
-Average complexity is approximately 1.46 candidate paths/query and 4.10 retained worlds/query.
-
-These results support H1 and the retention part of H2. B4 exposes a negative result: a weak relation-name prior does not reliably select among the retained worlds.
-
-The valid row-level selection comparison is:
-
-\[
-29.42\%\;ExactGoldWorldRetention \rightarrow 7.14\%\;SelectedExactLocalization.
-\]
-
-The earlier query-level 39.39% value must not be subtracted directly from row-level 7.14% because they use different evaluation units.
-
-### 5.2 MAGIC — DeBERTa-v3 world scorer
-
-Validated workflow: `32730398659`; artifact `9521415589`.
-
-The candidate-world generation mechanism is unchanged. Only the world scoring layer is replaced by DeBERTa-v3 NLI.
-
-| World scorer | Row conflict recall | Query conflict recall | Structured row exact LOC |
-|---|---:|---:|---:|
-| Weak lexical prior | 22.79% | 16.86% | 7.14% |
-| **DeBERTa-v3 NLI** | **41.50%** | **31.53%** | **15.48%** |
-| **Absolute gain** | **+18.70 pp** | **+14.68 pp** | **+8.33 pp** |
-
-DeBERTa selects the paired gold conflicting path for **22.06%** of query conflicts.
-
-This result strengthens H3 on the MAGIC structured track: the world-ranking bottleneck is not merely conceptual. Holding candidate-world construction fixed while replacing a weak scorer with a discriminative semantic scorer materially improves both conflict selection and exact structured localization.
-
-The remaining row-level gap becomes:
-
-\[
-29.42\%\;ExactGoldWorldRetention \rightarrow 15.48\%\;SelectedExactLocalization.
-\]
-
-Thus DeBERTa closes roughly part, but not all, of the selection gap. The next target is better calibrated relation/proof scoring, not simply increasing the number of generated worlds.
-
-### 5.3 DAFNA-EA Books — truth-world adjudication
-
-Validated workflow: `32726434311`; artifact `9519739380`.
-
-Candidate world generation achieves **93.00% gold-world coverage**, with 27.94 candidate worlds/book on average.
+Measured results:
 
 | Method | Exact Truth Accuracy | Author F1 |
 |---|---:|---:|
@@ -207,71 +228,251 @@ Candidate world generation achieves **93.00% gold-world coverage**, with 27.94 c
 | Rashomon Worlds — Hard Commit | 61.00% | 84.04% |
 | Prior Atomic Resolution | 61.00% | 82.88% |
 | Rashomon Worlds — Uniform | 58.00% | 80.38% |
-| TruthFinder, official DAFNA-EA | 57.00% | 66.85% |
-| AccuSim, official DAFNA-EA | 57.00% | 66.18% |
-| 2-Estimates, official DAFNA-EA | 54.00% | 65.28% |
-| 3-Estimates, official DAFNA-EA | 53.00% | 65.45% |
-| Accu, official DAFNA-EA | 53.00% | 65.45% |
+| TruthFinder — official DAFNA-EA | 57.00% | 66.85% |
+| AccuSim — official DAFNA-EA | 57.00% | 66.18% |
 
-Marginal reliability improves over hard commitment by **+1.00 pp exact**, over the prior Atomic method by **+1.00 pp exact / +1.25 pp F1**, and over official TruthFinder/AccuSim by **+5.00 pp exact** on this shared evaluated subset.
+Candidate generation includes the gold truth world for **93%** of books. The primary interpretation is modest but useful: posterior/marginal delayed commitment improves exact recovery over early hard commitment by 1 pp and over the evaluated TruthFinder/AccuSim baselines by 5 pp exact. DAFNA does not by itself validate multi-hop relation completion.
 
-The DAFNA ranking gap remains:
+### 5.2 Stage B — Multi-hop missing-relation benchmark: main experiment
+
+This is the main evaluation of the proposed method.
+
+Candidate datasets:
+
+- **FB15k-237** — heterogeneous real-world relation vocabulary;
+- **WN18RR** — lexical/semantic relation structure with inverse leakage reduced relative to WN18;
+- **UMLS** — smaller ontology-rich biomedical relation graph suitable for symbolic constraints.
+
+For each dataset, construct a relation-masked evaluation subset satisfying:
+
+1. the gold direct relation `(h,r_gold,t)` is held out from the observed graph;
+2. `h` and `t` remain connected through at least one evidence path;
+3. examples are stratified by minimum path length: 2-hop, 3-hop, 4-hop;
+4. gold labels are never used in candidate generation, scoring, epsilon selection, or Tableau filtering.
+
+#### Baselines and ablations
+
+| Variant | Question |
+|---|---|
+| KGE Top-1 | standard early commitment |
+| KGE Top-K | is simple candidate retention enough? |
+| DeBERTa Top-1 | semantic scoring without Rashomon |
+| DeBERTa Top-K | fixed-size semantic retention |
+| DeBERTa + Rashomon | effect of adaptive delayed commitment |
+| **DeBERTa + Rashomon + Tableau** | full proposed method |
+| Rashomon + LLM + Tableau | scorer robustness / model independence |
+| Rashomon without ontology constraints | contribution of Tableau ontology knowledge |
+
+#### Metrics
+
+Standard ranking metrics:
+
+- MRR;
+- Hits@1;
+- Hits@3;
+- Hits@10.
+
+Rashomon-specific diagnostics:
 
 \[
-93\%\;GoldWorldCoverage \rightarrow 62\%\;ExactTruthSelection.
+GoldCoverage=\mathbf 1[r_{gold}\in\mathcal R_\epsilon],
 \]
 
+\[
+GoldRetention=\mathbf 1[r_{gold}\in\mathcal W_{RT}],
+\]
+
+plus:
+
+- Rashomon set size;
+- number of candidate paths;
+- Tableau rejection rate;
+- valid-world ratio;
+- false-rejection rate of gold worlds;
+- relation entropy;
+- calibration of `P(r|q)`;
+- results by 2/3/4-hop stratum.
+
+The critical ablation is:
+
+\[
+Top1 \rightarrow Rashomon \rightarrow Rashomon+Tableau.
+\]
+
+This separately tests whether gains come from preserving ambiguity and whether logical pruning adds value beyond candidate retention.
+
+### 5.3 Stage C — MAGIC: downstream natural-language utility
+
+MAGIC is repositioned as a downstream evaluation. It tests whether verified world information helps an LLM reason over natural-language multi-hop conflicts.
+
+The target pipeline is:
+
+```text
+context1 / context2
+      ↓
+claim / KG extraction
+      ↓
+missing or ambiguous multi-hop relation queries
+      ↓
+semantic candidate scoring
+      ↓
+Rashomon Worlds
+      ↓
+Tableau filtering
+      ↓
+relation marginal + entropy + proofs
+      ↓
+LLM
+      ↓
+ID + LOC + explanation
+```
+
+Primary comparisons:
+
+1. **Direct LLM:** raw contexts → answer;
+2. **Compute-Matched LLM:** extra LLM reasoning budget without Rashomon/Tableau;
+3. **Rashomon-Tableau Only:** symbolic/world decision without final LLM;
+4. **Rashomon-Tableau → LLM:** raw context plus verified world information.
+
+The key methodological comparison is (2) vs (4), because it controls for additional inference budget.
+
 ---
 
-## 6. Peer Positioning
+## 6. What Earlier MAGIC Experiments Established
 
-### MAGIC natural-language peers
+The previous MAGIC work is retained as diagnostic evidence, not presented as the final architecture.
 
-Published weighted multi-hop references are:
+### 6.1 Structured MAGIC
 
-| Peer | ID | LOC |
-|---|---:|---:|
-| Mixtral 8x7B | 28.21% | 9.23% |
-| Claude 3.5 Haiku | 48.81% | 34.01% |
-| o1 | 48.98% | 28.57% |
-| Llama 3.1 70B | 67.32% | 27.15% |
-| GPT-4o-mini | 78.40% | 47.28% |
+Earlier experiments showed that static hard-ontology reasoning verified only a small fraction of released structured conflicts, while broader candidate-world generation retained substantially more gold-compatible explanations. A DeBERTa-v3 world scorer improved structured row conflict recall and exact localization over a weak lexical scorer. These results motivated semantic scoring but did not prove the redesigned missing-relation method.
 
-These published values consume natural-language contexts. Structured DeBERTa results must not be presented as a head-to-head leaderboard against them. The repository now contains a same-input natural-language paired runner whose primary question is **method effect within each base model**, not cross-model ranking.
+### 6.2 Natural-language v2–v4 pilots
 
-### Truth-discovery peers
+The paired natural-language experiments identified three engineering/methodological issues:
 
-The safe DAFNA claim is limited to the evaluated subset:
+1. **v2 representation leakage:** provenance metadata in DeBERTa inputs artificially inflated contradiction performance;
+2. **v3 candidate bottleneck:** after removing leakage, gold-relevant path coverage was only around 25%;
+3. **v4 retrieval repair:** entity canonicalization, symmetric/inverse semantics, structural reverse traversal, and signed evidence increased gold-relevant candidate coverage to roughly 47–57% on usable Command/GPT-OSS rows.
 
-> On the DAFNA-EA Books AuthorsNamesList 100-book gold subset, Rashomon Worlds with marginal reliability achieves 62% exact truth accuracy, compared with 61% for the prior atomic method and 57% for official TruthFinder and AccuSim.
+When a gold-relevant candidate path was available in v4, DeBERTa conditional contradiction scoring was approximately **88%**. However, the previous final decision was still based directly on DeBERTa/LLM path scores while Rashomon/Tableau marginals remained diagnostic and often unresolved.
 
-This is not a claim of global SOTA.
+Therefore the correct conclusion is not that the old MAGIC pipeline validated Rashomon-Tableau. It demonstrated that:
 
----
+> **candidate retrieval and semantic scoring can recover useful multi-hop evidence, but the final decision must be reorganized so that Rashomon world construction and Tableau consistency actually determine the verified reasoning state.**
 
-## 7. Relation to Prior Repository Work
-
-The repository's earlier ontology-guided bidirectional Tableau is a historical baseline:
-
-| Prior diagnostic | Result |
-|---|---:|
-| direct heuristic detection | 33.16% |
-| bidirectional candidate-path coverage | 68.03% |
-| strict ontology-verified contradiction | 5.44% |
-
-The 68.03% value is path coverage, not accuracy. Its gap to formal contradiction motivated treating uncertain relation composition as a defeasible world variable rather than continuously hardcoding composition rules.
+This is the reason for the present redesign.
 
 ---
 
-## 8. Why This Is Not a Technology Enumeration
+## 7. Expected Scientific Contribution
 
-Knowledge graphs, ontology, Tableau, possible worlds, LLMs, DeBERTa, and source reliability are not separate novelty claims. Their roles are subordinate to one experimentally testable mechanism:
+The intended contribution is not a new NLI model, KGE architecture, possible-world semantics, or Tableau algorithm in isolation.
 
-1. generate alternative explanation/truth worlds;
-2. reject internally inconsistent worlds;
-3. preserve uncertainty rather than committing early;
-4. score the same retained worlds with interchangeable ranking mechanisms;
-5. marginalize provenance/reliability when applicable;
-6. measure separately whether the correct world was generated and whether it was selected.
+The contribution is the following uncertainty-aware reasoning mechanism:
 
-DeBERTa is therefore an ablated **world scorer**, not another technology added to the claimed novelty. Likewise, the LLM in the natural-language track is the perception/extraction and optionally scoring layer; the central representation remains Rashomon Worlds.
+\[
+\boxed{
+MultiHopEvidence
+\rightarrow SemanticCandidates
+\rightarrow RashomonSet
+\rightarrow TableauSAT
+\rightarrow RelationMarginal
+\rightarrow DownstreamReasoning
+}
+\]
+
+Its significance is threefold.
+
+### 7.1 Uncertainty-preserving ontology completion
+
+Instead of forcing an incomplete ontology into a deterministic completion, the method preserves several near-optimal interpretations until logical evidence is sufficient to remove them.
+
+### 7.2 Separation of statistical plausibility and logical validity
+
+Neural/KGE models answer:
+
+> “How plausible is this relation given the evidence?”
+
+Tableau answers:
+
+> “Can this relation coexist with the ontology and observed facts?”
+
+A high neural score therefore cannot override hard logical inconsistency.
+
+### 7.3 Verified reasoning state for LLMs
+
+The downstream LLM does not need to invent the reasoning space from scratch. It receives a structured state containing:
+
+- plausible relations;
+- supporting paths;
+- rejected worlds and clash reasons;
+- relation marginals;
+- residual uncertainty/entropy;
+- derivation/proof information.
+
+The hypothesis is that verified reasoning context can improve multi-hop natural-language decisions while reducing reliance on unconstrained latent reasoning.
+
+---
+
+## 8. Research Questions
+
+### RQ1
+Does adaptive Rashomon retention improve multi-hop gold-relation recovery over Top-1 and fixed Top-K completion?
+
+### RQ2
+Does ontology-guided Tableau improve precision/calibration by removing logically inconsistent worlds without materially reducing gold-relation retention?
+
+### RQ3
+How do the effects of Rashomon retention and Tableau filtering vary with hop count, number of alternative paths, and score ambiguity?
+
+### RQ4
+Does a downstream LLM achieve better MAGIC ID/LOC when given verified Rashomon-Tableau evidence than when given equivalent additional compute without that structure?
+
+---
+
+## 9. Research Boundary
+
+This work does **not** claim:
+
+- that DeBERTa is a new relation-completion architecture;
+- that all missing KG relations should be inferred from text alone;
+- that logical satisfiability alone determines truth;
+- that DAFNA results constitute a multi-hop KGC benchmark;
+- that the earlier MAGIC v2–v4 conflict recalls are final Rashomon-Tableau performance;
+- global SOTA before the relation-masked benchmark is executed.
+
+The paper's main empirical claim will be made only after the Stage B benchmark is built and the controlled `Top-1 → Rashomon → Rashomon+Tableau` ablations are run.
+
+---
+
+## 10. Current Status and Next Experiment
+
+### Already measured
+
+- DAFNA-EA delayed-commitment results;
+- structured MAGIC candidate-world/scorer diagnostics;
+- natural-language MAGIC v2–v4 candidate/scoring pilots.
+
+### Implemented in the redesigned core
+
+- model-agnostic relation candidates;
+- adaptive epsilon Rashomon retention;
+- `(path, relation)` possible worlds;
+- ontology-guided Tableau SAT filtering;
+- rejection explanations;
+- marginalization across multiple valid paths;
+- relation posterior entropy.
+
+### Immediate next experiment
+
+Build a reproducible 2–4 hop relation-masking protocol for FB15k-237, WN18RR, and UMLS, then measure:
+
+```text
+KGE Top-1
+DeBERTa Top-1
+DeBERTa Top-K
+DeBERTa + Rashomon
+DeBERTa + Rashomon + Tableau
+```
+
+Only after this core experiment is validated should the final MAGIC downstream pipeline be rebuilt around `Rashomon-Tableau → LLM` rather than `LLM/NLI → direct conflict decision`.
