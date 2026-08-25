@@ -1,0 +1,51 @@
+name: WebQSP BADP Pruning Pilot
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/evaluate_webqsp_pruning_wikidata.py'
+      - '.github/workflows/webqsp-pruning-pilot.yml'
+
+jobs:
+  webqsp-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 의존성 설치
+        run: |
+          pip install -e .
+          pip install -r requirements-nli.txt
+      - name: ToG 공식 WebQSP 데이터 내려받기
+        run: |
+          mkdir -p data/webqsp
+          curl -L --retry 3 \
+            https://raw.githubusercontent.com/DataArcTech/ToG/7ccbb92e17579f934bb778386230de47eca0ab67/data/WebQSP.json \
+            -o data/webqsp/WebQSP.json
+      - name: WebQSP 소규모 정책 비교 실행
+        run: |
+          python scripts/evaluate_webqsp_pruning_wikidata.py \
+            --webqsp data/webqsp/WebQSP.json \
+            --limit 10 --max-hops 2 --max-edges-per-node 25 \
+            --max-gold-answers 5 --batch-size 32 --device cpu \
+            --output results/webqsp_wikidata_pruning_pilot_10.json
+      - name: 결과 요약
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('results/webqsp_wikidata_pruning_pilot_10.json').read_text())
+          print(json.dumps(d['protocol'], ensure_ascii=False, indent=2))
+          print(json.dumps(d['summary'], ensure_ascii=False, indent=2))
+          print(json.dumps(d['diagnostics'], ensure_ascii=False, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webqsp-wikidata-pruning-pilot-10
+          path: results/webqsp_wikidata_pruning_pilot_10.json
+          retention-days: 90
