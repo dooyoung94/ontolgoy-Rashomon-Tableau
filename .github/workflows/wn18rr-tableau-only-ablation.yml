@@ -1,0 +1,58 @@
+name: WN18RR Tableau-only Ablation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/wn18rr-tableau-only-ablation.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  ablation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install core only
+        run: pip install -e .
+      - name: Download WN18RR
+        run: python scripts/download_relation_benchmarks.py --dataset WN18RR
+      - name: Download frozen-score 50-row pilot artifact
+        run: |
+          mkdir -p previous
+          gh run download 32799621678 \
+            -n wn18rr-multihop-rashomon-tableau-50-pilot \
+            -D previous
+          find previous -type f -maxdepth 6 -print
+      - name: Re-evaluate Tableau only
+        run: |
+          python scripts/reevaluate_tableau_from_pilot.py \
+            --dataset-dir data/kg_benchmarks/WN18RR \
+            --benchmark previous/data/kg_benchmarks/WN18RR/multihop_test.jsonl \
+            --previous-result previous/results/wn18rr_multihop_completion_pilot.json \
+            --ontology config/wn18rr_ontology_rules.yaml \
+            --epsilon 0.05 \
+            --local-neighborhood-cap 16 \
+            --output results/wn18rr_tableau_only_ablation_50.json
+      - name: Show result
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('results/wn18rr_tableau_only_ablation_50.json').read_text())
+          print(json.dumps({'protocol':d['protocol'],'overall':d['overall'],'by_hop':d['by_hop']},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wn18rr-tableau-only-ablation-50
+          path: results/wn18rr_tableau_only_ablation_50.json
+          retention-days: 90
