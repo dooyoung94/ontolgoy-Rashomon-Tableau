@@ -1,0 +1,70 @@
+{
+  "protocol": {
+    "dataset": "WN18RR",
+    "candidate_relations": 11,
+    "epsilon": 0.05,
+    "min_score": 0.0,
+    "batch_size": 32,
+    "scorer": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
+    "gold_policy": "gold relation used only after scoring for evaluation",
+    "evidence_policy": "train-graph directed multi-hop path only",
+    "tableau_policy": "ontology SAT filter over path evidence plus proposed relation",
+    "workflow_run": 32799621678,
+    "artifact_id": 9546119681,
+    "artifact_sha256": "14d6fd5fd5d1bd55ee69ca8c4e1a65715e315ef1fd2238a6337e965e6bc66320",
+    "scope": "50-row pilot; directional evidence, not final full benchmark"
+  },
+  "overall": {
+    "n": 50,
+    "top1_accuracy": 0.16,
+    "rashomon_gold_coverage": 0.42,
+    "tableau_gold_retention": 0.42,
+    "rashomon_tableau_top1_accuracy": 0.16,
+    "avg_rashomon_size": 3.82,
+    "avg_valid_worlds": 3.82,
+    "avg_rejected_worlds": 0.0,
+    "avg_entropy": 1.0658523529853239
+  },
+  "by_hop": {
+    "2": {
+      "n": 19,
+      "top1_accuracy": 0.05263157894736842,
+      "rashomon_gold_coverage": 0.3684210526315789,
+      "tableau_gold_retention": 0.3684210526315789,
+      "rashomon_tableau_top1_accuracy": 0.05263157894736842,
+      "avg_rashomon_size": 5.2631578947368425,
+      "avg_valid_worlds": 5.2631578947368425,
+      "avg_rejected_worlds": 0.0,
+      "avg_entropy": 1.4049675916646769
+    },
+    "3": {
+      "n": 23,
+      "top1_accuracy": 0.30434782608695654,
+      "rashomon_gold_coverage": 0.4782608695652174,
+      "tableau_gold_retention": 0.4782608695652174,
+      "rashomon_tableau_top1_accuracy": 0.30434782608695654,
+      "avg_rashomon_size": 2.9130434782608696,
+      "avg_valid_worlds": 2.9130434782608696,
+      "avg_rejected_worlds": 0.0,
+      "avg_entropy": 0.8277624946483364
+    },
+    "4": {
+      "n": 8,
+      "top1_accuracy": 0.0,
+      "rashomon_gold_coverage": 0.375,
+      "tableau_gold_retention": 0.375,
+      "rashomon_tableau_top1_accuracy": 0.0,
+      "avg_rashomon_size": 3.0,
+      "avg_valid_worlds": 3.0,
+      "avg_rejected_worlds": 0.0,
+      "avg_entropy": 0.9449620038407038
+    }
+  },
+  "interpretation": {
+    "rashomon_retention_gain_pp": 26.0,
+    "extra_gold_relations_retained_beyond_top1": 13,
+    "tableau_observed_pruning": false,
+    "tableau_limitation": "The pilot passes only the selected evidence path into Tableau. Without ontology-relevant local-neighborhood facts around the query endpoints, most cross-path cycles, reverse-edge conflicts, and other graph-level clashes are invisible to the consistency checker.",
+    "semantic_scorer_limitation": "Generic NLI support is weak as a direct composition model for arbitrary WN18RR relation chains; Top-1 accuracy is only 16% in this pilot. Rashomon preserves more gold candidates but cannot repair scorer ranking by itself."
+  }
+}
