@@ -43,13 +43,10 @@ class MissingRelationRCA:
 
         selected = [h for h in hypotheses if h.final_score >= self.edge_threshold]
 
-        # Relation masking leaves part of the ontology visible. Preserve those
-        # known causal facts and infer only the masked/unknown relations.
         known_causal = [edge for edge in case.known_edges if edge.relation == REL_CAUSAL]
         predicted_edges = [edge.key() for edge in known_causal]
         predicted_edges.extend(h.edge.key() for h in selected)
 
-        # Root ranking should see both inferred and already-known causal edges.
         root_hypotheses = list(selected)
         for edge in known_causal:
             root_hypotheses.append(
@@ -63,7 +60,16 @@ class MissingRelationRCA:
                     soft_logic_score=1.0,
                 )
             )
-        roots = self._rank_roots(case, root_hypotheses)
+
+        # A standard OpenRCA agent must still name a root cause when no causal
+        # edge crosses the fixed decision threshold (or traces expose no edge).
+        # This fallback uses only model-visible telemetry and therefore does not
+        # introduce topology or gold-label leakage.
+        if root_hypotheses:
+            roots = self._rank_roots(case, root_hypotheses)
+        else:
+            roots = self._rank_evidence_only_roots(case)
+
         return RcaPrediction(
             case_id=case.case_id,
             ranked_hypotheses=hypotheses,
@@ -78,7 +84,7 @@ class MissingRelationRCA:
         by_node = case.evidence_by_node()
         nodes = {h.edge.source for h in hypotheses if h.edge.source not in symptoms}
         if not nodes:
-            return []
+            return MissingRelationRCA._rank_evidence_only_roots(case)
 
         outgoing: dict[str, float] = {node: 0.0 for node in nodes}
         incoming: dict[str, float] = {node: 0.0 for node in nodes}
@@ -114,5 +120,44 @@ class MissingRelationRCA:
                 + 0.12 * (1.0 - incoming[node])
             )
             ranked.append((node, rootness))
+        ranked.sort(key=lambda x: (-x[1], x[0]))
+        return [node for node, _ in ranked]
+
+    @staticmethod
+    def _rank_evidence_only_roots(case: RcaCase) -> list[str]:
+        """Telemetry-only fallback when no causal edge is selected.
+
+        Rank non-symptom services by anomaly magnitude and earliest anomalous
+        onset. Stable-presence evidence remains a weak candidate rather than
+        causing an empty RCA output.
+        """
+        symptoms = set(case.symptom_nodes)
+        by_node = case.evidence_by_node()
+        nodes = [node for node in by_node if node not in symptoms]
+        if not nodes:
+            nodes = list(by_node)
+        if not nodes:
+            return []
+
+        anomaly: dict[str, float] = {}
+        first_times: dict[str, float] = {}
+        for node in nodes:
+            items = by_node.get(node, [])
+            anomaly[node] = max((e.abnormality for e in items), default=0.0)
+            times = [e.timestamp for e in items if e.timestamp is not None and e.is_anomalous]
+            if times:
+                first_times[node] = min(times)
+
+        if first_times:
+            lo, hi = min(first_times.values()), max(first_times.values())
+            span = max(hi - lo, 1e-9)
+        else:
+            lo, span = 0.0, 1.0
+
+        ranked: list[tuple[str, float]] = []
+        for node in nodes:
+            early = 1.0 - ((first_times[node] - lo) / span) if node in first_times else 0.0
+            score = 0.75 * anomaly[node] + 0.25 * early
+            ranked.append((node, score))
         ranked.sort(key=lambda x: (-x[1], x[0]))
         return [node for node, _ in ranked]
