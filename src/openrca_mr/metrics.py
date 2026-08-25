@@ -22,7 +22,7 @@ class RelationMetrics:
 
 
 def normalize_service(name: str) -> str:
-    """Normalize service identities for OpenRCA2 process evaluation."""
+    """OpenRCA2 primary-metric service normalization."""
     value = str(name).strip().lower()
     value = re.sub(r"^(?:service[:/]|svc[:/])", "", value)
     if value.startswith("ts-"):
@@ -49,23 +49,24 @@ def _pair_set(edges) -> set[tuple[str, str]]:
     return out
 
 
-def service_edge_metrics(predicted, gold) -> EdgeMetrics:
-    """Directed service-pair F1; relation labels are intentionally ignored."""
-    p = _pair_set(predicted)
-    g = _pair_set(gold)
-    tp = len(p & g)
-    precision = tp / len(p) if p else 0.0
-    recall = tp / len(g) if g else 0.0
+def _prf_sets(predicted: set, gold: set) -> EdgeMetrics:
+    # OpenRCA2 Appendix G.2 boundary rule: both empty => perfect prediction.
+    if not predicted and not gold:
+        return EdgeMetrics(1.0, 1.0, 1.0)
+    tp = len(predicted & gold)
+    precision = tp / len(predicted) if predicted else 0.0
+    recall = tp / len(gold) if gold else 0.0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
     return EdgeMetrics(precision, recall, f1)
 
 
-def relation_classification_metrics(predicted_causal, masked_truth: list[CausalEdge]) -> RelationMetrics:
-    """Binary relation recovery over masked observed pairs.
+def service_edge_metrics(predicted, gold) -> EdgeMetrics:
+    """Official-style directed service-pair F1; relation labels are ignored."""
+    return _prf_sets(_pair_set(predicted), _pair_set(gold))
 
-    Positive = the observed dependency is a PAVE causal-propagation relation.
-    Negative = the observed dependency is non-causal for this incident.
-    """
+
+def relation_classification_metrics(predicted_causal, masked_truth: list[CausalEdge]) -> RelationMetrics:
+    """Binary relation recovery over masked observed pairs."""
     predicted_pairs = _pair_set(predicted_causal)
     rows: list[tuple[bool, bool]] = []
     for edge in masked_truth:
@@ -92,16 +93,27 @@ def edge_metrics(predicted, gold) -> EdgeMetrics:
     return service_edge_metrics(predicted, gold)
 
 
-def node_metrics(predicted_edges, gold_edges) -> EdgeMetrics:
+def node_metrics(predicted_edges, gold_edges, predicted_roots=None, gold_roots=None) -> EdgeMetrics:
+    """Official-style service node F1.
+
+    Agent root-cause entries are graph nodes even when a predicted propagation
+    edge is absent, so optional root lists are included in the node sets.
+    """
     p_pairs = _pair_set(predicted_edges)
     g_pairs = _pair_set(gold_edges)
     p = {x for pair in p_pairs for x in pair}
     g = {x for pair in g_pairs for x in pair}
-    tp = len(p & g)
-    precision = tp / len(p) if p else 0.0
-    recall = tp / len(g) if g else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    return EdgeMetrics(precision, recall, f1)
+    if predicted_roots:
+        p |= {normalize_service(x) for x in predicted_roots if not is_loadgen(x)}
+    if gold_roots:
+        g |= {normalize_service(x) for x in gold_roots if not is_loadgen(x)}
+    return _prf_sets(p, g)
+
+
+def root_set_metrics(predicted: list[str], gold: list[str]) -> EdgeMetrics:
+    p = {normalize_service(x) for x in predicted if not is_loadgen(x)}
+    g = {normalize_service(x) for x in gold if not is_loadgen(x)}
+    return _prf_sets(p, g)
 
 
 def root_hit_at_k(predicted: list[str], gold: list[str], k: int) -> float:
@@ -110,12 +122,24 @@ def root_hit_at_k(predicted: list[str], gold: list[str], k: int) -> float:
     return float(bool(p & g))
 
 
+def any_root_service_hit(predicted: list[str], gold: list[str]) -> float:
+    p = {normalize_service(x) for x in predicted}
+    g = {normalize_service(x) for x in gold}
+    return float(bool(p & g))
+
+
+def all_root_services_hit(predicted: list[str], gold: list[str]) -> float:
+    p = {normalize_service(x) for x in predicted}
+    g = {normalize_service(x) for x in gold}
+    return float(bool(g) and g.issubset(p))
+
+
 def exact_root_set(predicted: list[str], gold: list[str]) -> float:
     return float({normalize_service(x) for x in predicted} == {normalize_service(x) for x in gold})
 
 
 def process_path_reachability(predicted_edges, predicted_roots: list[str], gold_roots: list[str], gold_alarm_nodes: list[str]) -> float:
-    """Case-level PR: correct predicted root plus a directed path to a gold alarm."""
+    """OpenRCA2 PR: correct root plus predicted directed path to a gold alarm."""
     adjacency: dict[str, set[str]] = {}
     for source, target in _pair_set(predicted_edges):
         adjacency.setdefault(source, set()).add(target)
