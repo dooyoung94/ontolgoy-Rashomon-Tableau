@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 
@@ -9,17 +10,20 @@ spec = importlib.util.spec_from_file_location("incremental_base", BASE)
 if spec is None or spec.loader is None:
     raise RuntimeError(f"unable to load {BASE}")
 base = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = base
 spec.loader.exec_module(base)
 
 
 _original_policies = base.policies
+_original_select = base.select
 
 
 def policies():
     out = _original_policies()
     # Classical Rashomon sets are defined in loss space. With DeBERTa support s,
-    # use loss L=1-s and retain L <= (1+epsilon)L*. This is equivalent to
-    # s >= s* - epsilon(1-s*), making the tolerance scale-aware.
+    # use loss L=1-s and retain L <= (1+epsilon)L*. Equivalently:
+    # s >= s* - epsilon(1-s*). Low-confidence best scores therefore receive a
+    # wider tolerance, while high-confidence best scores receive a narrower one.
     out["rashomon_relative_loss_0.10"] = base.PolicyState(
         "rashomon_relative_loss_0.10", "relative_loss", 0.10, 20
     )
@@ -43,15 +47,13 @@ def select(candidates, state, edge_scores):
         return []
     best = base.path_score(ranked[0], edge_scores)
     best_loss = 1.0 - best
-    max_loss = (1.0 + state.value) * best_loss
-    threshold = 1.0 - max_loss
+    threshold = 1.0 - (1.0 + state.value) * best_loss
     chosen = [p for p in ranked if base.path_score(p, edge_scores) >= threshold]
     if state.max_width is not None:
         chosen = chosen[: state.max_width]
     return chosen
 
 
-_original_select = base.select
 base.policies = policies
 base.select = select
 
