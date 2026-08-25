@@ -76,19 +76,20 @@ def _standard_case(name: str, cache: Path, manifest_root_services: list[str]) ->
     )
     symptoms = base._symptoms(known_edges, evidence)
 
-    # The 500-case release is manifest-driven. Its service-level root GT is
-    # manifest.root_services. causal_graph.root_causes may be expressed as a
-    # pod/container component that is intentionally absent from
-    # component_to_service, so it is not a reliable service-level root parser.
+    # The 500-case release is manifest-driven. Service-level root GT comes from
+    # manifest.root_services; causal_graph root components can be pod/container
+    # entities that do not appear in component_to_service.
     _graph_roots, gold_edges, gold_alarms = base._gold_from_causal_graph(graph)
     gold_roots = [str(x) for x in manifest_root_services if str(x).strip()]
     if not gold_roots:
         raise RuntimeError(f"manifest missing root_services: {name}")
-    if not gold_edges:
-        raise RuntimeError(f"causal graph missing service-level edges: {name}")
     if not gold_alarms:
         raise RuntimeError(f"causal graph missing service-level alarm nodes: {name}")
 
+    # A valid PAVE component path can collapse entirely inside one service.
+    # In that case the official service-level gold edge set is legitimately
+    # empty. Keep the case in the denominator: the evaluator's empty/empty
+    # boundary rule assigns Edge-F1=1 only when the model also predicts no edge.
     return RcaCase(
         case_id=name,
         symptom_nodes=symptoms,
@@ -100,11 +101,12 @@ def _standard_case(name: str, cache: Path, manifest_root_services: list[str]) ->
         metadata={
             "dataset": "anon-ops/ops-lite",
             "fault_type": graph.get("fault_type"),
-            "adapter": "openrca2_standard_telemetry_v2",
+            "adapter": "openrca2_standard_telemetry_v3",
             "topology_source": "union(normal_traces, abnormal_traces)",
             "root_gold_source": "manifest.root_services",
             "edge_alarm_gold_source": "causal_graph.json",
             "gold_usage": "evaluation_only",
+            "service_level_gold_edge_count": len(gold_edges),
         },
     )
 
@@ -150,6 +152,7 @@ def build_range(out: Path, cache: Path, start: int, end: int) -> list[RcaCase]:
         "end": end,
         "requested": end - start,
         "normalized": len(cases),
+        "empty_service_edge_cases": sum(not c.gold_edges for c in cases),
         "errors": errors,
     }
     print(json.dumps(stats, indent=2))
