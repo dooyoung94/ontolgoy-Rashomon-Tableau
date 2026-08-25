@@ -1,0 +1,38 @@
+{
+  "protocol": {
+    "dataset": "WN18RR",
+    "source_scores": "frozen from workflow run 32799621678",
+    "ablation_run": 32802219346,
+    "artifact_id": 9546885491,
+    "artifact_sha256": "88d8a5ed9e1fd430f90ba3b68f0666b9bfa2ffcc8313a1a4697d536a01c4a973",
+    "epsilon": 0.05,
+    "local_neighborhood_cap": 16,
+    "comparison": "same DeBERTa scores and Rashomon candidates; only Tableau context changes"
+  },
+  "overall": {
+    "n": 50,
+    "rashomon_gold_coverage": 0.42,
+    "path_tableau_gold_retention": 0.42,
+    "path_rt_top1_accuracy": 0.16,
+    "path_avg_rejected_worlds": 0.0,
+    "local_tableau_gold_retention": 0.42,
+    "local_rt_top1_accuracy": 0.16,
+    "local_avg_rejected_worlds": 0.0,
+    "local_wrong_rejection_precision": 0.0,
+    "local_gold_false_rejection_rate": 0.0,
+    "local_avg_fact_count": 14.82,
+    "path_avg_entropy": 1.0658523529853239,
+    "local_avg_entropy": 1.0658523529853239
+  },
+  "by_hop": {
+    "2": {"n": 19, "rashomon_gold_coverage": 0.3684210526, "path_rt_top1_accuracy": 0.0526315789, "local_rt_top1_accuracy": 0.0526315789, "local_avg_rejected_worlds": 0.0},
+    "3": {"n": 23, "rashomon_gold_coverage": 0.4782608696, "path_rt_top1_accuracy": 0.3043478261, "local_rt_top1_accuracy": 0.3043478261, "local_avg_rejected_worlds": 0.0},
+    "4": {"n": 8, "rashomon_gold_coverage": 0.375, "path_rt_top1_accuracy": 0.0, "local_rt_top1_accuracy": 0.0, "local_avg_rejected_worlds": 0.0}
+  },
+  "interpretation": {
+    "rashomon_effect": "positive candidate-retention effect remains +26pp over DeBERTa Top-1",
+    "tableau_effect": "none observed under either path-only or ontology-relevant local-subgraph context",
+    "dataset_diagnosis": "WN18RR supplies mostly positive lexical relation triples and only limited hard ontology constraints. The candidate worlds rarely violate the configured symmetry/transitivity/irreflexivity/antisymmetry rules, so Tableau has little opportunity to prune.",
+    "decision": "Use WN18RR primarily for multi-hop relation scoring and Rashomon retention. Evaluate Tableau contribution on an ontology-rich dataset with explicit incompatibility/disjointness/negative constraints such as UMLS-derived ontology rules, or on a controlled contradiction-injection ablation."
+  }
+}
