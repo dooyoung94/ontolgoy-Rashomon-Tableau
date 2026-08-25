@@ -32,7 +32,6 @@ def _clip01(x: float) -> float:
 
 
 def _seconds(series: pd.Series) -> pd.Series:
-    # HF parquet contains ns timestamps beyond Python datetime's safe range.
     if pd.api.types.is_datetime64_any_dtype(series.dtype):
         return series.astype("int64") / 1e9
     return pd.to_numeric(series, errors="coerce") / 1e9
@@ -62,8 +61,8 @@ def _trace_dependency_edges(normal_traces: pd.DataFrame) -> list[CausalEdge]:
     for row in joined[["child_service", "parent_service"]].itertuples(index=False):
         child_service, parent_service = str(row[0]), str(row[1])
         if child_service and parent_service and child_service != parent_service:
-            # Request direction is caller -> callee; causal failure propagation is
-            # usually callee -> caller, so reverse the observed call edge.
+            # Trace call direction is caller -> callee. Failure propagation is
+            # evaluated cause -> effect, which is normally callee -> caller.
             pairs.add((child_service, parent_service))
     return [CausalEdge(a, "dependency_propagates_to", b) for a, b in sorted(pairs)]
 
@@ -109,7 +108,6 @@ def _metric_shift(normal: pd.DataFrame, abnormal: pd.DataFrame, service: str) ->
     best = (0.0, "", None)
     common = sorted(set(nsvc["metric"].dropna().astype(str)) & set(asvc["metric"].dropna().astype(str)))
     for metric in common:
-        # Skip obviously cumulative time counters; they create window-position artifacts.
         low = metric.lower()
         if low.endswith(".time") or low.endswith("_time"):
             continue
@@ -221,7 +219,6 @@ def _evidence_for_case(
                 f"{service} metric {metric_name} shifted materially from its normal-window distribution.",
             ))
 
-    # Keep at least one model-visible signal for every service in the observed dependency graph.
     by_node = {e.node for e in evidence}
     all_services = sorted(set(normal_traces.get("service_name", pd.Series(dtype=str)).dropna().astype(str)))
     for service in all_services:
@@ -276,7 +273,7 @@ def _gold_from_causal_graph(graph: dict) -> tuple[list[str], list[CausalEdge], l
     return roots, edges, alarms
 
 
-def _case(name: str, cache: Path) -> RcaCase | None:
+def _case(name: str, cache: Path, require_attributed: bool = True) -> RcaCase | None:
     folder = cache / name
     files = [
         "label.txt", "causal_graph.json", "env.json",
@@ -286,7 +283,7 @@ def _case(name: str, cache: Path) -> RcaCase | None:
     ]
     for filename in files:
         _download(f"{BASE}/cases/{name}/{filename}?download=true", folder / filename)
-    if (folder / "label.txt").read_text(encoding="utf-8").strip().lower() != "attributed":
+    if require_attributed and (folder / "label.txt").read_text(encoding="utf-8").strip().lower() != "attributed":
         return None
 
     graph = _json(folder / "causal_graph.json")
@@ -320,24 +317,31 @@ def _case(name: str, cache: Path) -> RcaCase | None:
         metadata={
             "dataset": "anon-ops/ops-lite",
             "fault_type": graph.get("fault_type"),
-            "adapter": "telemetry_only_v1",
+            "adapter": "telemetry_only_v2",
             "gold_usage": "evaluation_only",
+            "label_filter": "attributed_only" if require_attributed else "none",
         },
     )
 
 
-def build(out: Path, cache: Path, limit: int) -> list[RcaCase]:
+def build(out: Path, cache: Path, limit: int, require_attributed: bool = True) -> list[RcaCase]:
     manifest = cache / "manifest.jsonl"
     _download(f"{BASE}/manifest.jsonl?download=true", manifest)
     rows = [json.loads(line) for line in manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
     cases: list[RcaCase] = []
     for row in rows:
         try:
-            case = _case(str(row["name"]), cache)
+            case = _case(str(row["name"]), cache, require_attributed=require_attributed)
         except Exception as exc:
             print(f"SKIP {row.get('name')}: {type(exc).__name__}: {exc}")
             continue
         if case is not None:
+            case.metadata.update({
+                "system": row.get("system"),
+                "manifest_primary_kind": row.get("primary_kind"),
+                "manifest_subtypes": row.get("subtypes", []),
+                "manifest_hybrid": bool(row.get("hybrid", False)),
+            })
             cases.append(case)
             print(
                 "CASE", case.case_id,
@@ -358,9 +362,10 @@ def main() -> None:
     parser.add_argument("--out", default="artifacts/ops_lite_20.jsonl")
     parser.add_argument("--cache", default=".cache/ops-lite")
     parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--all-labels", action="store_true", help="standard OpenRCA2 track: do not filter label.txt")
     args = parser.parse_args()
-    cases = build(Path(args.out), Path(args.cache), args.limit)
-    print(json.dumps({"n": len(cases), "out": args.out}, indent=2))
+    cases = build(Path(args.out), Path(args.cache), args.limit, require_attributed=not args.all_labels)
+    print(json.dumps({"n": len(cases), "out": args.out, "all_labels": args.all_labels}, indent=2))
 
 
 if __name__ == "__main__":
