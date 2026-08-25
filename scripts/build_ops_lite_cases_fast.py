@@ -89,8 +89,6 @@ def _build_manifest_range(out: Path, cache: Path, start_index: int, end_index: i
             continue
 
         if all_labels:
-            # Standard track retains cases even when no topology/evidence is
-            # reconstructed. Only missing benchmark GT makes a case invalid.
             if not case.gold_root_causes or not case.gold_edges:
                 skipped_invalid += 1
                 continue
@@ -151,11 +149,7 @@ def main() -> None:
         _build_manifest_range(out, cache, args.start_index, args.end_index, all_labels=args.all_labels)
         return
 
-    if args.all_labels:
-        cases = adapter.build(out, cache, args.limit, require_attributed=False)
-    else:
-        adapter._case = _prefiltered_case
-        cases = adapter.build(out, cache, args.limit)
+    cases = adapter.build(out, cache, args.limit, require_attributed=not args.all_labels)
     print(json.dumps({"n": len(cases), "out": str(out), "all_labels": args.all_labels}, indent=2))
 
 
