@@ -16,7 +16,9 @@ from __future__ import annotations
 """
 
 import importlib.util
+import json
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 
@@ -25,7 +27,6 @@ spec = importlib.util.spec_from_file_location("webqsp_base", BASE_PATH)
 if spec is None or spec.loader is None:
     raise RuntimeError(f"기존 WebQSP 평가기를 불러올 수 없습니다: {BASE_PATH}")
 base = importlib.util.module_from_spec(spec)
-# Python 3.12 dataclass가 동적 모듈의 __module__을 조회할 수 있도록 선등록한다.
 sys.modules[spec.name] = base
 spec.loader.exec_module(base)
 
@@ -40,6 +41,7 @@ CONDITIONAL = {
 
 _original_policy_templates = base.policy_templates
 _original_select = base.select
+_DIAG = defaultdict(lambda: {"boundary_checks": 0, "activations": 0, "extra_selected": 0, "margins": []})
 
 
 def policy_templates():
@@ -71,12 +73,49 @@ def select(paths, state, scores):
     score_k = base.path_score(ranked[k - 1], scores)
     score_k1 = base.path_score(ranked[k], scores)
     margin = score_k - score_k1
+    d = _DIAG[state.name]
+    d["boundary_checks"] += 1
+    d["margins"].append(float(margin))
 
     if margin > tau:
         return ranked[:k]
 
+    d["activations"] += 1
     threshold = score_k - delta
-    return [p for p in ranked if base.path_score(p, scores) >= threshold][: state.max_width]
+    chosen = [p for p in ranked if base.path_score(p, scores) >= threshold][: state.max_width]
+    d["extra_selected"] += max(0, len(chosen) - k)
+    return chosen
+
+
+def _inject_diagnostics() -> None:
+    output = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--output" and i + 1 < len(sys.argv):
+            output = Path(sys.argv[i + 1])
+            break
+        if arg.startswith("--output="):
+            output = Path(arg.split("=", 1)[1])
+            break
+    if output is None or not output.exists():
+        return
+    data = json.loads(output.read_text(encoding="utf-8"))
+    diagnostics = {}
+    for name, raw in _DIAG.items():
+        checks = int(raw["boundary_checks"])
+        activations = int(raw["activations"])
+        margins = list(raw["margins"])
+        diagnostics[name] = {
+            "boundary_checks": checks,
+            "activations": activations,
+            "activation_rate": activations / checks if checks else 0.0,
+            "extra_selected_total": int(raw["extra_selected"]),
+            "extra_selected_per_activation": raw["extra_selected"] / activations if activations else 0.0,
+            "mean_boundary_margin": sum(margins) / len(margins) if margins else None,
+            "min_boundary_margin": min(margins) if margins else None,
+            "max_boundary_margin": max(margins) if margins else None,
+        }
+    data["conditional_badp_diagnostics"] = diagnostics
+    output.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 base.policy_templates = policy_templates
@@ -85,3 +124,4 @@ base.select = select
 
 if __name__ == "__main__":
     base.main()
+    _inject_diagnostics()
