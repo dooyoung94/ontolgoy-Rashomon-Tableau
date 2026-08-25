@@ -1,0 +1,67 @@
+{
+  "provenance": {
+    "dataset": "WN18RR",
+    "source_workflow_run": 32799621678,
+    "source_artifact_id": 9546119681,
+    "source_artifact_sha256": "14d6fd5fd5d1bd55ee69ca8c4e1a65715e315ef1fd2238a6337e965e6bc66320",
+    "scorer": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
+    "candidate_relations": 11,
+    "note": "Frozen support scores from the executed 50-row multi-hop pilot. Gold labels were evaluation-only."
+  },
+  "records": [
+    {
+      "example_id": "3:0",
+      "hop_count": 4,
+      "gold_relation": "_member_meronym",
+      "support_scores": {
+        "_also_see": 0.9282474431308819,
+        "_member_meronym": 0.7914314485368161,
+        "_similar_to": 0.7328877902896029,
+        "_has_part": 0.676310809985961,
+        "_synset_domain_topic_of": 0.51416015625,
+        "_derivationally_related_form": 0.477280356434435,
+        "_hypernym": 0.21485686382225477,
+        "_instance_hypernym": 0.13132761724590364,
+        "_member_of_domain_region": 0.06580393114393847,
+        "_member_of_domain_usage": 0.04299877886263281,
+        "_verb_group": 0.028065459201391057
+      }
+    },
+    {
+      "example_id": "5:0",
+      "hop_count": 3,
+      "gold_relation": "_member_meronym",
+      "support_scores": {
+        "_member_meronym": 0.9961597606242611,
+        "_has_part": 0.9889438130106492,
+        "_synset_domain_topic_of": 0.9624428307977732,
+        "_also_see": 0.9495543040107751,
+        "_derivationally_related_form": 0.9356267666725204,
+        "_similar_to": 0.9078914352906962,
+        "_hypernym": 0.8917174171762349,
+        "_instance_hypernym": 0.7845876226660325,
+        "_member_of_domain_usage": 0.6837751649373983,
+        "_member_of_domain_region": 0.6611447246672455,
+        "_verb_group": 0.5872599317735226
+      }
+    },
+    {
+      "example_id": "10:0",
+      "hop_count": 3,
+      "gold_relation": "_hypernym",
+      "support_scores": {
+        "_hypernym": 0.994367096426173,
+        "_instance_hypernym": 0.9892178565534313,
+        "_member_meronym": 0.9844320798850863,
+        "_has_part": 0.9826738008519674,
+        "_synset_domain_topic_of": 0.9596135923854253,
+        "_also_see": 0.9518721464668094,
+        "_derivationally_related_form": 0.9327415058564357,
+        "_similar_to": 0.8977834319127858,
+        "_member_of_domain_usage": 0.7414757476691741,
+        "_member_of_domain_region": 0.6884748530963049,
+        "_verb_group": 0.6415291557849462
+      }
+    }
+  ]
+}
