@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from .models import Hypothesis, RcaCase
+from .models import Hypothesis, RcaCase, REL_CAUSAL, REL_NON_CAUSAL
 
 
 class SoftLogicApproximation:
@@ -13,31 +13,32 @@ class SoftLogicApproximation:
             return []
 
         local: dict[tuple[str, str], float] = {}
-        outgoing: dict[str, list[Hypothesis]] = defaultdict(list)
         for h in hypotheses:
             semantic = h.semantic_support if h.semantic_support is not None else 0.0
             contradiction = h.semantic_contradiction if h.semantic_contradiction is not None else 0.0
+            margin = semantic - contradiction if h.semantic_support is not None else 0.0
             score = (
-                0.28 * h.structural_score
-                + 0.28 * h.temporal_score
-                + 0.24 * h.anomaly_score
-                + (0.32 * semantic if h.semantic_support is not None else 0.0)
-                - (0.25 * contradiction if h.semantic_contradiction is not None else 0.0)
+                0.34 * h.structural_score
+                + 0.34 * h.temporal_score
+                + 0.32 * h.anomaly_score
+                + 0.20 * margin
             )
             local[(h.edge.source, h.edge.target)] = max(0.0, min(1.0, score))
-            outgoing[h.edge.source].append(h)
 
-        # Recursive soft reachability to a model-visible symptom. This is the
-        # global component: an edge receives support from downstream edges that
-        # themselves participate in a coherent propagation chain.
         reaches = {node: 1.0 for node in case.symptom_nodes}
+        hard_causal = [(e.source, e.target) for e in case.known_edges if e.relation == REL_CAUSAL]
         nodes = {x.edge.source for x in hypotheses} | {x.edge.target for x in hypotheses}
+        nodes |= {x for pair in hard_causal for x in pair}
         for node in nodes:
             reaches.setdefault(node, 0.0)
 
         for _ in range(max(2, len(nodes))):
             changed = 0.0
             next_reaches = dict(reaches)
+            for source, target in hard_causal:
+                value = max(next_reaches.get(source, 0.0), reaches.get(target, 0.0))
+                changed = max(changed, abs(value - next_reaches.get(source, 0.0)))
+                next_reaches[source] = value
             for h in hypotheses:
                 key = (h.edge.source, h.edge.target)
                 propagated = local[key] * reaches.get(h.edge.target, 0.0)
@@ -48,25 +49,17 @@ class SoftLogicApproximation:
             if changed < 1e-6:
                 break
 
-        reverse = {(h.edge.source, h.edge.target): h for h in hypotheses}
         for h in hypotheses:
             key = (h.edge.source, h.edge.target)
             downstream = reaches.get(h.edge.target, 0.0)
-            anti_cycle = local.get((h.edge.target, h.edge.source), 0.0)
-            score = 0.72 * local[key] + 0.38 * downstream - 0.15 * anti_cycle
+            score = 0.72 * local[key] + 0.38 * downstream
             h.soft_logic_score = max(0.0, min(1.0, score))
 
         return sorted(hypotheses, key=lambda h: h.soft_logic_score if h.soft_logic_score is not None else -1.0, reverse=True)
 
 
 class PslGlobalInference:
-    """PSL joint inference with recursive causal-path consistency.
-
-    ``REACHES`` is seeded only from model-visible symptom nodes, never from
-    gold alarm labels. Recursive rules couple candidate edges so CAUSES(A,B)
-    is favored when B can itself reach an observed symptom through other
-    selected causal edges.
-    """
+    """PSL joint inference with hard visible relations and soft masked relations."""
 
     def __init__(self):
         try:
@@ -85,7 +78,7 @@ class PslGlobalInference:
         if not hypotheses:
             return []
 
-        model = self.Model("openrca_missing_relation_global")
+        model = self.Model("openrca_relation_mask_global")
         structural = self.Predicate("STRUCTURAL", size=2)
         temporal = self.Predicate("TEMPORAL", size=2)
         anomaly = self.Predicate("ANOMALYPAIR", size=2)
@@ -109,13 +102,25 @@ class PslGlobalInference:
         structural.add_data(obs, [[h.edge.source, h.edge.target, h.structural_score] for h in hypotheses])
         temporal.add_data(obs, [[h.edge.source, h.edge.target, h.temporal_score] for h in hypotheses])
         anomaly.add_data(obs, [[h.edge.source, h.edge.target, h.anomaly_score] for h in hypotheses])
+
+        known_causal = [e for e in case.known_edges if e.relation == REL_CAUSAL]
+        known_noncausal = [e for e in case.known_edges if e.relation == REL_NON_CAUSAL]
+        if known_causal:
+            causes.add_data(obs, [[e.source, e.target, 1.0] for e in known_causal])
+        if known_noncausal:
+            causes.add_data(obs, [[e.source, e.target, 0.0] for e in known_noncausal])
         causes.add_data(targets, [[h.edge.source, h.edge.target] for h in hypotheses])
 
         if has_semantic and semantic is not None and contradiction is not None:
             semantic.add_data(obs, [[h.edge.source, h.edge.target, h.semantic_support or 0.0] for h in hypotheses])
             contradiction.add_data(obs, [[h.edge.source, h.edge.target, h.semantic_contradiction or 0.0] for h in hypotheses])
 
-        nodes = sorted({h.edge.source for h in hypotheses} | {h.edge.target for h in hypotheses})
+        nodes = sorted(
+            {h.edge.source for h in hypotheses}
+            | {h.edge.target for h in hypotheses}
+            | {e.source for e in case.known_edges}
+            | {e.target for e in case.known_edges}
+        )
         symptoms = set(case.symptom_nodes)
         if symptoms:
             reaches.add_data(obs, [[node, 1.0] for node in sorted(symptoms)])
@@ -123,20 +128,18 @@ class PslGlobalInference:
         if non_symptoms:
             reaches.add_data(targets, [[node] for node in non_symptoms])
 
-        # Local evidence rules.
         model.add_rule(self.Rule("1.0: STRUCTURAL(A, B) -> CAUSES(A, B) ^2"))
         model.add_rule(self.Rule("1.3: TEMPORAL(A, B) -> CAUSES(A, B) ^2"))
         model.add_rule(self.Rule("1.1: ANOMALYPAIR(A, B) -> CAUSES(A, B) ^2"))
         if has_semantic:
-            model.add_rule(self.Rule("2.0: SEMANTIC(A, B) -> CAUSES(A, B) ^2"))
-            model.add_rule(self.Rule("2.0: CONTRADICTION(A, B) -> !CAUSES(A, B) ^2"))
+            model.add_rule(self.Rule("1.2: SEMANTIC(A, B) -> CAUSES(A, B) ^2"))
+            model.add_rule(self.Rule("1.8: CONTRADICTION(A, B) -> !CAUSES(A, B) ^2"))
 
-        # Global path-coherence rules. These couple neighboring edge decisions.
         model.add_rule(self.Rule("1.8: CAUSES(A, B) & REACHES(B) -> REACHES(A) ^2"))
         model.add_rule(self.Rule("1.4: STRUCTURAL(A, B) & REACHES(B) -> CAUSES(A, B) ^2"))
         model.add_rule(self.Rule("1.2: TEMPORAL(A, B) & REACHES(B) -> CAUSES(A, B) ^2"))
         model.add_rule(self.Rule("0.5: CAUSES(A, B) -> !CAUSES(B, A) ^2"))
-        model.add_rule(self.Rule("0.15: !CAUSES(A, B) ^2"))
+        model.add_rule(self.Rule("0.25: !CAUSES(A, B) ^2"))
 
         inferred = model.infer(psl_options={"runtime.log.level": "ERROR"})
         frame = inferred[causes]
