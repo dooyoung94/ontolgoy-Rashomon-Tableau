@@ -25,6 +25,8 @@ class Ontology:
     exclusive: set[str] = field(default_factory=set)
     transitive: set[str] = field(default_factory=set)
     compositions: set[CompositionRule] = field(default_factory=set)
+    irreflexive: set[str] = field(default_factory=set)
+    antisymmetric: set[str] = field(default_factory=set)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "Ontology":
@@ -40,11 +42,23 @@ class Ontology:
                 incompatible.add((b, a))
         exclusive = set(data.get("exclusive", []))
         transitive = set(data.get("transitive", []))
+        irreflexive = set(data.get("irreflexive", []))
+        antisymmetric = set(data.get("antisymmetric", []))
         compositions: set[CompositionRule] = set()
         for rule in data.get("composition", []) or []:
             if isinstance(rule, dict) and all(k in rule for k in ("left", "right", "result")):
                 compositions.add(CompositionRule(rule["left"], rule["right"], rule["result"]))
-        return cls(symmetric, inverse, hierarchy, incompatible, exclusive, transitive, compositions)
+        return cls(
+            symmetric=symmetric,
+            inverse=inverse,
+            hierarchy=hierarchy,
+            incompatible=incompatible,
+            exclusive=exclusive,
+            transitive=transitive,
+            compositions=compositions,
+            irreflexive=irreflexive,
+            antisymmetric=antisymmetric,
+        )
 
     @staticmethod
     def _derived(lit: Literal, predicate: str, subject: str, object_: str, negated: bool | None = None) -> Literal:
@@ -59,7 +73,7 @@ class Ontology:
         )
 
     def forward_chain(self, facts: Iterable[Literal]):
-        """Compute a conservative ontology closure while retaining one derivation per literal.
+        """Compute a conservative ontology closure while retaining derivations.
 
         Symmetric and inverse relations are logical equivalences, so their direction can be
         propagated for positive and explicitly negated literals. Hierarchy, transitivity and
@@ -102,7 +116,6 @@ class Ontology:
             for lit in positives:
                 outgoing.setdefault(lit.subject, []).append(lit)
 
-            # r(x,y) ∧ r(y,z) -> r(x,z), but only for explicitly transitive r.
             for first in positives:
                 if first.predicate not in self.transitive:
                     continue
@@ -112,7 +125,6 @@ class Ontology:
                     new = self._derived(first, first.predicate, first.subject, second.object, False)
                     changed = add(new, f"transitive:{first.predicate}", [first, second]) or changed
 
-            # r1(x,y) ∧ r2(y,z) -> r3(x,z), only for declared composition rules.
             by_left: dict[str, list[CompositionRule]] = {}
             for rule in self.compositions:
                 by_left.setdefault(rule.left, []).append(rule)
