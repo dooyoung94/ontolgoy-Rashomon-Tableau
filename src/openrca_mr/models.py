@@ -64,6 +64,7 @@ class RcaCase:
     gold_root_causes: list[str] = field(default_factory=list)
     gold_edges: list[CausalEdge] = field(default_factory=list)
     gold_paths: list[list[str]] = field(default_factory=list)
+    gold_alarm_nodes: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def evidence_by_node(self) -> dict[str, list[Evidence]]:
