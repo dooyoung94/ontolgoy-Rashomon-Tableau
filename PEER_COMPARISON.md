@@ -1,494 +1,266 @@
-# Final Peer Comparison — BADP vs Multi-hop KG Reasoning / Adaptive Pruning Peers
+# 비교 실험 설계 및 공개 성능 참조
 
-## 1. 목적
+## 1. 비교 실험의 목적
 
-이 문서는 현재 연구의 **최종 peer comparison protocol**을 정의한다.
+본 문서는 경계 인식 지연 가지치기(BADP)의 비교 실험 기준을 정의한다. 본 연구가 검증해야 하는 대상은 두 가지다. 첫째, 동일한 탐색 환경에서 가지치기 정책만 바꾸었을 때 BADP가 고정 Top-K보다 비가역적 경로 손실을 줄이는지 확인한다. 둘째, 이 효과가 WebQSP와 CWQ 같은 실제 KGQA 데이터셋에서도 정답 성능과 탐색 비용 측면에서 유효한지 확인한다.
 
-현재 WN18RR/MAGIC 실험은 pruning mechanism과 evidence preservation을 직접 분석하기 위한 controlled benchmark이며, ToG/PoG/FastToG/ProgRAG/Flow-RAG 등이 주로 사용하는 WebQSP/CWQ의 end-to-end KGQA accuracy와 동일한 숫자가 아니다.
+따라서 비교는 **메커니즘 수준 평가**와 **공통 벤치마크 수준 평가**로 분리한다.
 
-따라서 최종 비교는 두 층으로 나눈다.
+### 메커니즘 수준
 
-```text
-Layer A — Mechanism-level comparison
-Pruning Regret / Viable Path Survival / Retained Validity / Cost
+WN18RR과 MAGIC을 이용해 다음을 측정한다.
 
-Layer B — Shared KGQA benchmark comparison
-WebQSP / CWQ Answer EM/F1/Hit@1 + Evidence + Cost
-```
+- 탐색 성공률
+- 골드 또는 유효 경로 생존율
+- 가지치기 후회
+- 보존 경로의 정밀도·재현율·F1
+- 평균 활성 폭과 확장 후보 수
 
-핵심 원칙:
+### 공통 벤치마크 수준
 
-> **서로 다른 dataset / model / metric의 숫자를 단순 leaderboard처럼 섞지 않는다.**
+WebQSP와 CWQ에서 다음을 측정한다.
 
----
+- 정답 집합 Exact Match
+- Macro F1 / Micro F1
+- Hit@1
+- 골드 증거 보존율
+- 가지치기 후회
+- LLM·점수기 호출량, 토큰, 지연시간
 
-# 2. Direct benchmark peer group
-
-## 2.1 Published end-task references
-
-아래 값은 원 논문/공식 발표 자료에서 확인한 **context reference**다. 우리 시스템이 아직 동일 WebQSP/CWQ protocol로 실행되지 않았으므로 현재 단계에서 head-to-head superiority를 주장하지 않는다.
-
-| Method | Venue | Backbone / setting | Reported metric | WebQSP | CWQ | Pruning/Search mechanism |
-|---|---|---|---|---:|---:|---|
-| Think-on-Graph | ICLR 2024 | ChatGPT / Freebase | paper KGQA answer score | 76.2 | 58.9 | fixed Top-N iterative relation/entity beam |
-| Think-on-Graph | ICLR 2024 | GPT-4 / Freebase | paper KGQA answer score | 82.6 | 69.5 | fixed Top-N iterative beam |
-| Think-on-Graph 2.0 | ICLR 2025 | GPT-3.5-class hybrid | EM | 81.1 | — | graph + document context iterative retrieval |
-| Paths-over-Graph (PoG-path) | WWW 2025 | GPT-3.5-Turbo | Accuracy | **93.9** | **74.7** | fuzzy → branch-reduced → precise path pruning |
-| Paths-over-Graph (PoG-path) | WWW 2025 | GPT-4 | Accuracy | **96.7** | **81.4** | three-stage path pruning |
-| Fast Think-on-Graph | AAAI 2025 | GPT-4o-mini / Wikidata | Accuracy | 65.8 | 45.0 | community-level coarse/fine pruning |
-| Plan-on-Graph | 2025 | adaptive breadth / Freebase | Hits@1 / exact-style | 82.0 | 63.2 | planning + adaptive exploration breadth |
-| ProgRAG* | AAAI 2026 | GPT-4o-mini / Freebase | Hit@1 | 90.4 | 73.3 | progressive relation/triple pruning |
-| Flow-RAG | KBS 2026 | trained gated-flow retriever | paper KGQA/retrieval metrics | TBD | TBD | distribution-aware adaptive decision boundary |
-| **BADP (ours)** | — | shared benchmark pending | **must report EM/F1/Hit@1 together** | pending | pending | Top-K core + boundary-near delayed pruning |
-
-### 비교 주의
-
-`Accuracy`, `EM`, `Hit@1`은 논문마다 answer normalization과 평가 구현이 다를 수 있다.
-
-따라서 위 표는:
-
-```text
-Published contextual reference
-```
-
-이고 최종 direct comparison은 동일 evaluator를 사용한 reproduced results로 별도 작성한다.
-
-Source provenance는:
-
-```text
-results/peer_published_reference.json
-```
-
-에 고정한다.
+두 수준의 숫자는 의미가 다르므로 하나의 순위표로 혼합하지 않는다.
 
 ---
 
-# 3. 왜 이 peer group인가
+## 2. 공개 성능 참조
 
-## 3.1 ToG — fixed-width anchor
+아래 수치는 각 연구가 보고한 설정과 지표를 그대로 적은 **문헌 참조값**이다. 모델, 그래프, 전처리, 답안 정규화가 서로 다르므로 본 연구의 WN18RR 결과와 직접 비교하지 않는다.
 
-ToG의 핵심은 반복적으로:
+| 방법 | 발표 | 설정 | 원 논문 지표 | WebQSP | CWQ |
+|---|---|---|---|---:|---:|
+| Think-on-Graph | ICLR 2024 | ChatGPT / Freebase | KGQA 정답 성능 | 76.2 | 58.9 |
+| Think-on-Graph | ICLR 2024 | GPT-4 / Freebase | KGQA 정답 성능 | 82.6 | 69.5 |
+| Think-on-Graph 2.0 | ICLR 2025 | GPT-3.5 계열 혼합 검색 | EM | 81.1 | — |
+| Paths-over-Graph | WWW 2025 | GPT-3.5-Turbo | Accuracy | 93.9 | 74.7 |
+| Paths-over-Graph | WWW 2025 | GPT-4 | Accuracy | 96.7 | 81.4 |
+| FastToG | AAAI 2025 | GPT-4o-mini / Wikidata | Accuracy | 65.8 | 45.0 |
+| Plan-on-Graph | 2025 | Freebase / 적응형 폭 | Hit@1 계열 | 82.0 | 63.2 |
+| ProgRAG* | AAAI 2026 | GPT-4o-mini / Freebase | Hit@1 | 90.4 | 73.3 |
+| Flow-RAG | KBS 2026 | 학습형 gated-flow | 원문 표 재검증 필요 | — | — |
 
-```text
-Relation Search
-→ Relation Prune
-→ Entity Search
-→ Entity Prune
-```
+세부 출처와 설정은 `results/peer_published_reference.json`에 보존한다.
 
-를 수행하면서 Top-N 후보를 유지하는 것이다.
+### 지표 해석 주의
 
-우리 연구의 출발점은 ToG가 multi-path를 안 쓴다는 것이 아니다.
+Accuracy, Exact Match, Hit@1은 논문마다 평가 구현과 정답 정규화가 다를 수 있다. 따라서 최종 재현 실험에서는 원 논문의 지표와 별개로 동일한 평가기를 사용해 네 지표를 동시에 계산한다.
 
-차이는:
-
-```text
-ToG-style:
-rank 기준 고정 N
-
-BADP:
-Top-K는 유지하되 K/K+1 score boundary가 불명확하면 pruning을 잠시 지연
-```
-
-이다.
-
-따라서 ToG-style Top-3/Top-5는 **가장 중요한 internal baseline**이다.
+\[
+EM,\quad MacroF1,\quad MicroF1,\quad Hit@1
+\]
 
 ---
 
-## 3.2 Paths-over-Graph — path pruning peer
+## 3. 내부 정책 비교
 
-Paths-over-Graph는 graph, LLM, PLM을 사용해 multi-hop paths를 단계적으로 줄인다.
+모든 내부 비교에서 그래프, 질의, 확장 연산, 점수기, 최대 홉 수를 고정하고 가지치기 정책만 변경한다.
 
-중요한 이유는:
+비교 정책은 다음과 같다.
 
-- path-level pruning을 직접 수행
-- WebQSP/CWQ 성능이 강함
-- LLM call efficiency도 분석
+1. 고정 Top-3
+2. 고정 Top-5
+3. 전역 가산 점수대
+4. 상대 손실 점수대
+5. BADP Top-3
+6. BADP Top-5
 
-한다는 점이다.
+전역 가산 방식은
 
-PoG precise path-selection efficiency reference:
+\[
+R_\epsilon=\{p:s(p)\ge s^*-\epsilon\}
+\]
 
-```text
-CWQ     ≈ 9.1 LLM calls
-WebQSP  ≈ 7.5 LLM calls
-```
+이고, 상대 손실 방식은
 
-따라서 BADP의 최종 실험도 단순 width뿐 아니라:
+\[
+L(p)=1-s(p),\qquad
+R_\epsilon^{loss}=\{p:L(p)\le(1+\epsilon)L^*\}
+\]
 
-```text
-LLM / scorer calls
-```
+이다. BADP는
 
-을 반드시 보고해야 한다.
+\[
+B_{K,\delta}=\{p:s(p)\ge s_{(K)}-\delta\}
+\]
 
----
-
-## 3.3 Plan-on-Graph — adaptive breadth peer
-
-Plan-on-Graph의 ablation은 adaptive breadth 자체가 end-task 성능에 기여한다는 prior evidence다.
-
-Reported ablation:
-
-| | WebQSP | CWQ |
-|---|---:|---:|
-| Full adaptive breadth | 82.0 | 63.2 |
-| w/o adaptive breadth | 80.2 | 61.3 |
-| Gain | **+1.8pp** | **+1.9pp** |
-
-따라서:
-
-> dynamic/adaptive width 자체가 novelty
-
-라고 주장하면 안 된다.
-
-BADP의 차별점은 **왜 width를 늘리는가**에 있다.
-
-```text
-query complexity 때문이 아니라
-Top-K irreversible boundary uncertainty 때문
-```
-
-이다.
+를 사용한다.
 
 ---
 
-## 3.4 Flow-RAG — 가장 중요한 최근 conceptual peer
+## 4. 핵심 비교 지표
 
-Flow-RAG는 score distribution을 이용해 context-adaptive pruning boundary를 결정한다.
+### 4.1 최종 정답 성능
 
-따라서:
+질의 `i`의 골드 정답 집합을 `A_i`, 예측 집합을 `\hat A_i`라 한다.
 
-```text
-score-distribution-aware adaptive pruning
-```
+정답 집합 Exact Match는
 
-역시 이미 prior work다.
+\[
+EM_i=\mathbb{1}[A_i=\hat A_i]
+\]
 
-우리의 차별화 후보는:
+으로 정의한다. 정밀도와 재현율은
 
-1. Top-K cutoff 자체를 분석 대상으로 둠
-2. viable prefix를 잃는 순간을 Pruning Regret으로 직접 정의
-3. boundary-local near-tie만 보존
-4. retained validity를 별도 측정
-5. budget-matched Pareto comparison
+\[
+P_i=\frac{|A_i\cap\hat A_i|}{|\hat A_i|},\qquad
+R_i=\frac{|A_i\cap\hat A_i|}{|A_i|}
+\]
 
-이다.
+이며,
 
-Flow-RAG의 정확한 WebQSP/CWQ table 값은 현재 접근 가능한 primary text에서 검증하지 못했으므로 **TBD로 남겼다.** Secondary source 숫자를 임의로 넣지 않는다.
+\[
+F1_i=\frac{2P_iR_i}{P_i+R_i}
+\]
+
+를 사용한다. Hit@1은 가장 높은 순위의 예측 정답이 골드에 포함되는지를 측정한다.
+
+### 4.2 증거 보존 성능
+
+골드 증거 집합 `E_i`와 보존 증거 집합 `\hat E_i`를 이용해 증거 정밀도·재현율·F1을 계산한다. 골드 경로를 직접 제공하지 않는 데이터에서는 골드 답으로 연결되는 경로 또는 supporting entity coverage를 대체 지표로 사용한다.
+
+### 4.3 가지치기 후회
+
+깊이 `k`에서 가지치기 전 후보 `C_{i,k}`에 적어도 하나의 유효 경로가 있고, 보존 집합 `P_{i,k}`에는 유효 경로가 하나도 없는 경우
+
+\[
+PR_{i,k}=1
+\]
+
+로 정의한다. 질의 수준에서는 어느 한 단계에서라도 후회가 발생하면
+
+\[
+QPR_i=1
+\]
+
+로 계산한다.
+
+### 4.4 경계 여유
+
+Top-K의 제거 경계를
+
+\[
+\Delta_K=s_{(K)}-s_{(K+1)}
+\]
+
+로 정의한다. 최종 분석에서 다음 조건부 확률을 비교한다.
+
+\[
+P(PR=1\mid \Delta_K\text{ 구간})
+\]
+
+BADP의 핵심 가설은 `\Delta_K`가 작은 구간에서 Top-K의 후회가 증가하고, BADP가 이를 선택적으로 완화한다는 것이다.
+
+### 4.5 비용
+
+최소 다음 지표를 기록한다.
+
+- 평균 활성 경로 수
+- 질의당 확장 후보 수
+- 의미 점수 계산 횟수
+- LLM 호출 횟수
+- 입력 및 검색 문맥 토큰 수
+- 검색 지연시간
+- 종단간 지연시간
 
 ---
 
-# 4. 최종 비교 지표
+## 5. 동일 비용 비교
 
-BADP 논문의 peer comparison은 다음 4개 영역을 동시에 보고해야 한다.
+적응형 방법이 더 많은 후보를 사용하면 정확도 개선만으로 우월성을 주장할 수 없다. 따라서 Top-3와 Top-5를 비용 기준점으로 둔다.
 
-## A. End-task correctness
+정책 계열 `F_\lambda`의 파라미터는 개발 집합에서 다음과 같이 선택한다.
 
-Shared WebQSP/CWQ에서:
-
-```text
-Answer-set Exact Match
-Macro Answer F1
-Micro Answer F1
-Hit@1
-```
-
-가능하면 기존 peer metric과 별개로 **네 지표를 모두 계산**한다.
-
-왜냐하면 published paper가 사용하는 Accuracy/EM/Hit@1 정의 차이를 최소화하기 위해서다.
-
----
-
-## B. Evidence / Search Quality
-
-```text
-Gold Evidence Recall
-Gold Evidence Precision
-Gold Evidence F1
-Gold / Viable Path Survival @ depth
-Search Success
-```
-
-Gold path가 없는 dataset에서는 supporting entities/facts coverage로 대체한다.
-
----
-
-## C. Pruning-specific metrics — 핵심 차별화
-
-### Pruning Regret
-
-```text
-PR_(i,k)
+\[
+\lambda_F^*(A)
 =
-1[
- pre-prune candidate에 viable evidence 존재
- AND
- post-prune selected set에 viable evidence 없음
-]
-```
+\arg\min_{\lambda}
+|Cost(F_\lambda)-Cost(A)|
+\]
 
-Query-level:
+비용 우선순위는 다음과 같다.
 
-```text
-QPR_i = max_k PR_(i,k)
-```
+1. 평균 활성 폭
+2. 확장 후보 수
+3. 점수기 또는 LLM 호출 수
+4. 토큰 수
 
-Dataset:
+시험 집합에서는 `\lambda_F^*`를 변경하지 않는다.
 
-```text
-QPR = mean_i QPR_i
-```
-
-이 지표는 기존 peer leaderboard가 직접 측정하지 않는 **우리 논문의 핵심 diagnostic**이다.
-
-### Boundary margin
-
-```text
-Delta_K = s_(K) - s_(K+1)
-```
-
-최종 분석에서는 반드시:
-
-```text
-P(Pruning Regret | Delta_K bin)
-```
-
-을 보고한다.
-
-예:
-
-| Boundary margin | Top-K Regret | BADP Regret |
-|---|---:|---:|
-| 0–.005 | | |
-| .005–.01 | | |
-| .01–.05 | | |
-| >.05 | | |
-
-이 표가 BADP의 가장 직접적인 hypothesis test다.
+최종 표에는 정답 성능뿐 아니라 비용 차이를 함께 제시한다.
 
 ---
 
-## D. Efficiency / Cost
+## 6. 현재 메커니즘 수준 결과
 
-최소한:
+### 6.1 WN18RR 반복 탐색 20질의
 
-```text
-Avg Active Width
-Expanded Nodes / Paths
-Unique Scorer Calls
-LLM Calls
-Input / Retrieved Context Tokens
-Retrieval Latency
-End-to-End Latency
-```
-
-를 기록한다.
-
-최종 peer table에서 성능만 비교하고 토큰/호출량을 누락하면 안 된다.
-
----
-
-# 5. 최종 Main Table 형식
-
-최종 논문 Table은 아래 형태를 목표로 한다.
-
-| Method | WebQSP EM | WebQSP F1 | WebQSP Hit@1 | CWQ EM | CWQ F1 | CWQ Hit@1 | Evidence Recall | QPR ↓ | Avg Width ↓ | Expanded ↓ | LLM Calls ↓ | Tokens ↓ |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| ToG reproduced | | | | | | | | | | | | |
-| Global band | | | | | | | | | | | | |
-| Relative-loss | | | | | | | | | | | | |
-| **BADP** | | | | | | | | | | | | |
-
-Published-only external references는 별도 표에 남긴다.
-
----
-
-# 6. Budget-matched 비교
-
-동일 K를 강제로 cap하면 BADP가 Top-K와 동일해질 수 있으므로 다음 방식으로 비교한다.
-
-Top-K anchor:
-
-```text
-A in {Top-3, Top-5}
-```
-
-adaptive policy family `F_lambda`에 대해 development split에서:
-
-```text
-lambda*_F(A)
-=
-argmin_lambda
-| Cost(F_lambda) - Cost(A) |
-```
-
-Cost는 우선순위대로:
-
-```text
-1. Avg Active Width
-2. Expanded Paths
-3. Scorer/LLM Calls
-4. Context Tokens
-```
-
-을 사용한다.
-
-그 뒤 test split에서 parameter는 변경하지 않는다.
-
-최종 보고:
-
-```text
-Delta Answer F1
-Delta Hit@1
-Delta Pruning Regret
-Delta Evidence Recall
-Delta Width
-Delta Expansions
-Delta LLM Calls
-Delta Tokens
-```
-
----
-
-# 7. 현재 실제 우리 결과 — direct peer 숫자로 쓰면 안 됨
-
-현재 WN18RR iterative n=20은 **mechanism-level evidence**다.
-
-| Policy | Search success | Regret ↓ | Viability F1 | Width | Expanded |
+| 방법 | 성공률 | 가지치기 후회 ↓ | 유효성 F1 | 평균 폭 | 확장 후보 |
 |---|---:|---:|---:|---:|---:|
 | Top-3 | 50% | 50% | **33.58%** | 2.71 | 24.80 |
 | Top-5 | 55% | 45% | 29.97% | 4.06 | 32.35 |
-| BADP Top-3 δ=.005 | 55% | 45% | 32.05% | 3.34 | 27.15 |
-| BADP Top-5 δ=.010 | 60% | 40% | 28.10% | 5.00 | 35.10 |
-| BADP Top-5 δ=.050 | **65%** | **35%** | 26.20% | 6.16 | 38.25 |
+| BADP Top-3 `δ=.005` | 55% | 45% | 32.05% | 3.34 | 27.15 |
+| BADP Top-5 `δ=.010` | 60% | 40% | 28.10% | 5.00 | 35.10 |
+| BADP Top-5 `δ=.050` | **65%** | **35%** | 26.20% | 6.16 | 38.25 |
 
-Run:
+이 결과는 BADP가 더 많은 탐색 비용을 사용하면서 성공률과 후회를 개선하는 신호를 보인다는 것을 의미한다. 반면 유효성 F1은 감소하므로, 단일 정확도가 아닌 파레토 분석이 필요하다.
 
-```text
-32819877566
-Artifact 9553138233
-```
+### 6.2 MAGIC 상충 증거
 
-해석:
-
-- BADP가 더 많은 search budget을 사용하면 success/regret를 개선하는 positive signal
-- 하지만 viability precision/F1은 하락 가능
-- 따라서 현재도 **success–validity–cost Pareto**로 평가해야 함
-- `65%`를 ToG의 WebQSP `76.2`와 직접 비교해서는 안 됨
+고분기(`후보 경로 ≥ 5`) 구간에서 Top-5의 골드 상충 경로 생존율은 75.0%였고, 넓은 전역 점수대 방식은 96.88%까지 증가했다. 그러나 이때 골드 정밀도는 11.52%까지 낮아졌다. 이는 **무조건적인 보존 확대가 증거 품질을 저하시킬 수 있음**을 보여준다.
 
 ---
 
-# 8. 최종 연구 주장과 peer comparison의 연결
+## 7. WebQSP 직접 실험 설계
 
-최종 논문이 증명해야 할 것은:
+현재 WebQSP에서는 ToG 저장소가 제공하는 공식 질의 파일을 사용한다. 해당 파일은 1,639개의 시험 질의를 포함하며, Freebase MID와 함께 Wikidata QID도 제공한다.
 
-> BADP가 모든 KGQA architecture보다 최고 정확도다.
+1차 파일럿은 다음 조건으로 실행한다.
 
-가 아니다.
+- 질문: ToG 공식 WebQSP 데이터
+- 시작 개체: `qid_topic_entity`
+- 그래프: Wikidata의 개체형 outgoing statement
+- 후보 사전 제한: 모든 정책에 동일한 결정론적 lexical prefilter
+- 점수기: DeBERTa NLI support
+- 경로 점수: edge support 평균
+- 최대 2홉
+- 정책: Top-3, Top-5, 전역 점수대, 상대 손실, BADP
 
-증명 목표는 다음이다.
-
-### Claim A
-
-```text
-Fixed Top-K has non-zero irreversible Pruning Regret.
-```
-
-### Claim B
-
-```text
-Pruning Regret increases in high-branching / small-boundary-margin regimes.
-```
-
-### Claim C
-
-```text
-At matched search budget,
-BADP reduces Pruning Regret and/or increases evidence/answer survival
-more efficiently than broad global retention.
-```
-
-### Claim D
-
-```text
-The gain remains observable on a shared KGQA benchmark
-without unacceptable token/call/latency inflation.
-```
-
-A–C가 pruning-method 논문의 핵심이고 D가 peer-level external validity다.
+이 실험은 WebQSP 질문에서 가지치기 정책의 상대적 효과를 확인하기 위한 **in-framework 외적 타당성 파일럿**이다. ToG가 사용한 Freebase 전체 환경을 재현한 것은 아니므로 공개 ToG 점수와 직접적인 우열 비교에는 사용하지 않는다.
 
 ---
 
-# 9. Final experiment checklist
+## 8. 최종 논문 표 구성
 
-## 반드시 수행
+최종 공통 벤치마크 표는 다음 형태로 구성한다.
 
-- [ ] WebQSP dev/test loader
-- [ ] CWQ dev/test loader
-- [ ] 동일 Freebase KG/subgraph 조건
-- [ ] Top-3 baseline
-- [ ] Top-5 baseline
-- [ ] Global epsilon baseline
-- [ ] Relative-loss baseline
-- [ ] BADP
-- [ ] dev에서 epsilon/delta 선택
-- [ ] test에서 hyperparameter freeze
-- [ ] EM/F1/Hit@1 동시 산출
-- [ ] gold evidence/path recall 가능 시 산출
-- [ ] pruning regret 기록
-- [ ] boundary margin 기록
-- [ ] avg width / expanded candidates
-- [ ] LLM/scorer calls
-- [ ] context tokens
-- [ ] latency
-- [ ] hop별 분석
-- [ ] branching별 분석
-- [ ] boundary-margin별 분석
-- [ ] Pareto frontier
+| 방법 | EM ↑ | Macro F1 ↑ | Hit@1 ↑ | 증거 재현율 ↑ | 가지치기 후회 ↓ | 평균 폭 ↓ | 확장 수 ↓ | 모델 호출 ↓ | 토큰 ↓ |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Top-3 | | | | | | | | | |
+| Top-5 | | | | | | | | | |
+| 전역 점수대 | | | | | | | | | |
+| 상대 손실 | | | | | | | | | |
+| **BADP** | | | | | | | | | |
+
+공개 peer의 원 논문 결과는 별도 참조표로 유지한다.
 
 ---
 
-# 10. 권장 최종 Figure
+## 9. 검증 가설
 
-### Figure 1 — Main efficiency frontier
+**가설 1.** 고정 Top-K는 가지치기 후회를 발생시킨다.
 
-```text
-X = Expanded paths / context tokens
-Y = Answer F1 or Hit@1
-```
+**가설 2.** 후보 분기가 증가하거나 경계 여유 `\Delta_K`가 작아질수록 Top-K의 가지치기 후회가 증가한다.
 
-### Figure 2 — Core mechanism validation
+**가설 3.** 동일하거나 유사한 탐색 비용에서 BADP는 넓은 전역 점수대보다 더 낮은 가지치기 후회 또는 더 높은 증거 생존율을 달성한다.
 
-```text
-X = Boundary margin Delta_K
-Y = Pruning Regret
-```
+**가설 4.** BADP의 효과가 WebQSP/CWQ에서도 과도한 비용 증가 없이 관찰된다.
 
-Top-K와 BADP를 동시에 그린다.
-
-### Figure 3 — Retained validity trade-off
-
-```text
-X = Avg active width
-Y = Viability / Evidence F1
-```
-
-### Figure 4 — Regime analysis
-
-```text
-branching factor
-×
-Top-K / BADP success-regret difference
-```
-
----
-
-# 11. 결론
-
-peer comparison까지 포함했을 때 현재 연구의 가장 안전한 positioning은 다음이다.
-
-> **Existing graph reasoners already use fixed beams, multi-stage pruning, adaptive breadth, and distribution-aware adaptive pruning. BADP therefore does not claim adaptivity itself as novel. Instead, it isolates the Top-K cutoff as an irreversible uncertainty boundary, measures the resulting loss with Pruning Regret, and tests whether boundary-local delayed commitment improves evidence preservation under matched validity and search-cost constraints.**
-
-이 positioning으로 WebQSP/CWQ에서 같은 evaluator를 적용한 결과가 나오면 peer comparison을 완성할 수 있다.
+이 중 가설 1과 고분기 조건의 가설 2는 현재 실험에서 지지되고 있으며, 가설 3은 탐색적 양의 신호가 존재한다. 가설 4는 공통 벤치마크 실험을 통해 검증한다.
