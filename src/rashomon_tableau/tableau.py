@@ -8,7 +8,6 @@ from .ontology import Ontology
 
 
 def _literal_sort_key(lit: Literal) -> tuple[str, str, str, bool, str, str, str]:
-    """Deterministic ordering that is safe for optional provenance fields."""
     return (
         lit.predicate,
         lit.subject,
@@ -21,11 +20,7 @@ def _literal_sort_key(lit: Literal) -> tuple[str, str, str, bool, str, str, str]
 
 
 class RelationalTableau:
-    """Explainable relational tableau over ontology-governed binary relations.
-
-    `check` detects global clashes in a fact set.
-    `verify` evaluates one proposition in both directions: q and not-q/incompatible evidence.
-    """
+    """Explainable relational tableau over ontology-governed binary relations."""
 
     def __init__(self, ontology: Ontology):
         self.ontology = ontology
@@ -82,18 +77,41 @@ class RelationalTableau:
                     )
                 )
 
+        for lit in positives:
+            if lit.predicate in self.ontology.irreflexive and lit.subject == lit.object:
+                clashes.append(
+                    Clash(
+                        "irreflexive_relation",
+                        [lit],
+                        f"Irreflexive relation {lit.predicate} cannot relate {lit.subject} to itself",
+                        _rules_for([lit], derivations),
+                    )
+                )
+
+        positive_keys = {(lit.subject, lit.predicate, lit.object): lit for lit in positives}
+        seen_pairs: set[tuple[str, str, str]] = set()
+        for lit in positives:
+            if lit.predicate not in self.ontology.antisymmetric or lit.subject == lit.object:
+                continue
+            reverse = positive_keys.get((lit.object, lit.predicate, lit.subject))
+            if reverse is None:
+                continue
+            key = tuple(sorted((lit.subject, lit.object))) + (lit.predicate,)
+            if key in seen_pairs:
+                continue
+            seen_pairs.add(key)
+            clashes.append(
+                Clash(
+                    "antisymmetric_relation",
+                    [lit, reverse],
+                    f"Antisymmetric relation {lit.predicate} cannot hold in both directions between {lit.subject} and {lit.object}",
+                    _rules_for([lit, reverse], derivations),
+                )
+            )
+
         return TableauResult(not clashes, sorted(closure, key=_literal_sort_key), clashes, derivations)
 
     def verify(self, facts: Iterable[Literal], query: Literal) -> BidirectionalVerification:
-        """Verify q and its opposing direction without assuming closed-world negation.
-
-        Contradiction is accepted only when one of the following is present/derivable:
-        1) explicit not-q,
-        2) an ontology-declared incompatible relation on the same ordered pair,
-        3) a competing object for an ontology-declared exclusive relation.
-
-        Missing support for q is therefore UNRESOLVED, not false.
-        """
         closure, derivations = self.ontology.forward_chain(facts)
         query_key = query.key()
         neg_key = query.negate().key()
