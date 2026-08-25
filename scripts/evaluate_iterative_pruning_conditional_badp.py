@@ -7,6 +7,7 @@ from __future__ import annotations
 """
 
 import importlib.util
+import sys
 from pathlib import Path
 
 
@@ -15,6 +16,8 @@ spec = importlib.util.spec_from_file_location("iterative_budgeted_base", BASE_PA
 if spec is None or spec.loader is None:
     raise RuntimeError(f"기존 반복 평가기를 불러올 수 없습니다: {BASE_PATH}")
 base = importlib.util.module_from_spec(spec)
+# Python 3.12 dataclass가 동적 모듈의 __module__을 조회할 수 있도록 선등록한다.
+sys.modules[spec.name] = base
 spec.loader.exec_module(base)
 
 
