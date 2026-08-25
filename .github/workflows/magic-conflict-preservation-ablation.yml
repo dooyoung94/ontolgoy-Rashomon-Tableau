@@ -21,7 +21,7 @@ jobs:
       - name: Download frozen MAGIC DeBERTa artifact
         uses: actions/download-artifact@v4
         with:
-          name: magic-deberta-worlds
+          name: benchmark-results
           run-id: 32730398659
           github-token: ${{ github.token }}
           path: source_artifact
