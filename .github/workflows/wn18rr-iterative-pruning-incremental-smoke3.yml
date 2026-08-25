@@ -1,0 +1,45 @@
+name: WN18RR Iterative Pruning Incremental Smoke3
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/wn18rr-iterative-pruning-incremental-smoke3.yml'
+
+jobs:
+  incremental-smoke3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install project and NLI dependencies
+        run: |
+          pip install -e .
+          pip install -r requirements-nli.txt
+      - name: Download WN18RR
+        run: python scripts/download_relation_benchmarks.py --dataset WN18RR
+      - name: Build deterministic benchmark
+        run: |
+          python scripts/build_multihop_relation_benchmark.py \
+            --dataset-dir data/kg_benchmarks/WN18RR \
+            --target-split test \
+            --min-hops 2 --max-hops 4 \
+            --max-examples 50 --max-paths-per-target 1 \
+            --output data/kg_benchmarks/WN18RR/multihop_test.jsonl
+      - name: Run incremental smoke3
+        run: |
+          python scripts/evaluate_iterative_pruning_search_incremental.py \
+            --dataset-dir data/kg_benchmarks/WN18RR \
+            --benchmark data/kg_benchmarks/WN18RR/multihop_test.jsonl \
+            --limit 3 --min-hops 2 --max-hops 4 \
+            --batch-size 64 --device cpu \
+            --output results/wn18rr_iterative_pruning_incremental_3.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wn18rr-iterative-pruning-incremental-3
+          path: results/wn18rr_iterative_pruning_incremental_3.json
+          retention-days: 90
