@@ -1,0 +1,50 @@
+name: Peer Metrics Evaluator Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/evaluate_kgqa_peer_metrics.py'
+      - '.github/workflows/peer-metrics-smoke.yml'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build tiny KGQA fixture
+        run: |
+          mkdir -p tmp results
+          cat > tmp/peer_fixture.jsonl <<'EOF'
+          {"gold_answers":["Seoul"],"predicted_answers":["Seoul"],"top1_answer":"Seoul","gold_evidence":["e1","e2"],"retained_evidence":["e1","e2"],"pruning_regret":false,"avg_active_width":3,"expanded_candidates":20,"llm_calls":5,"context_tokens":1000,"latency_ms":120}
+          {"gold_answers":["A","B"],"predicted_answers":["A","C"],"top1_answer":"A","gold_evidence":["x","y"],"retained_evidence":["x","z"],"pruning_regret":true,"avg_active_width":4,"expanded_candidates":30,"llm_calls":7,"context_tokens":1400,"latency_ms":180}
+          EOF
+      - name: Run common peer evaluator
+        run: |
+          python scripts/evaluate_kgqa_peer_metrics.py \
+            --input tmp/peer_fixture.jsonl \
+            --dataset smoke \
+            --method BADP-smoke \
+            --output results/peer_metrics_smoke.json
+      - name: Validate expected metrics
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path('results/peer_metrics_smoke.json').read_text())['metrics']
+          assert abs(m['answer_set_exact_match'] - 0.5) < 1e-9
+          assert abs(m['hit_at_1'] - 1.0) < 1e-9
+          assert abs(m['macro_answer_f1'] - 0.75) < 1e-9
+          assert abs(m['evidence_f1'] - 0.75) < 1e-9
+          assert abs(m['query_pruning_regret_rate'] - 0.5) < 1e-9
+          print(json.dumps(m, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: peer-metrics-smoke
+          path: results/peer_metrics_smoke.json
+          retention-days: 30
