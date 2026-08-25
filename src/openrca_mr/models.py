@@ -4,6 +4,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+REL_CAUSAL = "causal_propagates_to"
+REL_NON_CAUSAL = "non_causal_dependency"
+REL_MASKED = "__MASKED_RELATION__"
+REL_OBSERVED = "dependency_propagates_to"
+
+
 @dataclass(frozen=True)
 class CausalEdge:
     source: str
@@ -51,7 +57,13 @@ class Hypothesis:
         if self.soft_logic_score is not None:
             return self.soft_logic_score
         if self.semantic_support is not None:
-            return 0.55 * self.semantic_support + 0.45 * self.abductive_score
+            # Neutral-preserving NLI calibration. Generic NLI is often neutral on
+            # telemetry text, so semantic scoring must not erase a strong
+            # evidence/structure prior. Entailment raises the prior and
+            # contradiction lowers it; neutral evidence contributes ~0.
+            contradiction = self.semantic_contradiction or 0.0
+            margin = self.semantic_support - contradiction
+            return max(0.0, min(1.0, self.abductive_score + 0.25 * margin))
         return self.abductive_score
 
 
