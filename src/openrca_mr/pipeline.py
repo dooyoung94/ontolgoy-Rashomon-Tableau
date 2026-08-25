@@ -18,8 +18,8 @@ class RcaPrediction:
 class MissingRelationRCA:
     """Composable pipeline used by all ablations.
 
-    Stages can be independently disabled so candidate generation is kept fixed
-    when measuring the contribution of semantic scoring and global inference.
+    Candidate generation is identical across Abduction / Abduction+DeBERTa /
+    Abduction+PSL / Full. Disabled stages contribute no hidden surrogate score.
     """
 
     def __init__(
@@ -41,10 +41,6 @@ class MissingRelationRCA:
 
         if self.semantic_scorer is not None:
             hypotheses = apply_semantic_scores(case, hypotheses, self.semantic_scorer)
-        else:
-            for h in hypotheses:
-                h.semantic_support = h.abductive_score
-                h.semantic_contradiction = 0.0
 
         if self.global_inference is not None:
             hypotheses = self.global_inference.infer(case, hypotheses)
