@@ -1,0 +1,29 @@
+{
+  "protocol": {
+    "dataset": "WN18RR",
+    "n": 50,
+    "source_workflow_run": 32799621678,
+    "source_artifact_id": 9546119681,
+    "scorer": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
+    "candidate_relations": 11,
+    "scope": "relation-hypothesis pruning diagnostic on frozen executed scores; not yet iterative ToG path-search",
+    "gold_policy": "evaluation only; not used in selection"
+  },
+  "policies": {
+    "top1": {"definition":{"type":"topk","k":1},"gold_survival":0.16,"pruning_regret":0.84,"avg_active_hypotheses":1.0,"median_active_hypotheses":1.0,"max_active_hypotheses":1},
+    "top3_tog_style": {"definition":{"type":"topk","k":3},"gold_survival":0.32,"pruning_regret":0.68,"avg_active_hypotheses":3.0,"median_active_hypotheses":3.0,"max_active_hypotheses":3},
+    "top5": {"definition":{"type":"topk","k":5},"gold_survival":0.40,"pruning_regret":0.60,"avg_active_hypotheses":5.0,"median_active_hypotheses":5.0,"max_active_hypotheses":5},
+    "threshold_0.7": {"definition":{"type":"threshold","tau":0.7},"gold_survival":0.70,"pruning_regret":0.30,"avg_active_hypotheses":7.08,"median_active_hypotheses":7.0,"max_active_hypotheses":11},
+    "threshold_0.5": {"definition":{"type":"threshold","tau":0.5},"gold_survival":0.78,"pruning_regret":0.22,"avg_active_hypotheses":8.40,"median_active_hypotheses":9.0,"max_active_hypotheses":11},
+    "rashomon_eps_0.01": {"definition":{"type":"rashomon","epsilon":0.01},"gold_survival":0.16,"pruning_regret":0.84,"avg_active_hypotheses":1.98,"median_active_hypotheses":1.0,"max_active_hypotheses":8},
+    "rashomon_eps_0.03": {"definition":{"type":"rashomon","epsilon":0.03},"gold_survival":0.26,"pruning_regret":0.74,"avg_active_hypotheses":3.22,"median_active_hypotheses":2.0,"max_active_hypotheses":10},
+    "rashomon_eps_0.05": {"definition":{"type":"rashomon","epsilon":0.05},"gold_survival":0.42,"pruning_regret":0.58,"avg_active_hypotheses":3.82,"median_active_hypotheses":3.0,"max_active_hypotheses":11,"by_hop":{"2":{"n":19,"gold_survival":0.3684210526315789,"avg_active_hypotheses":5.2631578947368425},"3":{"n":23,"gold_survival":0.4782608695652174,"avg_active_hypotheses":2.9130434782608696},"4":{"n":8,"gold_survival":0.375,"avg_active_hypotheses":3.0}}},
+    "rashomon_eps_0.10": {"definition":{"type":"rashomon","epsilon":0.10},"gold_survival":0.58,"pruning_regret":0.42,"avg_active_hypotheses":5.08,"median_active_hypotheses":4.5,"max_active_hypotheses":11,"by_hop":{"2":{"n":19,"gold_survival":0.5263157894736842,"avg_active_hypotheses":6.684210526315789},"3":{"n":23,"gold_survival":0.6521739130434783,"avg_active_hypotheses":4.0},"4":{"n":8,"gold_survival":0.5,"avg_active_hypotheses":4.375}}},
+    "no_pruning": {"definition":{"type":"all"},"gold_survival":1.0,"pruning_regret":0.0,"avg_active_hypotheses":11.0,"median_active_hypotheses":11.0,"max_active_hypotheses":11}
+  },
+  "comparisons": {
+    "rashomon_eps_0.05_vs_top3": {"survival_gain_pp":10.0,"avg_hypothesis_delta":0.82},
+    "rashomon_eps_0.05_vs_top5": {"survival_gain_pp":2.0,"avg_hypothesis_delta":-1.18},
+    "rashomon_eps_0.10_vs_top5": {"survival_gain_pp":18.0,"avg_hypothesis_delta":0.08}
+  }
+}
