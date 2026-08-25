@@ -1,0 +1,59 @@
+name: Ops Lite Case Schema
+
+on:
+  push:
+    paths:
+      - '.github/workflows/ops-lite-schema.yml'
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install 'pyarrow>=16'
+      - name: Download first case metadata and telemetry
+        shell: bash
+        run: |
+          set -euxo pipefail
+          BASE='https://huggingface.co/datasets/anon-ops/ops-lite/resolve/main'
+          curl -fL "$BASE/manifest.jsonl?download=true" -o /tmp/manifest.jsonl
+          NAME=$(python - <<'PY'
+          import json
+          print(json.loads(open('/tmp/manifest.jsonl').readline())['name'])
+          PY
+          )
+          echo "CASE=$NAME"
+          for F in injection.json causal_graph.json env.json result.json label.txt; do
+            echo "### $F"
+            curl -fL "$BASE/cases/$NAME/$F?download=true" -o "/tmp/$F"
+            head -c 12000 "/tmp/$F" || true
+            echo
+          done
+          python - <<'PY'
+          import json, urllib.request
+          name=json.loads(open('/tmp/manifest.jsonl').readline())['name']
+          url=f'https://huggingface.co/api/datasets/anon-ops/ops-lite/tree/main/cases/{name}?recursive=false&expand=false'
+          print('TREE_URL',url)
+          print(urllib.request.urlopen(url).read().decode()[:20000])
+          PY
+          python - <<'PY'
+          import json, urllib.request, os
+          import pyarrow.parquet as pq
+          name=json.loads(open('/tmp/manifest.jsonl').readline())['name']
+          api=f'https://huggingface.co/api/datasets/anon-ops/ops-lite/tree/main/cases/{name}?recursive=false&expand=false'
+          files=json.loads(urllib.request.urlopen(api).read())
+          parquets=[x['path'] for x in files if x['path'].endswith('.parquet') and '/abnormal_' in x['path']]
+          print('PARQUETS', parquets)
+          for path in parquets[:6]:
+              url='https://huggingface.co/datasets/anon-ops/ops-lite/resolve/main/'+path+'?download=true'
+              local='/tmp/'+os.path.basename(path)
+              urllib.request.urlretrieve(url,local)
+              pf=pq.ParquetFile(local)
+              print('\n###',path,'ROWS',pf.metadata.num_rows)
+              print(pf.schema_arrow)
+              print(pf.read().slice(0,3).to_pylist())
+          PY
