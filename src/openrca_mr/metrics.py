@@ -3,11 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-from .models import CausalEdge
+from .models import CausalEdge, REL_CAUSAL
 
 
 @dataclass(frozen=True)
 class EdgeMetrics:
+    precision: float
+    recall: float
+    f1: float
+
+
+@dataclass(frozen=True)
+class RelationMetrics:
+    accuracy: float
     precision: float
     recall: float
     f1: float
@@ -50,6 +58,34 @@ def service_edge_metrics(predicted, gold) -> EdgeMetrics:
     recall = tp / len(g) if g else 0.0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
     return EdgeMetrics(precision, recall, f1)
+
+
+def relation_classification_metrics(predicted_causal, masked_truth: list[CausalEdge]) -> RelationMetrics:
+    """Binary relation recovery over masked observed pairs.
+
+    Positive = the observed dependency is a PAVE causal-propagation relation.
+    Negative = the observed dependency is non-causal for this incident.
+    """
+    predicted_pairs = _pair_set(predicted_causal)
+    rows: list[tuple[bool, bool]] = []
+    for edge in masked_truth:
+        if is_loadgen(edge.source) or is_loadgen(edge.target):
+            continue
+        pair = (normalize_service(edge.source), normalize_service(edge.target))
+        truth = edge.relation == REL_CAUSAL
+        pred = pair in predicted_pairs
+        rows.append((truth, pred))
+    if not rows:
+        return RelationMetrics(0.0, 0.0, 0.0, 0.0)
+    tp = sum(1 for truth, pred in rows if truth and pred)
+    fp = sum(1 for truth, pred in rows if not truth and pred)
+    fn = sum(1 for truth, pred in rows if truth and not pred)
+    correct = sum(1 for truth, pred in rows if truth == pred)
+    accuracy = correct / len(rows)
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return RelationMetrics(accuracy, precision, recall, f1)
 
 
 def edge_metrics(predicted, gold) -> EdgeMetrics:
