@@ -35,6 +35,75 @@ def safe_div(num: float, den: float) -> float:
     return num / den if den else 0.0
 
 
+def ontology_predicates(ontology: Ontology) -> set[str]:
+    predicates = set(ontology.symmetric)
+    predicates.update(ontology.inverse)
+    predicates.update(ontology.inverse.values())
+    predicates.update(ontology.hierarchy)
+    for parents in ontology.hierarchy.values():
+        predicates.update(parents)
+    for left, right in ontology.incompatible:
+        predicates.add(left)
+        predicates.add(right)
+    predicates.update(ontology.exclusive)
+    predicates.update(ontology.transitive)
+    predicates.update(ontology.irreflexive)
+    predicates.update(ontology.antisymmetric)
+    for rule in ontology.compositions:
+        predicates.update((rule.left, rule.right, rule.result))
+    return predicates
+
+
+def build_node_index(train: list[KGTriple]) -> dict[str, list[KGTriple]]:
+    index: dict[str, list[KGTriple]] = defaultdict(list)
+    for triple in train:
+        index[triple.head].append(triple)
+        if triple.tail != triple.head:
+            index[triple.tail].append(triple)
+    return index
+
+
+def local_tableau_facts(
+    path: list[KGTriple],
+    row: dict,
+    node_index: dict[str, list[KGTriple]],
+    allowed_predicates: set[str],
+    *,
+    cap: int,
+) -> tuple:
+    """Build a label-blind ontology-relevant local subgraph for Tableau.
+
+    The selected evidence path is always present. We then add train-graph facts touching
+    the query endpoints or any intermediate path node, restricted to predicates that the
+    ontology can reason about. This exposes reverse edges, short cycles, composition and
+    other hard clashes that are invisible when Tableau sees the selected path alone.
+    """
+    focus_nodes = {row["head"], row["tail"]}
+    for triple in path:
+        focus_nodes.add(triple.head)
+        focus_nodes.add(triple.tail)
+
+    selected: dict[tuple[str, str, str], KGTriple] = {}
+    for triple in path:
+        selected[(triple.head, triple.relation, triple.tail)] = triple
+
+    local_candidates: dict[tuple[str, str, str], KGTriple] = {}
+    for node in sorted(focus_nodes):
+        for triple in node_index.get(node, []):
+            if triple.relation not in allowed_predicates:
+                continue
+            key = (triple.head, triple.relation, triple.tail)
+            if key not in selected:
+                local_candidates[key] = triple
+
+    # Deterministic cap. Path evidence is never dropped.
+    for key in sorted(local_candidates)[: max(0, cap - len(selected))]:
+        selected[key] = local_candidates[key]
+
+    triples = [selected[key] for key in sorted(selected)]
+    return path_as_literals(triples, source="kg_local_tableau")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset-dir", default="data/kg_benchmarks/WN18RR")
@@ -44,6 +113,7 @@ def main() -> None:
     parser.add_argument("--min-score", type=float, default=0.0)
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--local-neighborhood-cap", type=int, default=256)
     parser.add_argument("--device", default=None)
     parser.add_argument("--output", default="results/wn18rr_multihop_completion_pilot.json")
     args = parser.parse_args()
@@ -60,6 +130,8 @@ def main() -> None:
     mappings = load_text_mappings(root / "entity2text.txt", root / "relation2text.txt")
     ontology = Ontology.from_yaml(args.ontology)
     scorer = DebertaWorldScorer(device=args.device)
+    node_index = build_node_index(train)
+    allowed_predicates = ontology_predicates(ontology)
 
     prepared = []
     all_queries: list[str] = []
@@ -89,11 +161,12 @@ def main() -> None:
 
     for index, (row, path, start, end) in enumerate(prepared):
         nli_scores = all_scores[start:end]
+        path_literals = path_as_literals(path)
         candidates = [
             RelationCandidate(
                 relation=relation,
                 score=score.support,
-                path=path_as_literals(path),
+                path=path_literals,
                 support=score.support,
                 contradiction=score.contradiction,
                 unresolved=score.unresolved,
@@ -110,8 +183,8 @@ def main() -> None:
             if c.score >= max(args.min_score, rashomon_threshold)
         }
 
-        completion = complete_missing_relation(
-            path_as_literals(path),
+        path_completion = complete_missing_relation(
+            path_literals,
             row["head"],
             row["tail"],
             candidates,
@@ -119,20 +192,50 @@ def main() -> None:
             epsilon=args.epsilon,
             min_score=args.min_score,
         )
-        valid_relations = {world.relation for world in completion.valid_worlds}
+        local_facts = local_tableau_facts(
+            path,
+            row,
+            node_index,
+            allowed_predicates,
+            cap=args.local_neighborhood_cap,
+        )
+        local_completion = complete_missing_relation(
+            local_facts,
+            row["head"],
+            row["tail"],
+            candidates,
+            ontology,
+            epsilon=args.epsilon,
+            min_score=args.min_score,
+        )
+
+        path_valid_relations = {world.relation for world in path_completion.valid_worlds}
+        local_valid_relations = {world.relation for world in local_completion.valid_worlds}
         gold = row["gold_relation"]
         hop = int(row["hop_count"])
+
+        local_rejected = list(local_completion.rejected_worlds)
+        local_wrong_rejected = sum(world.relation != gold for world in local_rejected)
+        local_gold_false_rejected = float(gold in rashomon_relations and gold not in local_valid_relations)
 
         values = {
             "n": 1.0,
             "top1_correct": float(top1 == gold),
             "rashomon_gold_coverage": float(gold in rashomon_relations),
-            "tableau_gold_retention": float(gold in valid_relations),
-            "rt_top1_correct": float(completion.top_relation == gold),
-            "rashomon_size": float(len(completion.rashomon_candidates)),
-            "valid_worlds": float(len(completion.valid_worlds)),
-            "rejected_worlds": float(len(completion.rejected_worlds)),
-            "entropy": float(completion.entropy),
+            "rashomon_size": float(len(path_completion.rashomon_candidates)),
+            "path_tableau_gold_retention": float(gold in path_valid_relations),
+            "path_rt_top1_correct": float(path_completion.top_relation == gold),
+            "path_valid_worlds": float(len(path_completion.valid_worlds)),
+            "path_rejected_worlds": float(len(path_completion.rejected_worlds)),
+            "local_tableau_gold_retention": float(gold in local_valid_relations),
+            "local_rt_top1_correct": float(local_completion.top_relation == gold),
+            "local_valid_worlds": float(len(local_completion.valid_worlds)),
+            "local_rejected_worlds": float(len(local_rejected)),
+            "local_wrong_worlds_rejected": float(local_wrong_rejected),
+            "local_gold_false_rejections": local_gold_false_rejected,
+            "local_facts": float(len(local_facts)),
+            "path_entropy": float(path_completion.entropy),
+            "local_entropy": float(local_completion.entropy),
         }
         for key, value in values.items():
             totals[key] += value
@@ -147,11 +250,24 @@ def main() -> None:
                 "gold_relation": gold,
                 "top1_relation": top1,
                 "rashomon_relations": sorted(rashomon_relations),
-                "valid_relations": sorted(valid_relations),
-                "rejected_relations": sorted(world.relation for world in completion.rejected_worlds),
-                "rt_top_relation": completion.top_relation,
-                "relation_marginal": completion.relation_marginal,
-                "entropy": completion.entropy,
+                "path_only": {
+                    "valid_relations": sorted(path_valid_relations),
+                    "rejected_relations": sorted(world.relation for world in path_completion.rejected_worlds),
+                    "top_relation": path_completion.top_relation,
+                    "relation_marginal": path_completion.relation_marginal,
+                    "entropy": path_completion.entropy,
+                },
+                "local_subgraph": {
+                    "fact_count": len(local_facts),
+                    "valid_relations": sorted(local_valid_relations),
+                    "rejected_relations": sorted(world.relation for world in local_rejected),
+                    "rejection_clashes": {
+                        world.relation: world.clashes for world in local_rejected
+                    },
+                    "top_relation": local_completion.top_relation,
+                    "relation_marginal": local_completion.relation_marginal,
+                    "entropy": local_completion.entropy,
+                },
                 "scores": {
                     candidate.relation: {
                         "support": candidate.support,
@@ -167,16 +283,28 @@ def main() -> None:
 
     def summarize(bucket: dict[str, float]) -> dict:
         n = bucket.get("n", 0.0)
+        local_rejected = bucket.get("local_rejected_worlds", 0.0)
         return {
             "n": int(n),
             "top1_accuracy": safe_div(bucket.get("top1_correct", 0.0), n),
             "rashomon_gold_coverage": safe_div(bucket.get("rashomon_gold_coverage", 0.0), n),
-            "tableau_gold_retention": safe_div(bucket.get("tableau_gold_retention", 0.0), n),
-            "rashomon_tableau_top1_accuracy": safe_div(bucket.get("rt_top1_correct", 0.0), n),
             "avg_rashomon_size": safe_div(bucket.get("rashomon_size", 0.0), n),
-            "avg_valid_worlds": safe_div(bucket.get("valid_worlds", 0.0), n),
-            "avg_rejected_worlds": safe_div(bucket.get("rejected_worlds", 0.0), n),
-            "avg_entropy": safe_div(bucket.get("entropy", 0.0), n),
+            "path_tableau_gold_retention": safe_div(bucket.get("path_tableau_gold_retention", 0.0), n),
+            "path_rashomon_tableau_top1_accuracy": safe_div(bucket.get("path_rt_top1_correct", 0.0), n),
+            "path_avg_rejected_worlds": safe_div(bucket.get("path_rejected_worlds", 0.0), n),
+            "local_tableau_gold_retention": safe_div(bucket.get("local_tableau_gold_retention", 0.0), n),
+            "local_rashomon_tableau_top1_accuracy": safe_div(bucket.get("local_rt_top1_correct", 0.0), n),
+            "local_avg_valid_worlds": safe_div(bucket.get("local_valid_worlds", 0.0), n),
+            "local_avg_rejected_worlds": safe_div(local_rejected, n),
+            "local_wrong_rejection_precision": safe_div(
+                bucket.get("local_wrong_worlds_rejected", 0.0), local_rejected
+            ),
+            "local_gold_false_rejection_rate": safe_div(
+                bucket.get("local_gold_false_rejections", 0.0), n
+            ),
+            "local_avg_fact_count": safe_div(bucket.get("local_facts", 0.0), n),
+            "path_avg_entropy": safe_div(bucket.get("path_entropy", 0.0), n),
+            "local_avg_entropy": safe_div(bucket.get("local_entropy", 0.0), n),
         }
 
     summary = {
@@ -186,10 +314,15 @@ def main() -> None:
             "epsilon": args.epsilon,
             "min_score": args.min_score,
             "batch_size": args.batch_size,
+            "local_neighborhood_cap": args.local_neighborhood_cap,
             "scorer": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
             "gold_policy": "gold relation used only after scoring for evaluation",
-            "evidence_policy": "train-graph directed multi-hop path only",
-            "tableau_policy": "ontology SAT filter over path evidence plus proposed relation",
+            "scoring_evidence_policy": "selected train-graph directed multi-hop path only",
+            "path_tableau_policy": "selected path plus proposed relation",
+            "local_tableau_policy": (
+                "selected path plus ontology-relevant one-hop train facts touching query/path nodes "
+                "plus proposed relation"
+            ),
         },
         "overall": summarize(totals),
         "by_hop": {str(hop): summarize(bucket) for hop, bucket in sorted(by_hop.items())},
