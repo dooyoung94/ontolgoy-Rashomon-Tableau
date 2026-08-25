@@ -33,7 +33,7 @@ jobs:
             --max-examples 50 \
             --max-paths-per-target 1 \
             --output data/kg_benchmarks/WN18RR/multihop_test.jsonl
-      - name: Evaluate DeBERTa Top1 vs Rashomon vs Rashomon-Tableau
+      - name: Evaluate path-only vs local-subgraph Tableau
         run: |
           python scripts/evaluate_multihop_relation_completion.py \
             --dataset-dir data/kg_benchmarks/WN18RR \
@@ -42,21 +42,22 @@ jobs:
             --epsilon 0.05 \
             --limit 50 \
             --batch-size 32 \
+            --local-neighborhood-cap 256 \
             --device cpu \
-            --output results/wn18rr_multihop_completion_pilot.json
+            --output results/wn18rr_multihop_local_tableau_pilot_50.json
       - name: Show summary
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          p=Path('results/wn18rr_multihop_completion_pilot.json')
+          p=Path('results/wn18rr_multihop_local_tableau_pilot_50.json')
           d=json.loads(p.read_text())
           print(json.dumps({'protocol': d['protocol'], 'overall': d['overall'], 'by_hop': d['by_hop']}, indent=2))
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: wn18rr-multihop-rashomon-tableau-50-pilot
+          name: wn18rr-multihop-local-tableau-50-pilot
           path: |
-            results/wn18rr_multihop_completion_pilot.json
+            results/wn18rr_multihop_local_tableau_pilot_50.json
             data/kg_benchmarks/WN18RR/multihop_test.jsonl
           retention-days: 90
