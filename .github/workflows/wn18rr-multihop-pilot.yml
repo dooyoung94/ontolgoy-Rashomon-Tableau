@@ -23,14 +23,14 @@ jobs:
       - name: Download WN18RR benchmark
         run: |
           python scripts/download_relation_benchmarks.py --dataset WN18RR
-      - name: Build 2-4 hop masked-relation smoke set
+      - name: Build 2-4 hop masked-relation 50-row pilot set
         run: |
           python scripts/build_multihop_relation_benchmark.py \
             --dataset-dir data/kg_benchmarks/WN18RR \
             --target-split test \
             --min-hops 2 \
             --max-hops 4 \
-            --max-examples 5 \
+            --max-examples 50 \
             --max-paths-per-target 1 \
             --output data/kg_benchmarks/WN18RR/multihop_test.jsonl
       - name: Evaluate DeBERTa Top1 vs Rashomon vs Rashomon-Tableau
@@ -40,7 +40,8 @@ jobs:
             --benchmark data/kg_benchmarks/WN18RR/multihop_test.jsonl \
             --ontology config/wn18rr_ontology_rules.yaml \
             --epsilon 0.05 \
-            --limit 5 \
+            --limit 50 \
+            --batch-size 32 \
             --device cpu \
             --output results/wn18rr_multihop_completion_pilot.json
       - name: Show summary
@@ -54,7 +55,7 @@ jobs:
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: wn18rr-multihop-rashomon-tableau-smoke-result
+          name: wn18rr-multihop-rashomon-tableau-50-pilot
           path: |
             results/wn18rr_multihop_completion_pilot.json
             data/kg_benchmarks/WN18RR/multihop_test.jsonl
