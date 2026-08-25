@@ -1,0 +1,59 @@
+name: WN18RR Iterative Pruning Incremental
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/wn18rr-iterative-pruning-incremental.yml'
+      - 'scripts/evaluate_iterative_pruning_search_incremental.py'
+
+jobs:
+  incremental:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install project and NLI dependencies
+        run: |
+          pip install -e .
+          pip install -r requirements-nli.txt
+      - name: Download WN18RR
+        run: python scripts/download_relation_benchmarks.py --dataset WN18RR
+      - name: Build deterministic 2-4 hop benchmark
+        run: |
+          python scripts/build_multihop_relation_benchmark.py \
+            --dataset-dir data/kg_benchmarks/WN18RR \
+            --target-split test \
+            --min-hops 2 \
+            --max-hops 4 \
+            --max-examples 50 \
+            --max-paths-per-target 1 \
+            --output data/kg_benchmarks/WN18RR/multihop_test.jsonl
+      - name: Run incremental iterative pruning 10 queries
+        run: |
+          python scripts/evaluate_iterative_pruning_search_incremental.py \
+            --dataset-dir data/kg_benchmarks/WN18RR \
+            --benchmark data/kg_benchmarks/WN18RR/multihop_test.jsonl \
+            --limit 10 \
+            --min-hops 2 \
+            --max-hops 4 \
+            --batch-size 64 \
+            --device cpu \
+            --output results/wn18rr_iterative_pruning_incremental_10.json
+      - name: Show comparison
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('results/wn18rr_iterative_pruning_incremental_10.json').read_text())
+          print(json.dumps({'protocol':d['protocol'],'policies':d['policies'],'comparisons':d['comparisons'],'diagnostics':d['diagnostics']}, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wn18rr-iterative-pruning-incremental-10
+          path: results/wn18rr_iterative_pruning_incremental_10.json
+          retention-days: 90
