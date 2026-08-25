@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/wn18rr-iterative-pruning-budgeted-20.yml'
+      - 'scripts/evaluate_iterative_pruning_budgeted.py'
 
 jobs:
   budgeted20:
@@ -29,7 +30,7 @@ jobs:
             --target-split test --min-hops 2 --max-hops 4 \
             --max-examples 50 --max-paths-per-target 1 \
             --output data/kg_benchmarks/WN18RR/multihop_test.jsonl
-      - name: Run budget-matched pruning 20 queries
+      - name: Run bounded budget-matched pruning 20 queries
         run: |
           python scripts/evaluate_iterative_pruning_budgeted.py \
             --dataset-dir data/kg_benchmarks/WN18RR \
