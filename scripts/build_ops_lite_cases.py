@@ -61,8 +61,6 @@ def _trace_dependency_edges(normal_traces: pd.DataFrame) -> list[CausalEdge]:
     for row in joined[["child_service", "parent_service"]].itertuples(index=False):
         child_service, parent_service = str(row[0]), str(row[1])
         if child_service and parent_service and child_service != parent_service:
-            # Trace call direction is caller -> callee. Failure propagation is
-            # evaluated cause -> effect, which is normally callee -> caller.
             pairs.add((child_service, parent_service))
     return [CausalEdge(a, "dependency_propagates_to", b) for a, b in sorted(pairs)]
 
@@ -157,10 +155,7 @@ def _evidence_for_case(
             drop = _clip01((ncount - acount) / ncount)
             if drop >= 0.10:
                 eid += 1
-                evidence.append(Evidence(
-                    f"e{eid}", service, "trace", "availability_drop", drop, abnormal_start,
-                    f"{service} trace volume dropped {drop * 100:.1f}% versus the normal window.",
-                ))
+                evidence.append(Evidence(f"e{eid}", service, "trace", "availability_drop", drop, abnormal_start, f"{service} trace volume dropped {drop * 100:.1f}% versus the normal window."))
 
         nerr, aerr = float(n.get("error_rate", 0.0)), float(a.get("error_rate", 0.0))
         err_score = _clip01(max(0.0, aerr - nerr) * 3.0)
@@ -172,10 +167,7 @@ def _evidence_for_case(
                 if len(hit):
                     onset = float(hit.min())
             eid += 1
-            evidence.append(Evidence(
-                f"e{eid}", service, "trace", "error_rate", err_score, onset,
-                f"{service} trace error rate changed from {nerr:.3f} to {aerr:.3f}.",
-            ))
+            evidence.append(Evidence(f"e{eid}", service, "trace", "error_rate", err_score, onset, f"{service} trace error rate changed from {nerr:.3f} to {aerr:.3f}."))
 
         np95, ap95 = float(n.get("p95", 0.0)), float(a.get("p95", 0.0))
         if np95 > 0 and ap95 > np95:
@@ -190,10 +182,7 @@ def _evidence_for_case(
                     if len(hit):
                         onset = float(hit.min())
                 eid += 1
-                evidence.append(Evidence(
-                    f"e{eid}", service, "trace", "latency", lat_score, onset,
-                    f"{service} p95 span duration increased {ratio:.2f}x versus normal.",
-                ))
+                evidence.append(Evidence(f"e{eid}", service, "trace", "latency", lat_score, onset, f"{service} p95 span duration increased {ratio:.2f}x versus normal."))
 
         nlog, alog = float(n.get("log_error_rate", 0.0)), float(a.get("log_error_rate", 0.0))
         log_score = _clip01(max(0.0, alog - nlog) * 3.0)
@@ -206,28 +195,19 @@ def _evidence_for_case(
                 if len(hit):
                     onset = float(hit.min())
             eid += 1
-            evidence.append(Evidence(
-                f"e{eid}", service, "log", "error_log_rate", log_score, onset,
-                f"{service} error-log rate changed from {nlog:.3f} to {alog:.3f}.",
-            ))
+            evidence.append(Evidence(f"e{eid}", service, "log", "error_log_rate", log_score, onset, f"{service} error-log rate changed from {nlog:.3f} to {alog:.3f}."))
 
         metric_score, metric_name, onset = _metric_shift(normal_metrics, abnormal_metrics, service)
         if metric_score >= 0.15:
             eid += 1
-            evidence.append(Evidence(
-                f"e{eid}", service, "metric", metric_name, metric_score, onset or abnormal_start,
-                f"{service} metric {metric_name} shifted materially from its normal-window distribution.",
-            ))
+            evidence.append(Evidence(f"e{eid}", service, "metric", metric_name, metric_score, onset or abnormal_start, f"{service} metric {metric_name} shifted materially from its normal-window distribution."))
 
     by_node = {e.node for e in evidence}
     all_services = sorted(set(normal_traces.get("service_name", pd.Series(dtype=str)).dropna().astype(str)))
     for service in all_services:
         if service not in by_node:
             eid += 1
-            evidence.append(Evidence(
-                f"e{eid}", service, "trace", "stable_presence", 0.05, abnormal_start,
-                f"{service} remained observable without a strong detected anomaly.",
-            ))
+            evidence.append(Evidence(f"e{eid}", service, "trace", "stable_presence", 0.05, abnormal_start, f"{service} remained observable without a strong detected anomaly."))
     return evidence
 
 
@@ -297,13 +277,17 @@ def _case(name: str, cache: Path, require_attributed: bool = True) -> RcaCase | 
 
     known_edges = _trace_dependency_edges(normal_traces)
     abnormal_start = float(env.get("ABNORMAL_START", 0.0))
-    evidence = _evidence_for_case(
-        normal_traces, abnormal_traces, normal_metrics, abnormal_metrics,
-        normal_logs, abnormal_logs, abnormal_start,
-    )
+    evidence = _evidence_for_case(normal_traces, abnormal_traces, normal_metrics, abnormal_metrics, normal_logs, abnormal_logs, abnormal_start)
     symptoms = _symptoms(known_edges, evidence)
     gold_roots, gold_edges, gold_alarms = _gold_from_causal_graph(graph)
-    if not known_edges or not evidence or not gold_roots or not gold_edges:
+
+    # Controlled relation-mask experiments intentionally use only detector-
+    # attributed cases with usable observed relations/evidence. The standard
+    # OpenRCA2 track must retain every curated case: if traces reveal no edge,
+    # that is a model/input failure mode and must remain in the denominator.
+    if not gold_roots or not gold_edges:
+        return None
+    if require_attributed and (not known_edges or not evidence):
         return None
 
     return RcaCase(
@@ -343,14 +327,7 @@ def build(out: Path, cache: Path, limit: int, require_attributed: bool = True) -
                 "manifest_hybrid": bool(row.get("hybrid", False)),
             })
             cases.append(case)
-            print(
-                "CASE", case.case_id,
-                "known", len(case.known_edges),
-                "evidence", len(case.evidence),
-                "symptoms", case.symptom_nodes,
-                "gold_roots", case.gold_root_causes,
-                "gold_edges", len(case.gold_edges),
-            )
+            print("CASE", case.case_id, "known", len(case.known_edges), "evidence", len(case.evidence), "symptoms", case.symptom_nodes, "gold_roots", case.gold_root_causes, "gold_edges", len(case.gold_edges))
         if limit and len(cases) >= limit:
             break
     dump_normalized_cases(cases, out)
