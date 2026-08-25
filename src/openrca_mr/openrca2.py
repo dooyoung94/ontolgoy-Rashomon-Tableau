@@ -7,14 +7,7 @@ from .models import CausalEdge, Evidence, RcaCase
 
 
 def load_normalized_cases(path: str | Path) -> list[RcaCase]:
-    """Load the repository's leakage-safe normalized OpenRCA 2.0 format.
-
-    The upstream OpenRCA 2.0 release may evolve independently. Conversion from
-    its raw telemetry/PAVE annotations belongs in a dataset adapter; the core
-    reasoner consumes this stable JSONL schema so gold process annotations stay
-    separated from model-visible inputs.
-    """
-
+    """Load leakage-safe normalized OpenRCA2 cases."""
     cases: list[RcaCase] = []
     with Path(path).open("r", encoding="utf-8") as handle:
         for line in handle:
@@ -30,6 +23,7 @@ def load_normalized_cases(path: str | Path) -> list[RcaCase]:
                     gold_root_causes=[str(x) for x in row.get("gold_root_causes", [])],
                     gold_edges=[_edge(x) for x in row.get("gold_edges", [])],
                     gold_paths=[[str(v) for v in path] for path in row.get("gold_paths", [])],
+                    gold_alarm_nodes=[str(x) for x in row.get("gold_alarm_nodes", [])],
                     metadata=dict(row.get("metadata", {})),
                 )
             )
@@ -73,5 +67,6 @@ def _case_to_dict(case: RcaCase) -> dict:
         "gold_root_causes": case.gold_root_causes,
         "gold_edges": [edge.__dict__ for edge in case.gold_edges],
         "gold_paths": case.gold_paths,
+        "gold_alarm_nodes": case.gold_alarm_nodes,
         "metadata": case.metadata,
     }
