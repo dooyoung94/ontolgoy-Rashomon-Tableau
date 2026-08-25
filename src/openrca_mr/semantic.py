@@ -13,7 +13,14 @@ class SemanticScore:
 
 
 class DebertaEvidenceScorer:
-    """NLI-based semantic support scorer over model-visible telemetry only."""
+    """Contrastive NLI scorer for causal vs non-causal relation semantics.
+
+    Absolute entailment on telemetry prose is often tiny/neutral. We therefore
+    score two competing claims for the same observed pair and use their relative
+    entailment preference, while attenuating that preference when both claims
+    have little entailment mass. This avoids both the old all-zero collapse and
+    amplification of arbitrary low-confidence NLI noise.
+    """
 
     DEFAULT_MODEL = "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
 
@@ -56,10 +63,15 @@ class DebertaEvidenceScorer:
         for start in range(0, len(hypotheses), self.batch_size):
             batch = hypotheses[start : start + self.batch_size]
             premises = [self._premise(case, h) for h in batch]
-            claims = [self._claim(h) for h in batch]
+            all_premises: list[str] = []
+            all_claims: list[str] = []
+            for premise, h in zip(premises, batch):
+                all_premises.extend([premise, premise])
+                all_claims.extend([self._causal_claim(h), self._noncausal_claim(h)])
+
             encoded = self.tokenizer(
-                premises,
-                claims,
+                all_premises,
+                all_claims,
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
@@ -68,21 +80,41 @@ class DebertaEvidenceScorer:
             encoded = {k: v.to(self.device) for k, v in encoded.items()}
             with self.torch.no_grad():
                 probs = self.torch.softmax(self.model(**encoded).logits, dim=-1).detach().cpu().tolist()
-            for row in probs:
-                results.append(
-                    SemanticScore(
-                        support=float(row[self.entail]),
-                        contradiction=float(row[self.contra]),
-                        neutral=float(row[self.neutral]),
-                    )
-                )
+
+            for i in range(len(batch)):
+                causal = probs[2 * i]
+                noncausal = probs[2 * i + 1]
+                causal_e = float(causal[self.entail])
+                noncausal_e = float(noncausal[self.entail])
+                mass = causal_e + noncausal_e
+                if mass <= 1e-12:
+                    preference = 0.0
+                else:
+                    preference = (causal_e - noncausal_e) / mass
+
+                # Only trust a contrastive preference when at least one claim
+                # receives meaningful entailment. With both near zero, remain
+                # close to neutral instead of amplifying numerical noise.
+                reliability = max(0.0, min(1.0, mass / 0.50))
+                margin = preference * reliability
+                support = 0.5 + 0.5 * margin
+                contradiction = 0.5 - 0.5 * margin
+                neutral = 1.0 - reliability
+                results.append(SemanticScore(support, contradiction, neutral))
         return results
 
     @staticmethod
-    def _claim(hypothesis: Hypothesis) -> str:
+    def _causal_claim(hypothesis: Hypothesis) -> str:
         return (
-            f"The abnormal behavior at {hypothesis.edge.source} causally contributed "
-            f"to the later abnormal behavior at {hypothesis.edge.target}."
+            f"The incident anomaly at {hypothesis.edge.source} causally propagated "
+            f"to {hypothesis.edge.target}."
+        )
+
+    @staticmethod
+    def _noncausal_claim(hypothesis: Hypothesis) -> str:
+        return (
+            f"The observed dependency from {hypothesis.edge.source} to {hypothesis.edge.target} "
+            f"did not causally propagate the incident anomaly."
         )
 
     @staticmethod
@@ -91,8 +123,8 @@ class DebertaEvidenceScorer:
         selected = [e for e in case.evidence if e.evidence_id in wanted]
         evidence = " ".join(_evidence_text(e) for e in selected)
         return (
-            f"Telemetry evidence for a candidate path from {hypothesis.edge.source} "
-            f"to {hypothesis.edge.target}: {evidence}"
+            f"The telemetry collector observed a dependency from {hypothesis.edge.source} "
+            f"to {hypothesis.edge.target}. Incident telemetry for the two endpoints: {evidence}"
         )
 
 
