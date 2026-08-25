@@ -16,11 +16,8 @@ class AbductiveRelationGenerator:
 
     Main-track assumption: collectors/traces already reveal the structural edge;
     the missing information is whether that dependency participated in causal
-    propagation for this incident. This removes the previous O(N^2) pair
-    explosion and prevents hallucinating unrelated service-to-service edges.
-
-    Unmasked causal/non-causal relation labels are treated as known ontology
-    facts and therefore are not regenerated.
+    propagation for this incident. Connectivity is candidate eligibility only,
+    never positive causal evidence.
     """
 
     def __init__(self, max_candidates: int = 64):
@@ -59,7 +56,7 @@ class AbductiveRelationGenerator:
                     edge=CausalEdge(observed.source, REL_CAUSAL, observed.target),
                     evidence_ids=evidence_ids,
                     explanation=explanation,
-                    structural_score=1.0,
+                    structural_score=0.0,
                     temporal_score=temporal,
                     anomaly_score=anomaly,
                 )
