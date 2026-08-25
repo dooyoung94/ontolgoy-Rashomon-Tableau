@@ -18,9 +18,15 @@ class AbductiveRelationGenerator:
     the missing information is whether that dependency participated in causal
     propagation for this incident. Connectivity is candidate eligibility only,
     never positive causal evidence.
+
+    For controlled relation masking, every masked observed pair must be scored.
+    ``max_candidates`` is therefore unlimited by default; an optional cap exists
+    only for explicit stress/debug runs and must not be used in the main benchmark.
     """
 
-    def __init__(self, max_candidates: int = 64):
+    def __init__(self, max_candidates: int | None = None):
+        if max_candidates is not None and max_candidates <= 0:
+            raise ValueError("max_candidates must be positive or None")
         self.max_candidates = max_candidates
 
     def generate(self, case: RcaCase) -> list[Hypothesis]:
@@ -63,6 +69,8 @@ class AbductiveRelationGenerator:
             )
 
         hypotheses.sort(key=lambda h: h.abductive_score, reverse=True)
+        if self.max_candidates is None:
+            return hypotheses
         return hypotheses[: self.max_candidates]
 
     @staticmethod

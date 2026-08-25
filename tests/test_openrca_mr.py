@@ -92,6 +92,25 @@ def test_abduction_generates_only_observed_unknown_pairs():
     assert len(hypotheses) <= len(masked_pairs)
 
 
+def test_abduction_main_track_does_not_truncate_more_than_64_masked_pairs():
+    n = 80
+    target = "ts-api"
+    known_edges = [CausalEdge(f"ts-svc-{i}", REL_MASKED, target) for i in range(n)]
+    evidence = [Evidence("target", target, "trace", "latency", 0.9, 2.0, "api slow")]
+    evidence.extend(
+        Evidence(f"e{i}", f"ts-svc-{i}", "metric", "latency", 0.8, 1.0, "upstream anomaly")
+        for i in range(n)
+    )
+    case = RcaCase(
+        case_id="many-masked",
+        symptom_nodes=[target],
+        known_edges=known_edges,
+        evidence=evidence,
+    )
+    hypotheses = AbductiveRelationGenerator().generate(case)
+    assert len(hypotheses) == n
+
+
 def test_observed_connectivity_is_not_causal_evidence():
     h = Hypothesis(
         CausalEdge("a", REL_CAUSAL, "b"),
@@ -122,8 +141,27 @@ def test_neutral_semantic_margin_preserves_abduction_prior():
         anomaly_score=0.6,
         semantic_support=0.5,
         semantic_contradiction=0.5,
+        semantic_neutral=1.0,
     )
     assert abs(h.final_score - h.abductive_score) < 1e-9
+
+
+def test_semantic_and_soft_logic_score_paths_are_distinct():
+    h = Hypothesis(
+        CausalEdge("a", REL_CAUSAL, "b"),
+        [],
+        "test",
+        temporal_score=0.6,
+        anomaly_score=0.6,
+        semantic_support=0.9,
+        semantic_contradiction=0.1,
+        semantic_neutral=0.0,
+    )
+    semantic_final = h.final_score
+    assert semantic_final > h.abductive_score
+    h.soft_logic_score = 0.31
+    assert h.final_score == 0.31
+    assert h.final_score != semantic_final
 
 
 def test_relation_metric_scores_causal_vs_noncausal_on_masked_pairs():

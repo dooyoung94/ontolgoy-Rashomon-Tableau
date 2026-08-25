@@ -46,6 +46,7 @@ class Hypothesis:
     anomaly_score: float = 0.0
     semantic_support: float | None = None
     semantic_contradiction: float | None = None
+    semantic_neutral: float | None = None
     soft_logic_score: float | None = None
 
     @property
@@ -62,7 +63,7 @@ class Hypothesis:
         if self.semantic_support is not None:
             # Neutral-preserving semantic correction. DeBERTa can only move the
             # telemetry prior through a causal-vs-noncausal preference margin.
-            contradiction = self.semantic_contradiction or 0.0
+            contradiction = self.semantic_contradiction if self.semantic_contradiction is not None else 0.0
             margin = self.semantic_support - contradiction
             return max(0.0, min(1.0, self.abductive_score + 0.25 * margin))
         return self.abductive_score

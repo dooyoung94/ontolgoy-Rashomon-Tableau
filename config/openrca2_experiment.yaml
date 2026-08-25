@@ -1,12 +1,19 @@
 experiment:
   dataset_family: OpenRCA2
+  controlled_relation_mask:
+    dataset: anon-ops/ops-lite
+    manifest_rows: 500
+    adapter_case_policy: attributed_and_telemetry_valid
+    mask_ratios: [0.2, 0.4, 0.6]
+    seeds: [42]
+    relation_positive: causal_propagates_to
+    relation_negative: non_causal_dependency
+    structural_edge_visibility: preserved
+    gold_graph_usage: mask_construction_and_evaluation_only
   standard_protocol:
     topology_input: false
     dependency_source: traces_only
     gold_graph_usage: evaluation_only
-  stress_test:
-    mask_ratios: [0.0, 0.2, 0.4, 0.6, 0.8]
-    seeds: [13, 42, 97]
 
 ablation:
   - graph_only
@@ -16,40 +23,64 @@ ablation:
   - full
 
 abduction:
-  max_structural_hops: 2
-  max_candidates: 128
+  max_candidates: null
+  candidate_policy: all_observed_masked_pairs
   edge_threshold: 0.5
+  threshold_tuning_on_full_set: false
 
 semantic:
   model: MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli
   max_length: 512
   batch_size: 16
+  combination: neutral_preserving_contrastive_margin
 
 psl:
-  note: cross-edge path constraints required before calling this global inference
-  local_weights:
-    structural: 1.0
-    temporal: 1.2
-    anomaly: 1.2
-    semantic: 2.0
-    contradiction: 2.0
+  implementation: pslpython
+  note: structural connectivity is eligibility only, not causal evidence
+  evidence:
+    - temporal
+    - anomaly_pair
+    - visible_causal_noncausal_facts
+    - semantic_and_contradiction_when_full
+    - downstream_reachability
+
+llm_baselines:
+  runtime: huggingface_transformers_cpu_float32
+  max_input_tokens: 4096
+  max_new_tokens: 128
+  decoding: greedy_do_sample_false
+  models:
+    - model: HuggingFaceTB/SmolLM2-360M-Instruct
+      nominal_parameters: 360000000
+      published_context_window: 8192
+    - model: Qwen/Qwen2.5-0.5B-Instruct
+      nominal_parameters: 490000000
+      published_context_window: 32768
+  actual_loaded_parameters: measured_at_runtime
 
 metrics:
   service_normalization: lower_strip_ts_prefix_remove_separators
   filter_loadgen_edges: true
-  official_process:
+  controlled_primary:
+    - relation_precision
+    - relation_recall
+    - relation_f1
+  process:
     - node_f1
     - edge_f1
     - process_path_reachability
-  diagnostic:
-    - missing_edge_precision
-    - missing_edge_recall
-    - missing_edge_f1
     - root_hit_at_1
     - root_hit_at_3
+  score_diagnostics:
+    - a2_a3_pairwise_decision_disagreement
+    - a2_a3_final_score_mae
+    - a2_a3_final_score_pearson
+    - threshold_crossing_counts
+    - semantic_margin
+    - psl_score_shift
 
 leakage_policy:
   causal_graph_json: evaluator_only
   injection_json: evaluator_only
   gold_alarm_nodes: evaluator_only
-  no_test_threshold_tuning: true
+  no_full_set_threshold_tuning: true

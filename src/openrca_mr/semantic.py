@@ -32,6 +32,7 @@ class DebertaEvidenceScorer:
             raise RuntimeError("Install the NLI extra: pip install -e '.[nli]'") from exc
 
         self.torch = torch
+        self.model_name = model_name
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
         if device is None:
@@ -147,6 +148,7 @@ def apply_semantic_scores(case: RcaCase, hypotheses: list[Hypothesis], scorer) -
     for hypothesis, score in zip(hypotheses, scores):
         hypothesis.semantic_support = score.support
         hypothesis.semantic_contradiction = score.contradiction
+        hypothesis.semantic_neutral = score.neutral
     return hypotheses
 
 
