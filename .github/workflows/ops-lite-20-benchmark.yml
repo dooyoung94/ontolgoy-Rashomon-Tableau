@@ -74,6 +74,7 @@ jobs:
         env:
           HF_HUB_DISABLE_XET: '1'
           TOKENIZERS_PARALLELISM: 'false'
+          VARIANT: ${{ matrix.variant }}
         run: |
           python scripts/run_openrca2_ablation.py \
             --data artifacts/ops_lite_20.jsonl \
@@ -89,10 +90,6 @@ jobs:
           r=json.load(open(p))
           print('RESULT', r['variant'], json.dumps(r['summary'], sort_keys=True))
           PY
-        env:
-          HF_HUB_DISABLE_XET: '1'
-          TOKENIZERS_PARALLELISM: 'false'
-          VARIANT: ${{ matrix.variant }}
       - uses: actions/upload-artifact@v4
         with:
           name: result-${{ matrix.variant }}
@@ -112,7 +109,7 @@ jobs:
       - name: Aggregate A0-A4
         run: |
           python - <<'PY'
-          import glob,json
+          import json
           order=['graph_only','abduction','abduction_deberta','abduction_psl','full']
           rows=[]
           for v in order:
@@ -120,7 +117,7 @@ jobs:
               try: r=json.load(open(p))
               except FileNotFoundError: continue
               s=r['summary']
-              row={
+              rows.append({
                   'variant':v,
                   'node_f1':s.get('node_f1'),
                   'edge_f1':s.get('edge_f1'),
@@ -128,8 +125,7 @@ jobs:
                   'root_hit_at_1':s.get('root_hit_at_1'),
                   'root_hit_at_3':s.get('root_hit_at_3'),
                   'missing_edge_f1':s.get('missing_edge_f1'),
-              }
-              rows.append(row)
+              })
           print('A0_A4_RESULTS')
           print(json.dumps(rows, indent=2))
           json.dump(rows, open('results/summary.json','w'), indent=2)
