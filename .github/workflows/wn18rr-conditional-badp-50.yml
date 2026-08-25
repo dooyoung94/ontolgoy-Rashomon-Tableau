@@ -39,12 +39,19 @@ jobs:
             --limit 50 --min-hops 2 --max-hops 4 \
             --batch-size 64 --device cpu \
             --output results/wn18rr_conditional_badp_50.json
+      - name: 결과 artifact 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: wn18rr-conditional-badp-50
+          path: results/wn18rr_conditional_badp_50.json
+          retention-days: 90
       - name: 핵심 정책 결과 출력
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
           d=json.loads(Path('results/wn18rr_conditional_badp_50.json').read_text())
+          policies=d['policies']
           names=[
             'top3_tog_style','top5','global_eps_0.10','relative_loss_0.50',
             'boundary_top3_0.005','boundary_top5_0.010',
@@ -56,12 +63,8 @@ jobs:
             'conditional_badp_top5_tau_0.050_delta_0.020',
           ]
           for name in names:
-              if name in d['summary']:
-                  print(name, json.dumps(d['summary'][name], ensure_ascii=False))
+              if name in policies:
+                  print(name, json.dumps(policies[name], ensure_ascii=False))
+          print('DIAGNOSTICS', json.dumps(d.get('conditional_badp_diagnostics', {}), ensure_ascii=False))
           print('PARETO', json.dumps(d.get('pareto_success_vs_expansion', []), ensure_ascii=False))
           PY
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wn18rr-conditional-badp-50
-          path: results/wn18rr_conditional_badp_50.json
-          retention-days: 90
