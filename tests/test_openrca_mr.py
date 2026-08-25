@@ -1,7 +1,20 @@
 from openrca_mr.abduction import AbductiveRelationGenerator
-from openrca_mr.masking import mask_relations
-from openrca_mr.metrics import normalize_service, process_path_reachability, service_edge_metrics
-from openrca_mr.models import CausalEdge, Evidence, RcaCase
+from openrca_mr.masking import mask_relation_types, mask_relations
+from openrca_mr.metrics import (
+    normalize_service,
+    process_path_reachability,
+    relation_classification_metrics,
+    service_edge_metrics,
+)
+from openrca_mr.models import (
+    CausalEdge,
+    Evidence,
+    Hypothesis,
+    RcaCase,
+    REL_CAUSAL,
+    REL_MASKED,
+    REL_NON_CAUSAL,
+)
 from openrca_mr.pipeline import MissingRelationRCA
 
 
@@ -10,21 +23,22 @@ def make_case(case_id="c1"):
         case_id=case_id,
         symptom_nodes=["ts-api"],
         known_edges=[
-            CausalEdge("ts-db", "calls", "ts-worker"),
-            CausalEdge("ts-worker", "calls", "ts-api"),
-            CausalEdge("ts-other", "calls", "ts-api"),
-            CausalEdge("ts-cache", "calls", "ts-other"),
+            CausalEdge("ts-db", "dependency_propagates_to", "ts-worker"),
+            CausalEdge("ts-worker", "dependency_propagates_to", "ts-api"),
+            CausalEdge("ts-other", "dependency_propagates_to", "ts-api"),
+            CausalEdge("ts-cache", "dependency_propagates_to", "ts-other"),
         ],
         evidence=[
             Evidence("e1", "ts-db", "metric", "latency", 0.95, 1.0, "db latency high"),
             Evidence("e2", "ts-worker", "trace", "duration", 0.90, 2.0, "worker span slow"),
             Evidence("e3", "ts-api", "metric", "latency", 0.98, 3.0, "api latency high"),
             Evidence("e4", "ts-other", "metric", "cpu", 0.10, 2.0, "cpu normal"),
+            Evidence("e5", "ts-cache", "metric", "cpu", 0.05, 1.0, "cache stable"),
         ],
         gold_root_causes=["ts-db"],
         gold_edges=[
-            CausalEdge("ts-db", "causes", "ts-worker"),
-            CausalEdge("ts-worker", "causes", "ts-api"),
+            CausalEdge("ts-db", REL_CAUSAL, "ts-worker"),
+            CausalEdge("ts-worker", REL_CAUSAL, "ts-api"),
         ],
         gold_alarm_nodes=["ts-api"],
     )
@@ -43,29 +57,78 @@ def test_process_pr_requires_correct_predicted_root():
     assert process_path_reachability(edges, ["ts-cache"], ["db"], ["ts-api"]) == 0.0
 
 
-def test_masking_is_reproducible_and_case_salted():
-    a_visible, a_masked = mask_relations(make_case("case-a"), 0.5, seed=42)
-    a_visible2, a_masked2 = mask_relations(make_case("case-a"), 0.5, seed=42)
-    _, b_masked = mask_relations(make_case("case-b"), 0.5, seed=42)
-    assert a_masked == a_masked2
-    assert a_visible.known_edges == a_visible2.known_edges
-    assert [e.key() for e in a_masked] != [e.key() for e in b_masked]
-    assert a_visible.gold_alarm_nodes == ["ts-api"]
+def test_relation_masking_preserves_endpoints_and_hides_only_labels():
+    case = make_case("relation-mask")
+    visible, truth = mask_relation_types(case, 0.5, seed=42)
+    assert len(visible.known_edges) == len(case.known_edges)
+    original_pairs = {(e.source, e.target) for e in case.known_edges}
+    visible_pairs = {(e.source, e.target) for e in visible.known_edges}
+    assert original_pairs == visible_pairs
+    assert len(truth) == 2
+    assert sum(e.relation == REL_MASKED for e in visible.known_edges) == 2
+    assert {e.relation for e in truth} <= {REL_CAUSAL, REL_NON_CAUSAL}
+
+
+def test_relation_masking_is_reproducible_and_case_salted():
+    _, a = mask_relation_types(make_case("case-a"), 0.5, seed=42)
+    _, a2 = mask_relation_types(make_case("case-a"), 0.5, seed=42)
+    _, b = mask_relation_types(make_case("case-b"), 0.5, seed=42)
+    assert a == a2
+    assert [e.key() for e in a] != [e.key() for e in b]
+
+
+def test_legacy_edge_masking_still_available_for_stress_test():
+    case = make_case()
+    visible, masked = mask_relations(case, 0.5, seed=13)
+    assert len(visible.known_edges) + len(masked) == len(case.known_edges)
+
+
+def test_abduction_generates_only_observed_unknown_pairs():
+    visible, _ = mask_relation_types(make_case(), 0.5, seed=42)
+    hypotheses = AbductiveRelationGenerator().generate(visible)
+    masked_pairs = {(e.source, e.target) for e in visible.known_edges if e.relation == REL_MASKED}
+    generated_pairs = {(h.edge.source, h.edge.target) for h in hypotheses}
+    assert generated_pairs <= masked_pairs
+    assert len(hypotheses) <= len(masked_pairs)
 
 
 def test_abduction_does_not_read_gold_only_node():
     case = make_case()
-    case.gold_edges.append(CausalEdge("secret-gold-node", "causes", "ts-api"))
+    case.gold_edges.append(CausalEdge("secret-gold-node", REL_CAUSAL, "ts-api"))
     case.gold_root_causes.append("secret-gold-node")
     hypotheses = AbductiveRelationGenerator().generate(case)
     assert all("secret-gold-node" not in (h.edge.source, h.edge.target) for h in hypotheses)
 
 
-def test_smoke_pipeline_and_pair_metric():
-    case = make_case()
-    visible, masked = mask_relations(case, 0.5, seed=13)
+def test_neutral_semantic_margin_preserves_abduction_prior():
+    h = Hypothesis(
+        CausalEdge("a", REL_CAUSAL, "b"),
+        [],
+        "test",
+        structural_score=0.9,
+        temporal_score=0.6,
+        anomaly_score=0.6,
+        semantic_support=0.05,
+        semantic_contradiction=0.05,
+    )
+    assert abs(h.final_score - h.abductive_score) < 1e-9
+
+
+def test_relation_metric_scores_causal_vs_noncausal_on_masked_pairs():
+    truth = [
+        CausalEdge("a", REL_CAUSAL, "b"),
+        CausalEdge("c", REL_NON_CAUSAL, "d"),
+    ]
+    pred = [("a", REL_CAUSAL, "b")]
+    score = relation_classification_metrics(pred, truth)
+    assert score.accuracy == 1.0
+    assert score.f1 == 1.0
+
+
+def test_smoke_pipeline_relation_mask():
+    visible, truth = mask_relation_types(make_case(), 0.5, seed=13)
     prediction = MissingRelationRCA().run(visible)
-    assert prediction.case_id == case.case_id
-    assert prediction.ranked_hypotheses
-    score = service_edge_metrics(prediction.predicted_edges, masked)
-    assert 0.0 <= score.f1 <= 1.0
+    assert prediction.case_id == visible.case_id
+    assert len(prediction.ranked_hypotheses) <= sum(e.relation == REL_MASKED for e in visible.known_edges)
+    score = relation_classification_metrics(prediction.predicted_edges, truth)
+    assert 0.0 <= score.accuracy <= 1.0
