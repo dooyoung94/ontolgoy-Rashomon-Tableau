@@ -14,7 +14,6 @@ _original_case = adapter._case
 
 
 def _retrying_download(url: str, path: Path, max_attempts: int = 6) -> None:
-    """Atomic retry wrapper for transient Hugging Face download failures."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and path.stat().st_size > 0:
         return
@@ -59,13 +58,7 @@ def _standard_case(name: str, cache: Path):
     return _original_case(name, cache, require_attributed=False)
 
 
-def _build_manifest_range(
-    out: Path,
-    cache: Path,
-    start_index: int,
-    end_index: int,
-    all_labels: bool = False,
-) -> list:
+def _build_manifest_range(out: Path, cache: Path, start_index: int, end_index: int, all_labels: bool = False) -> list:
     manifest = cache / "manifest.jsonl"
     adapter._download(f"{adapter.BASE}/manifest.jsonl?download=true", manifest)
     rows = [json.loads(line) for line in manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -94,9 +87,18 @@ def _build_manifest_range(
             else:
                 skipped_non_attributed += 1
             continue
-        if not case.known_edges or not case.evidence or not case.gold_root_causes or not case.gold_edges:
-            skipped_invalid += 1
-            continue
+
+        if all_labels:
+            # Standard track retains cases even when no topology/evidence is
+            # reconstructed. Only missing benchmark GT makes a case invalid.
+            if not case.gold_root_causes or not case.gold_edges:
+                skipped_invalid += 1
+                continue
+        else:
+            if not case.known_edges or not case.evidence or not case.gold_root_causes or not case.gold_edges:
+                skipped_invalid += 1
+                continue
+
         case.metadata.update({
             "system": row.get("system"),
             "manifest_primary_kind": row.get("primary_kind"),
@@ -106,12 +108,7 @@ def _build_manifest_range(
             "standard_all_500": bool(all_labels),
         })
         cases.append(case)
-        print(
-            "CASE", case.case_id,
-            "known", len(case.known_edges),
-            "evidence", len(case.evidence),
-            "gold_edges", len(case.gold_edges),
-        )
+        print("CASE", case.case_id, "known", len(case.known_edges), "evidence", len(case.evidence), "gold_edges", len(case.gold_edges))
 
     stats = {
         "manifest_total": len(rows),
@@ -129,6 +126,8 @@ def _build_manifest_range(
     print(json.dumps(stats, indent=2))
     if skipped_error:
         raise RuntimeError(f"{skipped_error} case downloads/parses failed after retries: {error_names}")
+    if all_labels and skipped_invalid:
+        raise RuntimeError(f"standard all-500 adapter dropped {skipped_invalid} curated cases")
 
     dump_normalized_cases(cases, out)
     return cases
