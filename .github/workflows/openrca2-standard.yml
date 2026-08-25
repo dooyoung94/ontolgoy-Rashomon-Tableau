@@ -41,14 +41,15 @@ jobs:
           pip install 'pyarrow>=16'
       - name: Build exact standard shard
         env:
+          SHARD: ${{ matrix.shard }}
           HF_HUB_DISABLE_XET: '1'
         run: |
-          START=$(( ${{ matrix.shard }} * 50 ))
+          START=$(( SHARD * 50 ))
           END=$(( START + 50 ))
           python scripts/build_ops_lite_standard_cases.py \
             --start-index "$START" \
             --end-index "$END" \
-            --out artifacts/openrca2_standard_shard_${{ matrix.shard }}.jsonl
+            --out artifacts/openrca2_standard_shard_${SHARD}.jsonl
           python - <<'PY'
           import os
           from openrca_mr.openrca2 import load_normalized_cases
@@ -60,9 +61,6 @@ jobs:
           print('ZERO_EDGE_CASES', sum(not c.known_edges for c in cases))
           print('ZERO_EVIDENCE_CASES', sum(not c.evidence for c in cases))
           PY
-        env:
-          SHARD: ${{ matrix.shard }}
-          HF_HUB_DISABLE_XET: '1'
       - uses: actions/upload-artifact@v4
         with:
           name: openrca2-standard-shard-${{ matrix.shard }}
@@ -100,7 +98,8 @@ jobs:
           print('ZERO_EVIDENCE_CASES', sum(not c.evidence for c in cases))
           systems = {}
           for c in cases:
-              systems[c.metadata.get('system', 'unknown')] = systems.get(c.metadata.get('system', 'unknown'), 0) + 1
+              system = c.metadata.get('system', 'unknown')
+              systems[system] = systems.get(system, 0) + 1
           print('SYSTEMS', systems)
           PY
       - uses: actions/upload-artifact@v4
