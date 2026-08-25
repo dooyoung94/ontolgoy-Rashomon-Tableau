@@ -38,9 +38,9 @@ class Hypothesis:
     structural_score: float = 0.0
     temporal_score: float = 0.0
     anomaly_score: float = 0.0
-    semantic_support: float = 0.0
-    semantic_contradiction: float = 0.0
-    soft_logic_score: float = 0.0
+    semantic_support: float | None = None
+    semantic_contradiction: float | None = None
+    soft_logic_score: float | None = None
 
     @property
     def abductive_score(self) -> float:
@@ -48,7 +48,11 @@ class Hypothesis:
 
     @property
     def final_score(self) -> float:
-        return self.soft_logic_score or (0.55 * self.semantic_support + 0.45 * self.abductive_score)
+        if self.soft_logic_score is not None:
+            return self.soft_logic_score
+        if self.semantic_support is not None:
+            return 0.55 * self.semantic_support + 0.45 * self.abductive_score
+        return self.abductive_score
 
 
 @dataclass
