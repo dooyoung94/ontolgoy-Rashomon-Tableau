@@ -1,0 +1,27 @@
+name: Diagnose ops-lite causal graph schema
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  diagnose:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[graph-schema]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect two causal graph schemas
+        run: |
+          python - <<'PY'
+          import json, urllib.request
+          cases = [
+              'batch-01KQHDBB5Y8K69Z13G7VSWG9FS',
+              'batch-01KQK66MC2QDN6889Q9JQ6XFE8',
+          ]
+          base='https://huggingface.co/datasets/anon-ops/ops-lite/resolve/main/cases'
+          for case in cases:
+              url=f'{base}/{case}/causal_graph.json?download=true'
+              with urllib.request.urlopen(url, timeout=60) as r:
+                  obj=json.load(r)
+              print('\n===', case, '===')
+              print(json.dumps(obj, indent=2, ensure_ascii=False)[:30000])
+          PY
