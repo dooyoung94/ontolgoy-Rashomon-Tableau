@@ -17,3 +17,130 @@ jobs:
         run: pip install -e '.[test]'
       - name: Run unit tests
         run: pytest -q
+
+  ops_lite_prepare:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install adapter dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install 'pyarrow>=16'
+      - name: Build leakage-safe 20-case telemetry set
+        env:
+          HF_HUB_DISABLE_XET: '1'
+        run: |
+          python scripts/build_ops_lite_cases.py --limit 20 --out artifacts/ops_lite_20.jsonl
+          python - <<'PY'
+          from openrca_mr.openrca2 import load_normalized_cases
+          cases=load_normalized_cases('artifacts/ops_lite_20.jsonl')
+          assert len(cases) == 20, len(cases)
+          assert all(c.gold_root_causes and c.gold_edges for c in cases)
+          assert all(c.known_edges and c.evidence and c.symptom_nodes for c in cases)
+          print('PREPARED', len(cases))
+          print('AVG_KNOWN_EDGES', sum(len(c.known_edges) for c in cases)/len(cases))
+          print('AVG_EVIDENCE', sum(len(c.evidence) for c in cases)/len(cases))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ops-lite-20-normalized
+          path: artifacts/ops_lite_20.jsonl
+          retention-days: 7
+
+  ops_lite_benchmark:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
+    needs: ops_lite_prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [graph_only, abduction, abduction_deberta, abduction_psl, full]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: ops-lite-20-normalized
+          path: artifacts
+      - name: Install inference stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e '.[all]'
+      - name: Run ${{ matrix.variant }}
+        env:
+          HF_HUB_DISABLE_XET: '1'
+          TOKENIZERS_PARALLELISM: 'false'
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          python scripts/run_openrca2_ablation.py \
+            --data artifacts/ops_lite_20.jsonl \
+            --out results/${{ matrix.variant }}.json \
+            --dataset-id 'anon-ops/ops-lite:20:telemetry_only_v1' \
+            --mask-ratio 0.40 \
+            --seed 42 \
+            --variant '${{ matrix.variant }}' \
+            --limit 20
+          python - <<'PY'
+          import json, os
+          r=json.load(open('results/' + os.environ['VARIANT'] + '.json'))
+          print('RESULT', r['variant'], json.dumps(r['summary'], sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.variant }}
+          path: results/${{ matrix.variant }}.json
+          retention-days: 7
+
+  ops_lite_aggregate:
+    if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
+    needs: ops_lite_benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: result-*
+          path: results
+          merge-multiple: true
+      - name: Aggregate A0-A4
+        run: |
+          python - <<'PY'
+          import json
+          order=['graph_only','abduction','abduction_deberta','abduction_psl','full']
+          rows=[]
+          for v in order:
+              p=f'results/{v}.json'
+              try: r=json.load(open(p))
+              except FileNotFoundError: continue
+              s=r['summary']
+              rows.append({
+                  'variant':v,
+                  'node_f1':s.get('node_f1'),
+                  'edge_f1':s.get('edge_f1'),
+                  'path_reachability':s.get('process_path_reachability'),
+                  'root_hit_at_1':s.get('root_hit_at_1'),
+                  'root_hit_at_3':s.get('root_hit_at_3'),
+                  'missing_edge_f1':s.get('missing_edge_f1'),
+              })
+          print('A0_A4_RESULTS')
+          print(json.dumps(rows, indent=2))
+          json.dump(rows, open('results/summary.json','w'), indent=2)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ops-lite-20-benchmark-results
+          path: results
+          retention-days: 14
