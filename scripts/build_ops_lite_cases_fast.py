@@ -14,12 +14,7 @@ _original_case = adapter._case
 
 
 def _retrying_download(url: str, path: Path, max_attempts: int = 6) -> None:
-    """Atomic retry wrapper for transient Hugging Face download failures.
-
-    The full benchmark scans many case files in parallel. A connection reset must
-    not silently remove a benchmark case. Files are first written to a temporary
-    path and promoted only after a successful non-empty download.
-    """
+    """Atomic retry wrapper for transient Hugging Face download failures."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and path.stat().st_size > 0:
         return
@@ -48,8 +43,6 @@ def _retrying_download(url: str, path: Path, max_attempts: int = 6) -> None:
     raise RuntimeError(f"download failed after {max_attempts} attempts: {url}") from last_error
 
 
-# Replace the adapter module's downloader as well, so _original_case() uses the
-# same retry/atomic semantics for all causal graph, env and parquet files.
 adapter._download = _retrying_download
 
 
@@ -59,10 +52,20 @@ def _prefiltered_case(name: str, cache: Path):
     adapter._download(f"{adapter.BASE}/cases/{name}/label.txt?download=true", label)
     if label.read_text(encoding="utf-8").strip().lower() != "attributed":
         return None
-    return _original_case(name, cache)
+    return _original_case(name, cache, require_attributed=True)
 
 
-def _build_manifest_range(out: Path, cache: Path, start_index: int, end_index: int) -> list:
+def _standard_case(name: str, cache: Path):
+    return _original_case(name, cache, require_attributed=False)
+
+
+def _build_manifest_range(
+    out: Path,
+    cache: Path,
+    start_index: int,
+    end_index: int,
+    all_labels: bool = False,
+) -> list:
     manifest = cache / "manifest.jsonl"
     adapter._download(f"{adapter.BASE}/manifest.jsonl?download=true", manifest)
     rows = [json.loads(line) for line in manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -79,18 +82,29 @@ def _build_manifest_range(out: Path, cache: Path, start_index: int, end_index: i
     for row in rows[start:stop]:
         name = str(row["name"])
         try:
-            case = _prefiltered_case(name, cache)
+            case = _standard_case(name, cache) if all_labels else _prefiltered_case(name, cache)
         except Exception as exc:
             skipped_error += 1
             error_names.append(name)
             print(f"SKIP_ERROR {name}: {type(exc).__name__}: {exc}")
             continue
         if case is None:
-            skipped_non_attributed += 1
+            if all_labels:
+                skipped_invalid += 1
+            else:
+                skipped_non_attributed += 1
             continue
         if not case.known_edges or not case.evidence or not case.gold_root_causes or not case.gold_edges:
             skipped_invalid += 1
             continue
+        case.metadata.update({
+            "system": row.get("system"),
+            "manifest_primary_kind": row.get("primary_kind"),
+            "manifest_subtypes": row.get("subtypes", []),
+            "manifest_hybrid": bool(row.get("hybrid", False)),
+            "manifest_root_services": row.get("root_services", []),
+            "standard_all_500": bool(all_labels),
+        })
         cases.append(case)
         print(
             "CASE", case.case_id,
@@ -105,6 +119,7 @@ def _build_manifest_range(out: Path, cache: Path, start_index: int, end_index: i
         "manifest_end": stop,
         "requested_rows": stop - start,
         "normalized_cases": len(cases),
+        "all_labels": all_labels,
         "skipped_non_attributed": skipped_non_attributed,
         "skipped_invalid": skipped_invalid,
         "skipped_error": skipped_error,
@@ -112,8 +127,6 @@ def _build_manifest_range(out: Path, cache: Path, start_index: int, end_index: i
         "out": str(out),
     }
     print(json.dumps(stats, indent=2))
-    # Network/file failures are not an adapter eligibility criterion. The full
-    # benchmark must fail rather than silently shrink because of I/O errors.
     if skipped_error:
         raise RuntimeError(f"{skipped_error} case downloads/parses failed after retries: {error_names}")
 
@@ -128,6 +141,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--start-index", type=int)
     parser.add_argument("--end-index", type=int)
+    parser.add_argument("--all-labels", action="store_true", help="standard OpenRCA2: include all 500 curated manifest cases")
     args = parser.parse_args()
 
     out = Path(args.out)
@@ -135,13 +149,15 @@ def main() -> None:
     if args.start_index is not None or args.end_index is not None:
         if args.start_index is None or args.end_index is None:
             parser.error("--start-index and --end-index must be provided together")
-        _build_manifest_range(out, cache, args.start_index, args.end_index)
+        _build_manifest_range(out, cache, args.start_index, args.end_index, all_labels=args.all_labels)
         return
 
-    # Preserve the original fast 20-case behavior for the smoke workflow.
-    adapter._case = _prefiltered_case
-    cases = adapter.build(out, cache, args.limit)
-    print(json.dumps({"n": len(cases), "out": str(out)}, indent=2))
+    if args.all_labels:
+        cases = adapter.build(out, cache, args.limit, require_attributed=False)
+    else:
+        adapter._case = _prefiltered_case
+        cases = adapter.build(out, cache, args.limit)
+    print(json.dumps({"n": len(cases), "out": str(out), "all_labels": args.all_labels}, indent=2))
 
 
 if __name__ == "__main__":
