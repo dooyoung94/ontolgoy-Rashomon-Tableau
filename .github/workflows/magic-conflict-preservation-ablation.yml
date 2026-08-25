@@ -39,10 +39,23 @@ jobs:
           from pathlib import Path
           d=json.loads(Path('results/magic_conflict_preservation_ablation.json').read_text())
           print(json.dumps(d['protocol'], indent=2))
-          for name in ['top1','top3_tog_style','top5','rashomon_add_eps_0.03','rashomon_add_eps_0.05','rashomon_add_eps_0.10','rashomon_relative_loss_0.25','rashomon_relative_loss_0.50','no_pruning']:
+          for name in ['top1','top3_tog_style','top5','rashomon_add_eps_0.05','rashomon_add_eps_0.10','rashomon_relative_loss_0.25','boundary_top3_eps_0.01','boundary_top5_eps_0.01','no_pruning']:
               x=d['policies'][name]['recoverable_queries']
-              print(name, 'survival=', x['gold_conflict_path_survival'], 'loss=', x['conflict_information_loss'], 'avg_selected=', x['avg_selected_paths'])
-          print(json.dumps(d['comparisons'], indent=2))
+              print(name,
+                    'survival=', x['query_gold_survival'],
+                    'precision=', x['retained_gold_precision_micro'],
+                    'recall=', x['retained_gold_recall_micro'],
+                    'f1=', x['retained_gold_f1_micro'],
+                    'avg_selected=', x['avg_selected_paths'])
+          print('paths_ge_5')
+          for name in ['top3_tog_style','top5','rashomon_add_eps_0.05','rashomon_add_eps_0.10','boundary_top5_eps_0.01','no_pruning']:
+              x=d['cumulative_branching_strata']['paths_ge_5']['policies'][name]
+              print(name,
+                    'survival=', x['query_gold_survival'],
+                    'precision=', x['retained_gold_precision_micro'],
+                    'f1=', x['retained_gold_f1_micro'],
+                    'avg_selected=', x['avg_selected_paths'])
+          print(json.dumps(d['paired_tests'], indent=2))
           PY
 
       - uses: actions/upload-artifact@v4
