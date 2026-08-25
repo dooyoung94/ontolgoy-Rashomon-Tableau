@@ -4,6 +4,7 @@ import re
 import unicodedata
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterable
 
 from .models import Literal
@@ -13,6 +14,8 @@ from .ontology import Ontology
 @dataclass(frozen=True)
 class TraversalEdge:
     literal: Literal
+    from_entity: str
+    to_entity: str
     rule: str = "asserted"
 
 
@@ -33,26 +36,35 @@ class CandidatePath:
     def text(self) -> str:
         if not self.literals:
             return ""
-        parts = [self.literals[0].subject]
-        for lit in self.literals:
-            sign = "NOT " if lit.negated else ""
-            parts.append(f"-[{sign}{lit.predicate}]->")
-            parts.append(lit.object)
-        return " ".join(parts)
+        return " | ".join(
+            f"{'NOT ' if lit.negated else ''}{lit.subject} -[{lit.predicate}]-> {lit.object}"
+            for lit in self.literals
+        )
 
 
 def canonical_entity(value: str) -> str:
     """Conservative entity key used only for graph connectivity.
 
-    The original surface form remains on each Literal for scoring/audit.  The key
-    removes Unicode accents, case differences and punctuation/spacing differences,
-    so e.g. `Méditerranée` and `Mediterranee` resolve to the same graph node.
+    Surface text on Literal is never rewritten. The key removes Unicode accents,
+    case differences and punctuation/spacing differences, so e.g. `Méditerranée`
+    and `Mediterranee` resolve to the same graph node.
     """
     value = unicodedata.normalize("NFKD", value or "")
     value = "".join(ch for ch in value if unicodedata.category(ch) != "Mn")
     value = value.casefold()
     value = re.sub(r"[^\w]+", " ", value, flags=re.UNICODE)
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _default_ontology() -> Ontology:
+    """Load reusable MAGIC relation semantics when running from the repository.
+
+    The YAML contains relation-level semantics only (symmetry/inverses/etc.), not
+    example IDs or gold answers. Falling back to an empty ontology keeps the module
+    usable when installed independently of the repository config directory.
+    """
+    path = Path("config/magic_ontology_rules.yaml")
+    return Ontology.from_yaml(path) if path.exists() else Ontology()
 
 
 def _derived_reverse(lit: Literal, predicate: str) -> Literal:
@@ -68,38 +80,49 @@ def _derived_reverse(lit: Literal, predicate: str) -> Literal:
 
 
 def _traversal_edges(facts: Iterable[Literal], ontology: Ontology | None) -> list[TraversalEdge]:
-    """Build asserted + logically reversible edges without collapsing the path.
+    """Create connectivity edges while preserving semantic evidence.
 
-    We intentionally do not materialize transitive/composition closure here: the
-    candidate scorer should see the original multi-hop evidence. Symmetry/inverse
-    rules only provide a legal traversal orientation while preserving sentence
-    provenance and negation polarity.
+    Every asserted fact can be traversed structurally in either direction because
+    retrieval asks only whether facts form a connected candidate explanation. The
+    original Literal is preserved on a structural reverse, so no false inverse fact
+    is shown to the scorer. For ontology-declared symmetric/inverse predicates, the
+    semantically valid reversed Literal is used instead.
     """
-    ontology = ontology or Ontology()
+    ontology = ontology or _default_ontology()
     out: list[TraversalEdge] = []
     seen: set[tuple] = set()
 
-    def add(lit: Literal, rule: str) -> None:
+    def add(lit: Literal, from_entity: str, to_entity: str, rule: str) -> None:
         key = (
             lit.predicate,
             canonical_entity(lit.subject),
             canonical_entity(lit.object),
             lit.negated,
+            canonical_entity(from_entity),
+            canonical_entity(to_entity),
             lit.story,
             lit.source,
+            rule,
         )
         if key in seen:
             return
         seen.add(key)
-        out.append(TraversalEdge(lit, rule))
+        out.append(TraversalEdge(lit, from_entity, to_entity, rule))
 
     for lit in facts:
-        add(lit, "asserted")
+        add(lit, lit.subject, lit.object, "asserted")
+
         if lit.predicate in ontology.symmetric:
-            add(_derived_reverse(lit, lit.predicate), f"symmetry:{lit.predicate}")
-        inverse = ontology.inverse.get(lit.predicate)
-        if inverse:
-            add(_derived_reverse(lit, inverse), f"inverse:{lit.predicate}->{inverse}")
+            rev = _derived_reverse(lit, lit.predicate)
+            add(rev, lit.object, lit.subject, f"symmetry:{lit.predicate}")
+        else:
+            inverse = ontology.inverse.get(lit.predicate)
+            if inverse:
+                rev = _derived_reverse(lit, inverse)
+                add(rev, lit.object, lit.subject, f"inverse:{lit.predicate}->{inverse}")
+            else:
+                # Connectivity-only reverse: keep the asserted proposition unchanged.
+                add(lit, lit.object, lit.subject, "structural_reverse")
     return out
 
 
@@ -111,7 +134,7 @@ def _bounded_paths(
 ) -> list[tuple[list[Literal], list[str]]]:
     adjacency: dict[str, list[TraversalEdge]] = {}
     for edge in edges:
-        adjacency.setdefault(canonical_entity(edge.literal.subject), []).append(edge)
+        adjacency.setdefault(canonical_entity(edge.from_entity), []).append(edge)
 
     start_key = canonical_entity(start)
     goal_key = canonical_entity(goal)
@@ -125,9 +148,8 @@ def _bounded_paths(
         if len(path) >= max_hops:
             continue
         for edge in adjacency.get(node, []):
-            lit = edge.literal
-            next_node = canonical_entity(lit.object)
-            next_path = path + [lit]
+            next_node = canonical_entity(edge.to_entity)
+            next_path = path + [edge.literal]
             next_rules = rules + [edge.rule]
             if next_node == goal_key:
                 out.append((next_path, next_rules))
@@ -146,18 +168,35 @@ def bidirectional_candidate_paths(
     max_paths_per_direction: int = 20,
     ontology: Ontology | None = None,
 ) -> list[CandidatePath]:
-    """Retrieve signed semantic candidate paths in both graph directions.
+    """Retrieve signed, ontology-aware connected evidence paths.
 
-    Entity matching is canonicalized, negated facts remain traversable evidence,
-    and ontology-declared symmetric/inverse predicates may be traversed in their
-    logically equivalent direction. This function only generates candidates; it
-    does not declare a path supportive or contradictory.
+    Entity matching is canonicalized, negated facts remain evidence, and graph
+    connectivity can be traversed in either direction without inventing semantic
+    inverses. Declared symmetric/inverse relations use their valid reversed form.
+    Candidate generation is deliberately separate from contradiction judgment.
     """
     edges = _traversal_edges(list(facts), ontology)
     forward = _bounded_paths(edges, subject, object_, max_hops)[:max_paths_per_direction]
     reverse = _bounded_paths(edges, object_, subject, max_hops)[:max_paths_per_direction]
-    return [
+
+    candidates = [
         CandidatePath("FORWARD", literals, rules) for literals, rules in forward
     ] + [
         CandidatePath("REVERSE", literals, rules) for literals, rules in reverse
     ]
+
+    # Deduplicate paths that are the same evidence set reached from both endpoint
+    # orientations while preserving the first deterministic traversal.
+    deduped: list[CandidatePath] = []
+    seen: set[tuple] = set()
+    for path in candidates:
+        signature = tuple(
+            (lit.predicate, canonical_entity(lit.subject), canonical_entity(lit.object), lit.negated)
+            for lit in path.literals
+        )
+        unordered_signature = tuple(sorted(signature))
+        if unordered_signature in seen:
+            continue
+        seen.add(unordered_signature)
+        deduped.append(path)
+    return deduped
