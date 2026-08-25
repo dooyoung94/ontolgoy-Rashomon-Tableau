@@ -14,46 +14,46 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install 'pyarrow>=16'
-      - name: Download first case metadata and telemetry
+      - run: pip install 'pyarrow>=16' 'pandas>=2.1'
+      - name: Inspect first case telemetry
         shell: bash
         run: |
           set -euxo pipefail
           BASE='https://huggingface.co/datasets/anon-ops/ops-lite/resolve/main'
           curl -fL "$BASE/manifest.jsonl?download=true" -o /tmp/manifest.jsonl
-          NAME=$(python - <<'PY'
-          import json
-          print(json.loads(open('/tmp/manifest.jsonl').readline())['name'])
-          PY
-          )
-          echo "CASE=$NAME"
-          for F in injection.json causal_graph.json env.json result.json label.txt; do
-            echo "### $F"
-            curl -fL "$BASE/cases/$NAME/$F?download=true" -o "/tmp/$F"
-            head -c 12000 "/tmp/$F" || true
-            echo
-          done
           python - <<'PY'
-          import json, urllib.request
-          name=json.loads(open('/tmp/manifest.jsonl').readline())['name']
-          url=f'https://huggingface.co/api/datasets/anon-ops/ops-lite/tree/main/cases/{name}?recursive=false&expand=false'
-          print('TREE_URL',url)
-          print(urllib.request.urlopen(url).read().decode()[:20000])
-          PY
-          python - <<'PY'
-          import json, urllib.request, os
+          import json, os, urllib.request
+          import pyarrow as pa
           import pyarrow.parquet as pq
-          name=json.loads(open('/tmp/manifest.jsonl').readline())['name']
+
+          first=json.loads(open('/tmp/manifest.jsonl').readline())
+          name=first['name']
+          print('CASE', name)
           api=f'https://huggingface.co/api/datasets/anon-ops/ops-lite/tree/main/cases/{name}?recursive=false&expand=false'
           files=json.loads(urllib.request.urlopen(api).read())
-          parquets=[x['path'] for x in files if x['path'].endswith('.parquet') and '/abnormal_' in x['path']]
-          print('PARQUETS', parquets)
-          for path in parquets[:6]:
+          wanted=[]
+          for prefix in ('normal_','abnormal_'):
+              for kind in ('traces.parquet','metrics.parquet','metrics_sum.parquet','logs.parquet'):
+                  suffix=prefix+kind
+                  match=[x['path'] for x in files if x['path'].endswith('/'+suffix)]
+                  if match: wanted.append(match[0])
+          for path in wanted:
               url='https://huggingface.co/datasets/anon-ops/ops-lite/resolve/main/'+path+'?download=true'
               local='/tmp/'+os.path.basename(path)
-              urllib.request.urlretrieve(url,local)
+              urllib.request.urlretrieve(url, local)
               pf=pq.ParquetFile(local)
-              print('\n###',path,'ROWS',pf.metadata.num_rows)
-              print(pf.schema_arrow)
-              print(pf.read().slice(0,3).to_pylist())
+              print('\n###', path, 'ROWS', pf.metadata.num_rows)
+              print('SCHEMA', pf.schema_arrow)
+              table=pf.read().slice(0,3)
+              safe=[]
+              for field in table.schema:
+                  col=table[field.name]
+                  if pa.types.is_timestamp(field.type):
+                      safe.append((field.name, col.cast(pa.int64()).to_pylist()))
+                  else:
+                      try:
+                          safe.append((field.name, col.to_pylist()))
+                      except Exception:
+                          safe.append((field.name, ['<unprintable>']))
+              print('SAMPLE', dict(safe))
           PY
