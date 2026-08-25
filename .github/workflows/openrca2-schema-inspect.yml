@@ -1,0 +1,61 @@
+name: OpenRCA2 Lite Schema Inspect
+
+on:
+  push:
+    paths:
+      - '.github/workflows/openrca2-schema-inspect.yml'
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install inspection dependencies
+        run: pip install 'huggingface_hub>=0.27' 'pyarrow>=16' 'pandas>=2.1'
+      - name: Inspect one OpenRCA2-Lite v2 case
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from huggingface_hub import list_repo_files, hf_hub_download
+          import pyarrow.parquet as pq
+
+          repo = 'lincyaw/openrca2-lite-v2'
+          files = list_repo_files(repo, repo_type='dataset')
+          print('FILE_COUNT', len(files))
+          print('TOP_FILES', files[:40])
+          manifests = [f for f in files if f.endswith('manifest.jsonl')]
+          if not manifests:
+              raise RuntimeError('manifest.jsonl not found')
+          manifest_name = manifests[0]
+          manifest_path = hf_hub_download(repo, manifest_name, repo_type='dataset')
+          rows = [json.loads(line) for line in Path(manifest_path).read_text().splitlines() if line.strip()]
+          print('MANIFEST', manifest_name, 'ROWS', len(rows))
+          print('FIRST_MANIFEST_ROW', json.dumps(rows[0], ensure_ascii=False))
+          case_name = rows[0]['name']
+          case_files = [f for f in files if f'/cases/{case_name}/' in f]
+          if not case_files:
+              case_files = [f for f in files if case_name in f]
+          print('CASE_NAME', case_name)
+          print('CASE_FILES', case_files)
+          for filename in case_files:
+              if not (filename.endswith('.json') or filename.endswith('.parquet') or filename.endswith('.txt')):
+                  continue
+              local = hf_hub_download(repo, filename, repo_type='dataset')
+              print('\n###', filename)
+              if filename.endswith('.json'):
+                  obj = json.loads(Path(local).read_text())
+                  print(json.dumps(obj, ensure_ascii=False)[:12000])
+              elif filename.endswith('.txt'):
+                  print(Path(local).read_text()[:4000])
+              else:
+                  pf = pq.ParquetFile(local)
+                  print('SCHEMA', pf.schema_arrow)
+                  table = pf.read().slice(0, 3)
+                  print('ROWS', table.to_pylist())
+          PY
