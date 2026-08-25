@@ -36,7 +36,7 @@ jobs:
         env:
           HF_HUB_DISABLE_XET: '1'
         run: |
-          python scripts/build_ops_lite_cases.py --limit 20 --out artifacts/ops_lite_20.jsonl
+          python scripts/build_ops_lite_cases_fast.py --limit 20 --out artifacts/ops_lite_20.jsonl
           python - <<'PY'
           from openrca_mr.openrca2 import load_normalized_cases
           cases=load_normalized_cases('artifacts/ops_lite_20.jsonl')
