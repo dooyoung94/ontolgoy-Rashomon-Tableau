@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
-
 from .models import Hypothesis, RcaCase, REL_CAUSAL, REL_NON_CAUSAL
 
 
@@ -14,16 +12,14 @@ class SoftLogicApproximation:
 
         local: dict[tuple[str, str], float] = {}
         for h in hypotheses:
-            semantic = h.semantic_support if h.semantic_support is not None else 0.0
-            contradiction = h.semantic_contradiction if h.semantic_contradiction is not None else 0.0
+            semantic = h.semantic_support if h.semantic_support is not None else 0.5
+            contradiction = h.semantic_contradiction if h.semantic_contradiction is not None else 0.5
             margin = semantic - contradiction if h.semantic_support is not None else 0.0
-            score = (
-                0.34 * h.structural_score
-                + 0.34 * h.temporal_score
-                + 0.32 * h.anomaly_score
-                + 0.20 * margin
-            )
-            local[(h.edge.source, h.edge.target)] = max(0.0, min(1.0, score))
+            evidence = 0.55 * h.temporal_score + 0.45 * h.anomaly_score + 0.20 * margin
+            # Lack of endpoint anomaly/temporal order is negative evidence in a
+            # causal-propagation task, not just absence of positive support.
+            negative = 0.30 * (1.0 - h.anomaly_score) + 0.15 * (1.0 - h.temporal_score)
+            local[(h.edge.source, h.edge.target)] = max(0.0, min(1.0, evidence - negative))
 
         reaches = {node: 1.0 for node in case.symptom_nodes}
         hard_causal = [(e.source, e.target) for e in case.known_edges if e.relation == REL_CAUSAL]
@@ -52,14 +48,21 @@ class SoftLogicApproximation:
         for h in hypotheses:
             key = (h.edge.source, h.edge.target)
             downstream = reaches.get(h.edge.target, 0.0)
-            score = 0.72 * local[key] + 0.38 * downstream
+            # Global reachability may support a locally plausible edge, but it
+            # cannot turn a locally unsupported dependency into causal by itself.
+            score = 0.82 * local[key] + 0.18 * min(local[key], downstream)
             h.soft_logic_score = max(0.0, min(1.0, score))
 
         return sorted(hypotheses, key=lambda h: h.soft_logic_score if h.soft_logic_score is not None else -1.0, reverse=True)
 
 
 class PslGlobalInference:
-    """PSL joint inference with hard visible relations and soft masked relations."""
+    """PSL joint inference for masked incident-specific causal relations.
+
+    Structural connectivity is already observed and only constrains the candidate
+    domain; it is deliberately *not* a causal rule. Positive/negative telemetry,
+    visible relation labels, and path coherence decide CAUSES.
+    """
 
     def __init__(self):
         try:
@@ -79,13 +82,12 @@ class PslGlobalInference:
             return []
 
         model = self.Model("openrca_relation_mask_global")
-        structural = self.Predicate("STRUCTURAL", size=2)
         temporal = self.Predicate("TEMPORAL", size=2)
         anomaly = self.Predicate("ANOMALYPAIR", size=2)
         causes = self.Predicate("CAUSES", size=2)
         reaches = self.Predicate("REACHES", size=1)
 
-        predicates = [structural, temporal, anomaly, causes, reaches]
+        predicates = [temporal, anomaly, causes, reaches]
         has_semantic = any(h.semantic_support is not None for h in hypotheses)
         if has_semantic:
             semantic = self.Predicate("SEMANTIC", size=2)
@@ -99,7 +101,6 @@ class PslGlobalInference:
 
         obs = self.Partition.OBSERVATIONS
         targets = self.Partition.TARGETS
-        structural.add_data(obs, [[h.edge.source, h.edge.target, h.structural_score] for h in hypotheses])
         temporal.add_data(obs, [[h.edge.source, h.edge.target, h.temporal_score] for h in hypotheses])
         anomaly.add_data(obs, [[h.edge.source, h.edge.target, h.anomaly_score] for h in hypotheses])
 
@@ -128,16 +129,22 @@ class PslGlobalInference:
         if non_symptoms:
             reaches.add_data(targets, [[node] for node in non_symptoms])
 
-        model.add_rule(self.Rule("1.0: STRUCTURAL(A, B) -> CAUSES(A, B) ^2"))
-        model.add_rule(self.Rule("1.3: TEMPORAL(A, B) -> CAUSES(A, B) ^2"))
+        # Incident-local evidence. Structure is omitted on purpose: all targets
+        # are already observed dependencies, so it cannot distinguish causality.
+        model.add_rule(self.Rule("1.2: TEMPORAL(A, B) -> CAUSES(A, B) ^2"))
         model.add_rule(self.Rule("1.1: ANOMALYPAIR(A, B) -> CAUSES(A, B) ^2"))
+        model.add_rule(self.Rule("0.8: !TEMPORAL(A, B) -> !CAUSES(A, B) ^2"))
+        model.add_rule(self.Rule("1.2: !ANOMALYPAIR(A, B) -> !CAUSES(A, B) ^2"))
         if has_semantic:
-            model.add_rule(self.Rule("1.2: SEMANTIC(A, B) -> CAUSES(A, B) ^2"))
-            model.add_rule(self.Rule("1.8: CONTRADICTION(A, B) -> !CAUSES(A, B) ^2"))
+            # Contrastive DeBERTa produces complementary soft evidence. Equal
+            # 0.5/0.5 scores cancel rather than introducing a causal bias.
+            model.add_rule(self.Rule("1.0: SEMANTIC(A, B) -> CAUSES(A, B) ^2"))
+            model.add_rule(self.Rule("1.0: CONTRADICTION(A, B) -> !CAUSES(A, B) ^2"))
 
-        model.add_rule(self.Rule("1.8: CAUSES(A, B) & REACHES(B) -> REACHES(A) ^2"))
-        model.add_rule(self.Rule("1.4: STRUCTURAL(A, B) & REACHES(B) -> CAUSES(A, B) ^2"))
-        model.add_rule(self.Rule("1.2: TEMPORAL(A, B) & REACHES(B) -> CAUSES(A, B) ^2"))
+        # Global path coherence only reinforces edges that also have local
+        # evidence; known causal relations seed REACHES through CAUSES facts.
+        model.add_rule(self.Rule("1.6: CAUSES(A, B) & REACHES(B) -> REACHES(A) ^2"))
+        model.add_rule(self.Rule("0.8: TEMPORAL(A, B) & REACHES(B) -> CAUSES(A, B) ^2"))
         model.add_rule(self.Rule("0.5: CAUSES(A, B) -> !CAUSES(B, A) ^2"))
         model.add_rule(self.Rule("0.25: !CAUSES(A, B) ^2"))
 
