@@ -92,6 +92,18 @@ def test_abduction_generates_only_observed_unknown_pairs():
     assert len(hypotheses) <= len(masked_pairs)
 
 
+def test_observed_connectivity_is_not_causal_evidence():
+    h = Hypothesis(
+        CausalEdge("a", REL_CAUSAL, "b"),
+        [],
+        "observed edge only",
+        structural_score=1.0,
+        temporal_score=0.0,
+        anomaly_score=0.0,
+    )
+    assert h.abductive_score == 0.0
+
+
 def test_abduction_does_not_read_gold_only_node():
     case = make_case()
     case.gold_edges.append(CausalEdge("secret-gold-node", REL_CAUSAL, "ts-api"))
@@ -105,11 +117,11 @@ def test_neutral_semantic_margin_preserves_abduction_prior():
         CausalEdge("a", REL_CAUSAL, "b"),
         [],
         "test",
-        structural_score=0.9,
+        structural_score=1.0,
         temporal_score=0.6,
         anomaly_score=0.6,
-        semantic_support=0.05,
-        semantic_contradiction=0.05,
+        semantic_support=0.5,
+        semantic_contradiction=0.5,
     )
     assert abs(h.final_score - h.abductive_score) < 1e-9
 
