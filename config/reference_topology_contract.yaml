@@ -1,0 +1,81 @@
+reference_topology_contract:
+  schema_version: "1.0"
+  serialization: jsonl
+  record_unit: topology_snapshot
+  evaluator_only: true
+  world_assumption: open_world
+
+  required_topology_fields:
+    - schema_version
+    - topology_id
+    - system
+    - version
+    - valid_from
+    - provenance
+    - entities
+    - relations
+
+  topology_identity:
+    recommendation: "<system>:<source-version>:<deployment-version>"
+    incident_binding_priority:
+      - case.metadata.topology_id
+      - unique_case.metadata.system_diagnostic_only
+    primary_requires_explicit_topology_id: true
+    overlapping_windows_for_same_system: prohibited
+
+  entity:
+    required_fields: [id, type]
+    canonical_id: "<type>:<value>"
+    allowed_types: [system, service, pod, node, database, messaging]
+
+  relation:
+    required_fields: [source, relation, target, status, provenance]
+    allowed_types:
+      - calls
+      - deployed_on
+      - runs_on
+      - uses_database
+      - uses_messaging
+      - has_service
+    statuses:
+      VERIFIED_POSITIVE: "independent evidence verifies that the relation exists"
+      VERIFIED_NEGATIVE: "independent evidence verifies that the relation does not exist"
+      UNKNOWN: "available independent evidence cannot determine the relation"
+    absent_relation_status: UNKNOWN
+    unknown_counts_as_false_positive: false
+
+  provenance:
+    required_fields:
+      - source_type
+      - source
+      - version
+      - locator
+      - independent_of_model_observations
+      - evaluator_only
+      - verification_level
+    required_values:
+      independent_of_model_observations: true
+      evaluator_only: true
+    verification_levels: [automated, reviewed, manual]
+    prohibited_sources:
+      - observation_abduction
+      - telemetry_observation
+      - collector_observation
+      - recover_structural_relations
+
+  domain_range:
+    calls: [service, service]
+    deployed_on: [service, pod]
+    runs_on: [pod, node]
+    uses_database: [service, database]
+    uses_messaging: [service, messaging]
+    has_service: [system, service]
+
+  evaluation:
+    masking_source: VERIFIED_POSITIVE
+    false_positive_source: VERIFIED_NEGATIVE
+    excluded_from_precision_denominator: UNKNOWN
+    required_reporting:
+      - verified_prediction_coverage
+      - unknown_edge_insertion_rate
+      - candidate_recall_ceiling

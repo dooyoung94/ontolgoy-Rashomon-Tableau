@@ -67,6 +67,14 @@ def _case_provenance_issues(case: RcaCase) -> list[str]:
             )
         if provenance.get("evaluator_only") is not True:
             issues.append(f"{prefix}: evaluator_only must be true")
+        if (
+            provenance.get("contract_schema_version")
+            and provenance.get("binding_method") != "explicit_topology_id"
+        ):
+            issues.append(
+                f"{prefix}: contract reference requires explicit topology_id "
+                "binding for primary evaluation"
+            )
 
     legacy_source = " ".join(
         str(case.metadata.get(key, "")).lower()
