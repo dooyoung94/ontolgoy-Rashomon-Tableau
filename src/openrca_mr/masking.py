@@ -70,7 +70,6 @@ def mask_relation_types(
             symptom_nodes=list(case.symptom_nodes),
             known_edges=visible_edges,
             evidence=list(case.evidence),
-            structural_relations=list(case.structural_relations),
             gold_root_causes=list(case.gold_root_causes),
             gold_edges=list(case.gold_edges),
             gold_paths=[list(path) for path in case.gold_paths],
@@ -82,6 +81,8 @@ def mask_relation_types(
                 "mask_ratio": ratio,
                 "mask_seed": seed,
             },
+            structural_relations=list(case.structural_relations),
+            relation_observations=list(case.relation_observations),
         ),
         masked_truth,
     )
@@ -111,7 +112,6 @@ def mask_relations(
             symptom_nodes=list(case.symptom_nodes),
             known_edges=kept,
             evidence=list(case.evidence),
-            structural_relations=list(case.structural_relations),
             gold_root_causes=list(case.gold_root_causes),
             gold_edges=list(case.gold_edges),
             gold_paths=[list(path) for path in case.gold_paths],
@@ -123,6 +123,8 @@ def mask_relations(
                 "mask_ratio": ratio,
                 "mask_seed": seed,
             },
+            structural_relations=list(case.structural_relations),
+            relation_observations=list(case.relation_observations),
         ),
         masked,
     )
