@@ -18,6 +18,48 @@ jobs:
       - name: Run unit tests
         run: pytest -q
 
+  stage1_psl_smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Stage-1 PSL stack
+        run: pip install -e '.[psl]'
+      - name: Run synthetic structural PSL inference
+        run: |
+          python - <<'PY'
+          from openrca_mr.models import CausalEdge, RelationObservation, REL_CALLS, REL_DEPLOYED_ON
+          from openrca_mr.psl import PslStructuralInference
+          from openrca_mr.structural import StructuralRelationRecovery
+
+          observations = [
+              RelationObservation(
+                  'o1', 'service:frontend', 'service:orders',
+                  'trace_parent_child', 0.98,
+                  'frontend parent span has orders child span'
+              ),
+              RelationObservation(
+                  'o2', 'service:orders', 'pod:orders-1',
+                  'service_pod_cooccurrence', 0.98,
+                  'orders telemetry is emitted from orders-1'
+              ),
+          ]
+          result = StructuralRelationRecovery(
+              global_inference=PslStructuralInference(),
+              relation_threshold=0.50,
+          ).run(observations)
+          assert CausalEdge('service:frontend', REL_CALLS, 'service:orders') in result.relations
+          assert CausalEdge('service:orders', REL_DEPLOYED_ON, 'pod:orders-1') in result.relations
+          print('STAGE1_PSL_OK', [edge.key() for edge in result.relations])
+          PY
+
   ops_lite_prepare:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
     runs-on: ubuntu-latest
@@ -43,8 +85,11 @@ jobs:
           assert len(cases) == 20, len(cases)
           assert all(c.gold_root_causes and c.gold_edges for c in cases)
           assert all(c.known_edges and c.evidence and c.symptom_nodes for c in cases)
+          assert all(c.relation_observations and c.structural_relations for c in cases)
           print('PREPARED', len(cases))
           print('AVG_KNOWN_EDGES', sum(len(c.known_edges) for c in cases)/len(cases))
+          print('AVG_RELATION_OBSERVATIONS', sum(len(c.relation_observations) for c in cases)/len(cases))
+          print('AVG_STRUCTURAL_RELATIONS', sum(len(c.structural_relations) for c in cases)/len(cases))
           print('AVG_EVIDENCE', sum(len(c.evidence) for c in cases)/len(cases))
           PY
       - uses: actions/upload-artifact@v4
@@ -80,7 +125,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e '.[all]'
-      - name: Run ${{ matrix.variant }} relation mask
+      - name: Run ${{ matrix.variant }} causal relation mask
         env:
           HF_HUB_DISABLE_XET: '1'
           TOKENIZERS_PARALLELISM: 'false'
@@ -89,7 +134,7 @@ jobs:
           python scripts/run_openrca2_ablation.py \
             --data artifacts/ops_lite_20.jsonl \
             --out results/${{ matrix.variant }}.json \
-            --dataset-id 'anon-ops/ops-lite:20:relation_mask_v1' \
+            --dataset-id 'anon-ops/ops-lite:20:causal_relation_mask_v1' \
             --mask-mode relation \
             --mask-ratio 0.40 \
             --seed 42 \
@@ -102,7 +147,7 @@ jobs:
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: relation-result-${{ matrix.variant }}
+          name: causal-relation-result-${{ matrix.variant }}
           path: results/${{ matrix.variant }}.json
           retention-days: 7
 
@@ -113,10 +158,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: relation-result-*
+          pattern: causal-relation-result-*
           path: results
           merge-multiple: true
-      - name: Aggregate relation-mask A0-A4
+      - name: Aggregate causal-relation-mask A0-A4
         run: |
           python - <<'PY'
           import json
@@ -139,12 +184,12 @@ jobs:
                   'root_hit_at_1':s.get('root_hit_at_1'),
                   'root_hit_at_3':s.get('root_hit_at_3'),
               })
-          print('RELATION_MASK_A0_A4_RESULTS')
+          print('CAUSAL_RELATION_MASK_A0_A4_RESULTS')
           print(json.dumps(rows, indent=2))
           json.dump(rows, open('results/summary.json','w'), indent=2)
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: ops-lite-20-relation-mask-results
+          name: ops-lite-20-causal-relation-mask-results
           path: results
           retention-days: 14
