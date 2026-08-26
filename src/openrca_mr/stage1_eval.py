@@ -4,9 +4,10 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-from .models import RcaCase, STRUCTURAL_RELATION_TYPES
+from .models import RcaCase, StructuralHypothesis, STRUCTURAL_RELATION_TYPES
 from .openrca2 import load_normalized_cases
-from .psl import PslStructuralInference
+from .psl import PslStructuralInference, visible_functional_conflicts
+from .reference_topology import PRIMARY_REFERENCE_RELATION_TYPES
 from .research_protocol import audit_reference_protocol, topology_group_id
 from .semantic import DebertaStructuralRelationScorer
 from .structural import relation_type_counts, structural_relation_metrics
@@ -29,6 +30,7 @@ VARIANTS = {
     "abduction_psl": (True, False, True),
     "abduction_deberta_psl": (True, True, True),
 }
+STAGE1_PROTOCOL_VERSION = "stage1-primary-relation-recovery-v1"
 
 
 def _mean(rows: list[dict], key: str) -> float | None:
@@ -48,11 +50,69 @@ def _unique_case_map(cases: list[RcaCase], label: str) -> dict[str, RcaCase]:
     return out
 
 
-def _typed_keys(relations) -> set[tuple[str, str, str]]:
+def _typed_keys(
+    relations,
+    relation_types: frozenset[str] | set[str] = STRUCTURAL_RELATION_TYPES,
+) -> set[tuple[str, str, str]]:
     return {
         edge.key()
         for edge in relations
-        if edge.relation in STRUCTURAL_RELATION_TYPES
+        if edge.relation in relation_types
+    }
+
+
+def _semantic_adjusted_score(hypothesis: StructuralHypothesis) -> float:
+    if hypothesis.semantic_support is None:
+        return max(0.0, min(1.0, hypothesis.abductive_support))
+    contradiction = hypothesis.semantic_contradiction or 0.0
+    margin = hypothesis.semantic_support - contradiction
+    return max(0.0, min(1.0, hypothesis.abductive_support + 0.25 * margin))
+
+
+def _hypothesis_diagnostics(
+    hypotheses: list[StructuralHypothesis],
+    visible_relations,
+    *,
+    relation_threshold: float,
+    use_deberta: bool,
+    use_psl: bool,
+) -> dict[str, float | int | None]:
+    by_pair: dict[tuple[str, str], set[str]] = defaultdict(set)
+    semantic_shift = 0.0
+    semantic_flips = 0
+    psl_shift = 0.0
+    psl_flips = 0
+
+    for hypothesis in hypotheses:
+        by_pair[(hypothesis.edge.source, hypothesis.edge.target)].add(
+            hypothesis.edge.relation
+        )
+        abductive_score = max(0.0, min(1.0, hypothesis.abductive_support))
+        pre_psl_score = _semantic_adjusted_score(hypothesis)
+        if use_deberta:
+            semantic_shift += abs(pre_psl_score - abductive_score)
+            semantic_flips += (abductive_score >= relation_threshold) != (
+                pre_psl_score >= relation_threshold
+            )
+        if use_psl:
+            final_score = hypothesis.final_score
+            psl_shift += abs(final_score - pre_psl_score)
+            psl_flips += (pre_psl_score >= relation_threshold) != (
+                final_score >= relation_threshold
+            )
+
+    n = len(hypotheses)
+    return {
+        "n_semantic_decision_flips": semantic_flips,
+        "semantic_decision_flip_rate": semantic_flips / n if use_deberta and n else None,
+        "mean_abs_semantic_score_shift": semantic_shift / n if use_deberta and n else None,
+        "n_psl_decision_flips": psl_flips,
+        "psl_decision_flip_rate": psl_flips / n if use_psl and n else None,
+        "mean_abs_psl_score_shift": psl_shift / n if use_psl and n else None,
+        "n_competing_endpoint_pairs": sum(len(relations) > 1 for relations in by_pair.values()),
+        "n_visible_functional_conflicts": len(
+            visible_functional_conflicts(list(visible_relations), hypotheses)
+        ),
     }
 
 
@@ -73,6 +133,9 @@ def run_stage1_evaluation(
     relation_threshold: float = 0.5,
     limit: int = 0,
     allow_derived_reference: bool = False,
+    evaluation_relation_types: frozenset[str] | set[str] | None = None,
+    semantic_scorer=None,
+    global_inference=None,
 ) -> dict:
     """Evaluate recovery when relations are absent from an existing topology.
 
@@ -93,6 +156,19 @@ def run_stage1_evaluation(
         raise ValueError("topology_missing_ratio must be in [0, 1]")
     if not 0.0 <= relation_threshold <= 1.0:
         raise ValueError("relation_threshold must be in [0, 1]")
+
+    evaluation_relation_types = frozenset(
+        PRIMARY_REFERENCE_RELATION_TYPES
+        if evaluation_relation_types is None
+        else evaluation_relation_types
+    )
+    unknown_relation_types = evaluation_relation_types - STRUCTURAL_RELATION_TYPES
+    if unknown_relation_types:
+        raise ValueError(
+            f"unknown evaluation relation types: {sorted(unknown_relation_types)}"
+        )
+    if not evaluation_relation_types:
+        raise ValueError("evaluation_relation_types must not be empty")
 
     do_recovery, use_deberta, use_psl = VARIANTS[variant]
     cases = load_normalized_cases(data)
@@ -137,19 +213,37 @@ def run_stage1_evaluation(
         case_groups,
         topology_missing_ratio,
         seed,
+        eligible_relation_types=evaluation_relation_types,
     )
 
-    semantic = DebertaStructuralRelationScorer() if use_deberta else None
-    logic = PslStructuralInference() if use_psl else None
+    semantic = None
+    if use_deberta:
+        semantic = (
+            semantic_scorer
+            if semantic_scorer is not None
+            else DebertaStructuralRelationScorer()
+        )
+    logic = None
+    if use_psl:
+        logic = (
+            global_inference
+            if global_inference is not None
+            else PslStructuralInference()
+        )
 
     rows: list[dict] = []
     missing_tp = missing_fp = missing_fn = 0
     candidate_gold_hits = candidate_gold_total = 0
     full_tp = full_fp = full_fn = 0
     type_counts = defaultdict(lambda: {"tp": 0, "fp": 0, "fn": 0})
+    diagnostic_totals = defaultdict(float)
+    diagnostic_denominators = defaultdict(int)
 
     for case in cases:
-        full_truth = list(reference_map[case.case_id].structural_relations)
+        full_reference = list(reference_map[case.case_id].structural_relations)
+        full_truth = [
+            edge for edge in full_reference if edge.relation in evaluation_relation_types
+        ]
         masked = masks[case.case_id]
 
         if do_recovery:
@@ -162,18 +256,46 @@ def run_stage1_evaluation(
             )
             added_relations = recovered.added_relations
             final_topology = recovered.recovered_topology
-            n_hypotheses = len(recovered.hypotheses)
-            hypothesis_keys = _typed_keys(h.edge for h in recovered.hypotheses)
+            evaluated_hypotheses = [
+                hypothesis
+                for hypothesis in recovered.hypotheses
+                if hypothesis.edge.relation in evaluation_relation_types
+            ]
+            n_hypotheses = len(evaluated_hypotheses)
+            n_all_hypotheses = len(recovered.hypotheses)
+            hypothesis_keys = _typed_keys(
+                (h.edge for h in evaluated_hypotheses), evaluation_relation_types
+            )
+            diagnostics = _hypothesis_diagnostics(
+                evaluated_hypotheses,
+                masked.visible_relations,
+                relation_threshold=relation_threshold,
+                use_deberta=use_deberta,
+                use_psl=use_psl,
+            )
         else:
             added_relations = []
             final_topology = list(masked.visible_relations)
             n_hypotheses = 0
+            n_all_hypotheses = 0
             hypothesis_keys = set()
+            diagnostics = _hypothesis_diagnostics(
+                [],
+                masked.visible_relations,
+                relation_threshold=relation_threshold,
+                use_deberta=use_deberta,
+                use_psl=use_psl,
+            )
 
         # 주 지표: 실제로 토폴로지에서 제거한 관계를 얼마나 되찾았는가.
-        missing_score = structural_relation_metrics(added_relations, masked.missing_relations)
-        pred_missing = _typed_keys(added_relations)
-        gold_missing = _typed_keys(masked.missing_relations)
+        evaluated_added = [
+            edge for edge in added_relations if edge.relation in evaluation_relation_types
+        ]
+        missing_score = structural_relation_metrics(
+            evaluated_added, masked.missing_relations
+        )
+        pred_missing = _typed_keys(evaluated_added, evaluation_relation_types)
+        gold_missing = _typed_keys(masked.missing_relations, evaluation_relation_types)
         tp_keys = pred_missing & gold_missing
         fp_keys = pred_missing - gold_missing
         fn_keys = gold_missing - pred_missing
@@ -192,42 +314,65 @@ def run_stage1_evaluation(
             type_counts[key[1]]["fn"] += 1
 
         # 보조 지표: 복원 후 전체 토폴로지가 원래 토폴로지와 얼마나 같은가.
-        full_score = structural_relation_metrics(final_topology, full_truth)
-        pred_full = _typed_keys(final_topology)
-        gold_full = _typed_keys(full_truth)
+        evaluated_final = [
+            edge for edge in final_topology if edge.relation in evaluation_relation_types
+        ]
+        full_score = structural_relation_metrics(evaluated_final, full_truth)
+        pred_full = _typed_keys(evaluated_final, evaluation_relation_types)
+        gold_full = _typed_keys(full_truth, evaluation_relation_types)
         full_tp += len(pred_full & gold_full)
         full_fp += len(pred_full - gold_full)
         full_fn += len(gold_full - pred_full)
 
-        rows.append(
-            {
-                "case_id": case.case_id,
-                "topology_group": case_groups[case.case_id],
-                # Empty-denominator cases are retained for coverage accounting,
-                # but must not inflate macro recovery scores to 1.0.
-                "missing_relation_precision": (
-                    missing_score.precision if gold_missing else None
-                ),
-                "missing_relation_recall": missing_score.recall if gold_missing else None,
-                "missing_relation_f1": missing_score.f1 if gold_missing else None,
-                "candidate_recall_ceiling": (
-                    len(hypothesis_keys & gold_missing) / len(gold_missing)
-                    if do_recovery and gold_missing
-                    else None
-                ),
-                "full_topology_precision": full_score.precision,
-                "full_topology_recall": full_score.recall,
-                "full_topology_f1": full_score.f1,
-                "n_full_relations": len(full_truth),
-                "n_visible_relations": len(masked.visible_relations),
-                "n_missing_relations": len(masked.missing_relations),
-                "n_collector_observations": len(case.relation_observations),
-                "n_hypotheses": n_hypotheses,
-                "n_added_relations": len(added_relations),
-                "missing_relation_types": relation_type_counts(masked.missing_relations),
-                "added_relation_types": relation_type_counts(added_relations),
-            }
-        )
+        row = {
+            "case_id": case.case_id,
+            "topology_group": case_groups[case.case_id],
+            # Empty-denominator cases are retained for coverage accounting,
+            # but must not inflate macro recovery scores to 1.0.
+            "missing_relation_precision": (
+                missing_score.precision if gold_missing else None
+            ),
+            "missing_relation_recall": missing_score.recall if gold_missing else None,
+            "missing_relation_f1": missing_score.f1 if gold_missing else None,
+            "candidate_recall_ceiling": (
+                len(hypothesis_keys & gold_missing) / len(gold_missing)
+                if do_recovery and gold_missing
+                else None
+            ),
+            "full_topology_precision": full_score.precision,
+            "full_topology_recall": full_score.recall,
+            "full_topology_f1": full_score.f1,
+            "n_full_relations": len(full_truth),
+            "n_visible_relations": sum(
+                edge.relation in evaluation_relation_types
+                for edge in masked.visible_relations
+            ),
+            "n_auxiliary_visible_relations": sum(
+                edge.relation not in evaluation_relation_types
+                for edge in masked.visible_relations
+            ),
+            "n_missing_relations": len(masked.missing_relations),
+            "n_collector_observations": len(case.relation_observations),
+            "n_hypotheses": n_hypotheses,
+            "n_auxiliary_hypotheses": n_all_hypotheses - n_hypotheses,
+            "n_added_relations": len(evaluated_added),
+            "missing_relation_types": relation_type_counts(masked.missing_relations),
+            "added_relation_types": relation_type_counts(evaluated_added),
+            **diagnostics,
+        }
+        rows.append(row)
+        for key in (
+            "n_semantic_decision_flips",
+            "n_psl_decision_flips",
+            "n_competing_endpoint_pairs",
+            "n_visible_functional_conflicts",
+        ):
+            diagnostic_totals[key] += float(row[key])
+        for key in ("mean_abs_semantic_score_shift", "mean_abs_psl_score_shift"):
+            value = row[key]
+            if isinstance(value, (int, float)):
+                diagnostic_totals[key] += float(value) * n_hypotheses
+                diagnostic_denominators[key] += n_hypotheses
 
     missing_micro_p, missing_micro_r, missing_micro_f1 = _micro_from_counts(
         missing_tp, missing_fp, missing_fn
@@ -291,9 +436,44 @@ def run_stage1_evaluation(
         "mean_collector_observations": _mean(rows, "n_collector_observations"),
         "mean_hypotheses": _mean(rows, "n_hypotheses"),
         "mean_added_relations": _mean(rows, "n_added_relations"),
+        "n_semantic_decision_flips": int(
+            diagnostic_totals["n_semantic_decision_flips"]
+        ),
+        "semantic_decision_flip_rate": (
+            diagnostic_totals["n_semantic_decision_flips"]
+            / sum(row["n_hypotheses"] for row in rows)
+            if use_deberta and sum(row["n_hypotheses"] for row in rows)
+            else None
+        ),
+        "mean_abs_semantic_score_shift": (
+            diagnostic_totals["mean_abs_semantic_score_shift"]
+            / diagnostic_denominators["mean_abs_semantic_score_shift"]
+            if diagnostic_denominators["mean_abs_semantic_score_shift"]
+            else None
+        ),
+        "n_psl_decision_flips": int(diagnostic_totals["n_psl_decision_flips"]),
+        "psl_decision_flip_rate": (
+            diagnostic_totals["n_psl_decision_flips"]
+            / sum(row["n_hypotheses"] for row in rows)
+            if use_psl and sum(row["n_hypotheses"] for row in rows)
+            else None
+        ),
+        "mean_abs_psl_score_shift": (
+            diagnostic_totals["mean_abs_psl_score_shift"]
+            / diagnostic_denominators["mean_abs_psl_score_shift"]
+            if diagnostic_denominators["mean_abs_psl_score_shift"]
+            else None
+        ),
+        "n_competing_endpoint_pairs": int(
+            diagnostic_totals["n_competing_endpoint_pairs"]
+        ),
+        "n_visible_functional_conflicts": int(
+            diagnostic_totals["n_visible_functional_conflicts"]
+        ),
     }
 
     result = {
+        "protocol_version": STAGE1_PROTOCOL_VERSION,
         "track": "missing_topology_relation_recovery",
         "variant": variant,
         "n": len(rows),
@@ -303,6 +483,14 @@ def run_stage1_evaluation(
         "reference_protocol": reference_protocol,
         "claim_scope": reference_audit.claim_scope,
         "reference_audit": reference_audit.to_dict(),
+        "evaluation_relation_types": sorted(evaluation_relation_types),
+        "method_components": {
+            "deberta_enabled": use_deberta,
+            "deberta_model": getattr(semantic, "model_name", None),
+            "deberta_revision": getattr(semantic, "model_revision", None),
+            "psl_enabled": use_psl,
+            "psl_inference_class": type(logic).__name__ if logic is not None else None,
+        },
         "protocol": {
             "problem": "collector_data_available_but_topology_relation_missing",
             "collector_observations_modified": False,
@@ -316,6 +504,7 @@ def run_stage1_evaluation(
             "masking_unit": "topology_group",
             "empty_missing_cases_in_macro": "excluded",
             "visible_topology_constraint_inference": use_psl,
+            "auxiliary_relations_are_evaluation_targets": False,
         },
         "summary": summary,
         "per_relation_type": per_relation_type,
@@ -324,5 +513,9 @@ def run_stage1_evaluation(
 
     path = Path(out)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    temporary.replace(path)
     return result

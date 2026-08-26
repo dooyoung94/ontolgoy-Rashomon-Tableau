@@ -12,11 +12,12 @@ REFERENCE_PROVENANCE_KEY = "reference_topology_provenance"
 # produced by the same observation-to-hypothesis path that is evaluated later.
 # Such data is useful for software smoke tests, but not as independent gold.
 _DERIVED_SOURCE_MARKERS = (
+    "telemetry",
+    "collector",
     "observation_abduction",
-    "telemetry_observation",
-    "collector_observation",
     "recover_structural_relations",
 )
+_MUTABLE_VERSION_MARKERS = frozenset({"latest", "main", "master", "head", "current", "unknown"})
 
 
 @dataclass(frozen=True)
@@ -49,18 +50,31 @@ def _typed_relation_count(case: RcaCase) -> int:
     return sum(edge.relation in STRUCTURAL_RELATION_TYPES for edge in case.structural_relations)
 
 
+def _has_explicit_topology_group(case: RcaCase) -> bool:
+    return any(
+        case.metadata.get(key) is not None
+        and bool(str(case.metadata.get(key)).strip())
+        for key in ("topology_id", "system")
+    )
+
+
 def _case_provenance_issues(case: RcaCase) -> list[str]:
     issues: list[str] = []
     provenance = case.metadata.get(REFERENCE_PROVENANCE_KEY)
     prefix = f"case {case.case_id}"
+    declared_source = ""
 
     if not isinstance(provenance, dict):
         issues.append(f"{prefix}: missing {REFERENCE_PROVENANCE_KEY}")
     else:
-        if not str(provenance.get("source", "")).strip():
+        declared_source = str(provenance.get("source", "")).strip().lower()
+        if not declared_source:
             issues.append(f"{prefix}: reference source is empty")
-        if not str(provenance.get("version", "")).strip():
+        declared_version = str(provenance.get("version", "")).strip()
+        if not declared_version:
             issues.append(f"{prefix}: reference version is empty")
+        elif declared_version.lower() in _MUTABLE_VERSION_MARKERS:
+            issues.append(f"{prefix}: reference version must be immutable")
         if provenance.get("independent_of_model_observations") is not True:
             issues.append(
                 f"{prefix}: independent_of_model_observations must be true"
@@ -68,14 +82,23 @@ def _case_provenance_issues(case: RcaCase) -> list[str]:
         if provenance.get("evaluator_only") is not True:
             issues.append(f"{prefix}: evaluator_only must be true")
 
-    legacy_source = " ".join(
-        str(case.metadata.get(key, "")).lower()
-        for key in ("structural_relation_source", "structural_normalization_policy")
+    derived_source_text = " ".join(
+        [declared_source]
+        + [
+            str(case.metadata.get(key, "")).lower()
+            for key in (
+                "structural_relation_source",
+                "structural_normalization_policy",
+            )
+        ]
     )
-    if any(marker in legacy_source for marker in _DERIVED_SOURCE_MARKERS):
+    if any(marker in derived_source_text for marker in _DERIVED_SOURCE_MARKERS):
         issues.append(f"{prefix}: reference topology is derived from model observations")
     if _typed_relation_count(case) == 0:
         issues.append(f"{prefix}: reference topology has no evaluable typed relations")
+    relation_keys = [edge.key() for edge in case.structural_relations]
+    if len(relation_keys) != len(set(relation_keys)):
+        issues.append(f"{prefix}: reference topology contains duplicate relations")
     return issues
 
 
@@ -113,6 +136,32 @@ def audit_reference_protocol(
 
     for case in reference_cases:
         issues.extend(_case_provenance_issues(case))
+
+    reference_by_id = {case.case_id: case for case in reference_cases}
+    group_relation_sets: dict[str, set[tuple[str, str, str]]] = {}
+    for input_case in input_cases:
+        if not _has_explicit_topology_group(input_case):
+            issues.append(
+                f"case {input_case.case_id}: primary evaluation requires an explicit "
+                "topology_id or system; incident case_id fallback is diagnostic-only"
+            )
+        reference_case = reference_by_id.get(input_case.case_id)
+        if reference_case is None:
+            continue
+        input_group = topology_group_id(input_case)
+        reference_group = topology_group_id(reference_case)
+        if input_group != reference_group:
+            issues.append(
+                f"case {input_case.case_id}: input/reference topology groups differ "
+                f"({input_group!r} != {reference_group!r})"
+            )
+        relation_set = {edge.key() for edge in reference_case.structural_relations}
+        prior = group_relation_sets.setdefault(reference_group, relation_set)
+        if prior != relation_set:
+            issues.append(
+                f"topology group {reference_group}: reference relation sets differ "
+                "across cases; use a versioned topology_id or time-align the snapshot"
+            )
 
     independent = provided and not issues
     if not independent and not allow_derived_reference:

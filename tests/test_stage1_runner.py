@@ -20,6 +20,7 @@ from openrca_mr.models import (
 from openrca_mr.openrca2 import dump_normalized_cases
 from openrca_mr.pipeline import IncidentCausalRCA, MissingRelationRCA
 from openrca_mr.stage1_eval import run_stage1_evaluation
+from openrca_mr.semantic import SemanticScore
 from openrca_mr.topology_recovery import (
     mask_topology_relations,
     mask_topology_relations_by_group,
@@ -115,6 +116,7 @@ def test_s0_keeps_incomplete_topology_without_recovery(tmp_path):
         topology_missing_ratio=0.5,
         seed=42,
         allow_derived_reference=True,
+        evaluation_relation_types=frozenset({REL_CALLS, REL_DEPLOYED_ON}),
     )
 
     assert result["track"] == "missing_topology_relation_recovery"
@@ -139,6 +141,7 @@ def test_s1_recovers_relation_missing_from_topology_using_unchanged_collector_da
         topology_missing_ratio=0.5,
         seed=42,
         allow_derived_reference=True,
+        evaluation_relation_types=frozenset({REL_CALLS, REL_DEPLOYED_ON}),
     )
 
     assert result["summary"]["micro_missing_relation_precision"] == 1.0
@@ -172,7 +175,9 @@ def test_runner_joins_independent_topology_reference_by_case_id(tmp_path):
     data = tmp_path / "input.jsonl"
     reference = tmp_path / "reference.jsonl"
     out = tmp_path / "independent.json"
-    dump_normalized_cases([_case("case-A")], data)
+    input_case = _case("case-A")
+    input_case.metadata["topology_id"] = "system-test-v1"
+    dump_normalized_cases([input_case], data)
     case_b = _case("case-B")
     case_a = _case("case-A")
     provenance = {
@@ -183,6 +188,8 @@ def test_runner_joins_independent_topology_reference_by_case_id(tmp_path):
     }
     case_b.metadata["reference_topology_provenance"] = provenance
     case_a.metadata["reference_topology_provenance"] = provenance
+    case_b.metadata["topology_id"] = "system-test-v1"
+    case_a.metadata["topology_id"] = "system-test-v1"
     dump_normalized_cases([case_b, case_a], reference)
 
     result = run_stage1_evaluation(
@@ -191,6 +198,7 @@ def test_runner_joins_independent_topology_reference_by_case_id(tmp_path):
         out=str(out),
         variant="abduction",
         topology_missing_ratio=0.5,
+        evaluation_relation_types=frozenset({REL_CALLS, REL_DEPLOYED_ON}),
     )
 
     assert result["n"] == 1
@@ -228,3 +236,55 @@ def test_group_mask_is_consistent_for_shared_system_relations():
 
     assert masks["incident-a"] == masks["incident-b"]
     assert len(masks["incident-a"].missing_relations) == 1
+
+
+class _ContradictingSemanticScorer:
+    def score_structural_many(self, observations, hypotheses):
+        del observations
+        return [SemanticScore(0.0, 1.0, 0.0) for _ in hypotheses]
+
+
+class _RejectingLogic:
+    def infer_structural(self, observations, hypotheses, visible_relations=None):
+        del observations, visible_relations
+        for hypothesis in hypotheses:
+            hypothesis.soft_logic_score = 0.0
+        return hypotheses
+
+
+def test_stage1_reports_semantic_selection_flips_for_primary_relations(tmp_path):
+    data = tmp_path / "cases.jsonl"
+    dump_normalized_cases([_case()], data)
+
+    result = run_stage1_evaluation(
+        data=str(data),
+        out=str(tmp_path / "semantic.json"),
+        variant="abduction_deberta",
+        topology_missing_ratio=1.0,
+        relation_threshold=0.9,
+        allow_derived_reference=True,
+        semantic_scorer=_ContradictingSemanticScorer(),
+    )
+
+    assert result["summary"]["n_semantic_decision_flips"] == 1
+    assert result["summary"]["semantic_decision_flip_rate"] == 1.0
+    assert result["summary"]["mean_abs_semantic_score_shift"] > 0.0
+
+
+def test_stage1_reports_psl_selection_flips_for_primary_relations(tmp_path):
+    data = tmp_path / "cases.jsonl"
+    dump_normalized_cases([_case()], data)
+
+    result = run_stage1_evaluation(
+        data=str(data),
+        out=str(tmp_path / "psl.json"),
+        variant="abduction_psl",
+        topology_missing_ratio=1.0,
+        relation_threshold=0.5,
+        allow_derived_reference=True,
+        global_inference=_RejectingLogic(),
+    )
+
+    assert result["summary"]["n_psl_decision_flips"] == 1
+    assert result["summary"]["psl_decision_flip_rate"] == 1.0
+    assert result["summary"]["mean_abs_psl_score_shift"] > 0.0

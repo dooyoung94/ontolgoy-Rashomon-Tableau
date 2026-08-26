@@ -71,6 +71,7 @@ def mask_topology_relations_by_group(
     case_groups: dict[str, str],
     ratio: float,
     seed: int = 42,
+    eligible_relation_types: frozenset[str] | set[str] | None = None,
 ) -> dict[str, TopologyMask]:
     """Create one deterministic nested mask per topology group.
 
@@ -84,11 +85,22 @@ def mask_topology_relations_by_group(
     if set(case_relations) != set(case_groups):
         raise ValueError("case_relations and case_groups must contain identical case IDs")
 
+    eligible_relation_types = (
+        STRUCTURAL_RELATION_TYPES
+        if eligible_relation_types is None
+        else frozenset(eligible_relation_types)
+    )
+    unknown_types = eligible_relation_types - STRUCTURAL_RELATION_TYPES
+    if unknown_types:
+        raise ValueError(f"unknown eligible relation types: {sorted(unknown_types)}")
+    if not eligible_relation_types:
+        raise ValueError("eligible_relation_types must not be empty")
+
     group_universe: dict[str, set[CausalEdge]] = defaultdict(set)
     for case_id, relations in case_relations.items():
         group = case_groups[case_id]
         group_universe[group].update(
-            edge for edge in relations if edge.relation in STRUCTURAL_RELATION_TYPES
+            edge for edge in relations if edge.relation in eligible_relation_types
         )
 
     missing_by_group: dict[str, set[CausalEdge]] = {}

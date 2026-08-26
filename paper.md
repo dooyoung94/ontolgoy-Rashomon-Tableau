@@ -241,6 +241,12 @@ OpenRCA 2.0의 500개 장애 사례와 과정 수준 정답을 사용한다. 공
 
 OpenRCA 2.0의 causal graph와 injection label은 평가기에만 제공한다. 기준 구조 관계는 버전 관리된 deployment manifest, service catalog, CMDB export 또는 독립 검수된 구조에서 구성한다. 복원 모델에 제공하는 relation observation과 동일한 추출 규칙으로 생성한 관계는 CI·단위검증용 diagnostic reference로만 사용하며 주 결과에서 제외한다.
 
+첫 주 실험은 독립 기준 자료의 provenance와 의미가 비교적 안정적인 `CALLS`와
+`USES_DATABASE`만 평가 대상으로 삼는다. `HAS_SERVICE`는 visible auxiliary context로만 사용하고
+마스킹·평가 분모에서 제외한다. 배포 시점에 따라 바뀌는 `DEPLOYED_ON`과 `RUNS_ON`은 incident별
+topology snapshot과 relation effective interval이 모두 정렬된 경우에만 별도 실험으로 확장한다.
+`USES_MESSAGING`은 독립 기준 자료가 확보되기 전까지 첫 주 실험의 주장 범위에서 제외한다.
+
 ### 5.2 Track A: 관계 복원 실험
 
 | 실험군 | 방법 |
@@ -263,6 +269,11 @@ F1=\frac{2PR}{P+R}
 $$
 
 관계 유형별 F1, Candidate Recall Ceiling, 허위 관계 삽입률, 논리 모순률을 함께 보고한다. MRR과 Hits@K는 query별 negative candidate universe가 확정된 후에만 추가한다. 복원 후 전체 토폴로지 F1은 잔존 관계의 영향을 받으므로 보조 지표로만 사용한다. 마스킹 결과 제거 관계가 0개인 사례는 missing-relation macro 평균에서 제외하고, 요청 비율과 실제 제거 비율을 함께 기록한다.
+
+각 seed·마스킹 비율에서 DeBERTa 적용 전후와 PSL 적용 전후의 score shift 및 relation-selection
+threshold flip 수를 기록한다. DeBERTa 또는 PSL이 어떤 후보의 선택도 바꾸지 않거나 PSL의
+competition/visible functional constraint가 한 번도 활성화되지 않으면, 해당 ablation은 방법의
+추가 효과를 식별할 수 없는 설정으로 표시하고 후보 공간·threshold·제약 설계를 재점검한다.
 
 ### 5.3 Track B: 관계 복원 × LLM 요인 실험
 

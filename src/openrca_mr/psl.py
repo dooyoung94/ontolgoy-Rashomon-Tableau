@@ -22,7 +22,7 @@ _FUNCTIONAL_BY_SOURCE = frozenset({REL_RUNS_ON})
 _FUNCTIONAL_BY_TARGET = frozenset({REL_HAS_SERVICE})
 
 
-def _visible_functional_conflicts(
+def visible_functional_conflicts(
     visible_relations: list[CausalEdge],
     hypotheses: list[StructuralHypothesis],
 ) -> set[tuple[str, str, str]]:
@@ -68,7 +68,7 @@ class StructuralSoftLogicApproximation:
             return []
 
         local: dict[tuple[str, str, str], float] = {}
-        visible_conflicts = _visible_functional_conflicts(
+        visible_conflicts = visible_functional_conflicts(
             list(visible_relations or []), hypotheses
         )
         by_pair: dict[tuple[str, str], list[StructuralHypothesis]] = defaultdict(list)
@@ -188,7 +188,7 @@ class PslStructuralInference:
         if competition_rows:
             competes.add_data(obs, competition_rows)
 
-        visible_conflicts = _visible_functional_conflicts(
+        visible_conflicts = visible_functional_conflicts(
             list(visible_relations or []), hypotheses
         )
         if visible_conflicts:

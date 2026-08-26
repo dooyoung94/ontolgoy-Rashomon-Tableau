@@ -30,15 +30,25 @@ experiment:
     group_key_priority: [topology_id, system]
     nested_within_seed: true
 
-  relation_types:
+  primary_relation_types:
     - calls
+    - uses_database
+  auxiliary_relation_types:
+    - has_service
+  deferred_temporal_relation_types:
     - deployed_on
     - runs_on
-    - uses_database
+  excluded_from_first_primary_experiment:
     - uses_messaging
-    - has_service
+  temporal_relation_gate:
+    require_incident_topology_snapshot: true
+    require_relation_effective_interval: true
+    status: prohibited_until_time_aligned
 
 methods:
+  deberta_model:
+    name: MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli
+    revision: bc8602904bd44dbfd3915e71a32345ae408fd933
   S0:
     code: topology_only
     description: incomplete_topology_without_recovery
@@ -71,6 +81,10 @@ relation_recovery_metrics:
     - missing_relation_recall
     - missing_relation_f1
     - relation_type_f1
+    - candidate_recall_ceiling
+    - false_edge_insertion_rate
+    - semantic_decision_flip_rate
+    - psl_decision_flip_rate
   secondary:
     - full_topology_precision
     - full_topology_recall
