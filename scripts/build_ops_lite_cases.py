@@ -11,8 +11,9 @@ import pandas as pd
 from openrca_mr.models import CausalEdge, Evidence, RcaCase
 from openrca_mr.openrca2 import dump_normalized_cases
 from openrca_mr.structural import (
-    extract_structural_relations,
+    observation_type_counts,
     propagation_service_edges,
+    recover_structural_relations,
     relation_type_counts,
 )
 
@@ -50,14 +51,9 @@ def _load_parquet(path: Path) -> pd.DataFrame:
 
 
 def _trace_dependency_edges(normal_traces: pd.DataFrame) -> list[CausalEdge]:
-    """Backward-compatible Stage-2 projection from trace CALLS relations.
-
-    The structural relation is caller -> callee; the propagation candidate is
-    reversed to callee -> caller. This preserves the historical benchmark pair
-    orientation while making the operational semantics explicit.
-    """
-    structural = extract_structural_relations(normal_traces)
-    return propagation_service_edges(structural)
+    """Backward-compatible Stage-2 projection from recovered CALLS relations."""
+    recovery = recover_structural_relations(normal_traces)
+    return propagation_service_edges(recovery.relations)
 
 
 def _trace_error_mask(df: pd.DataFrame) -> pd.Series:
@@ -349,10 +345,16 @@ def _case(
     normal_logs = _load_parquet(folder / "normal_logs.parquet")
     abnormal_logs = _load_parquet(folder / "abnormal_logs.parquet")
 
-    # Stage 1: operational relation induction from normal, model-visible telemetry.
-    structural_relations = extract_structural_relations(
+    # Stage 1: model-visible telemetry -> observations -> abductive structural
+    # hypotheses -> recovered relations. DeBERTa/PSL are plugged in by the
+    # dedicated Stage-S experiment driver; normalization keeps a lightweight,
+    # leakage-safe abductive baseline so existing Stage-2 runs stay reproducible.
+    structural_recovery = recover_structural_relations(
         normal_traces, normal_metrics, normal_logs, system=system
     )
+    structural_relations = structural_recovery.relations
+    relation_observations = structural_recovery.observations
+
     # Stage 2 currently evaluates service-level propagation. CALLS is reversed
     # from caller->callee into callee->caller propagation candidate direction.
     known_edges = propagation_service_edges(structural_relations)
@@ -375,19 +377,23 @@ def _case(
         symptom_nodes=symptoms,
         known_edges=known_edges,
         evidence=evidence,
-        structural_relations=structural_relations,
         gold_root_causes=gold_roots,
         gold_edges=gold_edges,
         gold_alarm_nodes=gold_alarms,
         metadata={
             "dataset": "anon-ops/ops-lite",
             "fault_type": graph.get("fault_type"),
-            "adapter": "telemetry_structural_v3",
+            "adapter": "telemetry_structural_v4",
             "gold_usage": "evaluation_only",
             "label_filter": "attributed_only" if require_attributed else "none",
-            "structural_relation_source": "normal_telemetry_only",
+            "structural_relation_source": "normal_telemetry_observation_abduction",
+            "structural_observation_counts": observation_type_counts(relation_observations),
+            "structural_candidate_count": len(structural_recovery.hypotheses),
             "structural_relation_counts": relation_type_counts(structural_relations),
+            "structural_normalization_policy": "observation_then_abduction_no_gold",
         },
+        structural_relations=structural_relations,
+        relation_observations=relation_observations,
     )
 
 
@@ -424,6 +430,7 @@ def build(
             print(
                 "CASE", case.case_id,
                 "known", len(case.known_edges),
+                "observations", len(case.relation_observations),
                 "structural", len(case.structural_relations),
                 "structural_types", relation_type_counts(case.structural_relations),
                 "evidence", len(case.evidence),
