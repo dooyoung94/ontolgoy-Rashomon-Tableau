@@ -58,7 +58,8 @@
 - **브랜치:** `research/structural-relation-recovery`
 - **PR:** #13 `Research/structural relation recovery`
 - **CI:** GitHub Actions `Topology Relation Recovery and RCA` Run 32956705800 성공
-- **상태:** README·paper·history 반영 후 main 병합 대상
+- **병합:** PR #13을 merge commit `1cdfff2ba343615926256600510ee582988385e3`으로 main에 반영
+- **상태:** main 연구 기준선으로 승격 완료
 
 ---
 
