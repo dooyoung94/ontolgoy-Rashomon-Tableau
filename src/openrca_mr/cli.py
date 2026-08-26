@@ -4,8 +4,12 @@ import argparse
 import json
 
 from .abduction import AbductiveRelationGenerator
-from .masking import mask_relations
-from .metrics import edge_metrics, path_reachability, root_hit_at_k
+from .masking import mask_causal_relation_types
+from .metrics import (
+    process_path_reachability,
+    relation_classification_metrics,
+    root_hit_at_k,
+)
 from .openrca2 import load_normalized_cases
 from .pipeline import MissingRelationRCA
 from .psl import PslGlobalInference, SoftLogicApproximation
@@ -13,11 +17,20 @@ from .semantic import DebertaEvidenceScorer, DeterministicEvidenceScorer
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="OpenRCA 2.0 missing-relation experiment")
+    parser = argparse.ArgumentParser(
+        description=(
+            "OpenRCA 2.0 Stage-2 controlled incident-causal relation qualification. "
+            "Stage-1 structural recovery is exposed through openrca_mr.structural."
+        )
+    )
     parser.add_argument("data", help="Normalized OpenRCA 2.0 JSONL")
     parser.add_argument("--mask-ratio", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--semantic", choices=["deberta", "deterministic", "none"], default="none")
+    parser.add_argument(
+        "--semantic",
+        choices=["deberta", "deterministic", "none"],
+        default="none",
+    )
     parser.add_argument("--logic", choices=["psl", "soft", "none"], default="none")
     parser.add_argument("--limit", type=int, default=0)
     return parser
@@ -48,39 +61,61 @@ def main() -> None:
 
     rows = []
     for case in cases:
-        visible, masked = mask_relations(case, args.mask_ratio, args.seed)
+        visible, masked_truth = mask_causal_relation_types(
+            case, args.mask_ratio, args.seed
+        )
         prediction = model.run(visible)
-        # Masked edges are evaluator-side gold only. Full PAVE gold is evaluated
-        # separately using the official/normalized labels.
-        missing = edge_metrics(prediction.predicted_edges, masked)
+        relation = relation_classification_metrics(
+            prediction.predicted_edges, masked_truth
+        )
         rows.append(
             {
                 "case_id": case.case_id,
                 "mask_ratio": args.mask_ratio,
-                "missing_edge_precision": missing.precision,
-                "missing_edge_recall": missing.recall,
-                "missing_edge_f1": missing.f1,
-                "root_hit_at_1": root_hit_at_k(prediction.predicted_root_causes, case.gold_root_causes, 1),
-                "root_hit_at_3": root_hit_at_k(prediction.predicted_root_causes, case.gold_root_causes, 3),
-                "path_reachability": path_reachability(
-                    prediction.predicted_edges, case.gold_root_causes, case.symptom_nodes
+                "causal_relation_accuracy": relation.accuracy,
+                "causal_relation_precision": relation.precision,
+                "causal_relation_recall": relation.recall,
+                "causal_relation_f1": relation.f1,
+                "root_hit_at_1": root_hit_at_k(
+                    prediction.predicted_root_causes, case.gold_root_causes, 1
+                ),
+                "root_hit_at_3": root_hit_at_k(
+                    prediction.predicted_root_causes, case.gold_root_causes, 3
+                ),
+                "process_path_reachability": process_path_reachability(
+                    prediction.predicted_edges,
+                    prediction.predicted_root_causes,
+                    case.gold_root_causes,
+                    case.gold_alarm_nodes,
                 ),
             }
         )
 
     keys = [
-        "missing_edge_precision",
-        "missing_edge_recall",
-        "missing_edge_f1",
+        "causal_relation_accuracy",
+        "causal_relation_precision",
+        "causal_relation_recall",
+        "causal_relation_f1",
         "root_hit_at_1",
         "root_hit_at_3",
-        "path_reachability",
+        "process_path_reachability",
     ]
     summary = {
         key: sum(row[key] for row in rows) / len(rows) if rows else 0.0
         for key in keys
     }
-    print(json.dumps({"n": len(rows), "summary": summary, "rows": rows}, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {
+                "track": "stage2_incident_causal_qualification",
+                "n": len(rows),
+                "summary": summary,
+                "rows": rows,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
