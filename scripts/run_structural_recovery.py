@@ -9,14 +9,14 @@ from openrca_mr.stage1_eval import VARIANTS, run_stage1_evaluation
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Stage-1 structural relation recovery evaluation for OpenRCA normalized cases"
+            "Recover relations missing from an existing topology while collector data remains available"
         )
     )
     parser.add_argument("--data", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--reference-data")
-    parser.add_argument("--variant", choices=sorted(VARIANTS), default="observation_abduction")
-    parser.add_argument("--observation-drop-ratio", type=float, default=0.0)
+    parser.add_argument("--variant", choices=sorted(VARIANTS), default="abduction")
+    parser.add_argument("--topology-missing-ratio", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--relation-threshold", type=float, default=0.5)
     parser.add_argument("--limit", type=int, default=0)
@@ -27,7 +27,7 @@ def main() -> None:
         out=args.out,
         variant=args.variant,
         reference_data=args.reference_data,
-        observation_drop_ratio=args.observation_drop_ratio,
+        topology_missing_ratio=args.topology_missing_ratio,
         seed=args.seed,
         relation_threshold=args.relation_threshold,
         limit=args.limit,
