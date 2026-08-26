@@ -120,7 +120,42 @@ OpenRCA 2.0 normal + abnormal telemetry
 
 OpenRCA 2.0의 diagnosing agent는 dependency graph를 직접 받지 않고 traces/metrics/logs만 본다. 따라서 agent가 telemetry에서 dependency structure를 추론해야 한다.
 
-본 연구는 이를 명시적으로 두 문제로 분해한다.
+### OpenRCA 2.0이 드러낸 기존 LLM RCA의 핵심 한계
+
+OpenRCA 2.0은 이 한계를 만든 benchmark라기보다, **Outcome-only 평가로 보이지 않던 한계를 process-level 평가로 드러낸 benchmark**이다. 논문 v2의 11개 frontier LLM 평균을 요약하면 다음과 같다.
+
+| 문제 | OpenRCA 2.0 결과 | 해석 |
+|---|---:|---|
+| 낮은 최종 진단 정확도 | Outcome F1 **34.1%**, EM **20.7%** | root service와 fault kind를 함께 정확히 맞히는 것은 여전히 어려움 |
+| Ungrounded diagnosis | AnySvc **76.0%** vs Path Reachability **61.5%** | 맞는 root service를 언급해도 전체 case의 **14.5%p**는 검증 가능한 causal path가 없음 |
+| 관계 추론 취약 | Node F1 **62.2%** vs Edge F1 **43.4%** | 관련 component를 찾는 것보다 방향 있는 causal dependency를 연결하는 능력이 **18.8%p** 낮음 |
+
+최고 Outcome F1도 Gemini 3.1 Pro **43.8%**, Claude Opus 4.7 **41.4%** 수준이다. 즉 강한 LLM을 사용해도 **정답 component 발견 → 관계 방향 판정 → causal path 구성** 사이에 큰 성능 손실이 남는다.
+
+이 결과가 본 연구와 직접 연결되는 지점은 다음과 같다.
+
+```text
+Current LLM RCA weakness
+  component discovery > relation reasoning
+                      ↓
+본 연구
+  Structural Relation Recovery
+            +
+  Incident Causal Qualification
+            ↓
+  evidence-grounded causal path
+```
+
+### OpenRCA 2.0 benchmark의 범위와 본 연구의 추가 문제
+
+OpenRCA 2.0의 주목적은 **incident-specific causal process 평가**이며, 완전한 enterprise operational ontology 복원을 평가하는 benchmark는 아니다.
+
+- agent에 topology를 주지 않는 것은 의도된 설계이며, relation은 trace에서 추론해야 한다.
+- primary process metric은 service-level Node/Edge/Path 평가이다.
+- PAVE `causal_graph`는 특정 incident의 verified causal propagation graph이지 지속적인 CMDB/operational ontology 자체가 아니다.
+- `CALLS`, `DEPLOYED_ON`, `RUNS_ON`, `USES_DATABASE`, `USES_MESSAGING` 같은 typed structural relation recovery를 독립적인 Stage로 분리해 점수화하지 않는다.
+
+따라서 본 연구는 OpenRCA 2.0을 대체하기보다 그 앞단을 확장한다.
 
 1. **Structural Relation Recovery** — 시스템이 현실적으로 어떻게 연결되어 있는가?
 2. **Incident Causal Qualification** — 그 연결 중 이번 장애를 실제로 전달한 관계는 무엇인가?
@@ -130,6 +165,8 @@ OpenRCA의 PAVE causal graph는 Stage 2의 evaluator에만 사용한다. Stage 1
 ### OpenRCA entity 범위 주의
 
 OpenRCA 2.0은 enterprise CMDB 전체를 제공하는 데이터셋이 아니다. service/pod/node/span 중심이며, DB·message broker는 telemetry attribute가 노출되는 범위에서만 relation화한다. 따라서 본 연구가 `HAS_APPLICATION`, `USES_DATABASE` 등 모든 enterprise ontology relation을 OpenRCA가 gold annotation으로 제공한다고 주장하지 않는다.
+
+근거: OpenRCA 2.0 v2, Table 2 및 Section 3.2 / Appendix G — https://arxiv.org/html/2606.27154v2
 
 ---
 
