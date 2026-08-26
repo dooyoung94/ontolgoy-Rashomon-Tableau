@@ -33,12 +33,12 @@ STRUCTURAL_RELATION_TYPES = frozenset(
 
 @dataclass(frozen=True)
 class CausalEdge:
-    """A generic relation triple kept under the historical class name.
+    """Generic relation triple retained under the historical public name.
 
-    The class is used for both typed operational relations (Stage 1) and
-    incident-specific causal relations (Stage 2). Renaming it would break the
-    existing experiment artifacts, so the public name is retained for backward
-    compatibility.
+    Stage 1 uses it for typed operational triples such as ``CALLS`` and
+    ``DEPLOYED_ON``. Stage 2 uses it for incident-specific causal semantics.
+    Renaming the class would invalidate existing experiment artifacts, so the
+    public name is intentionally preserved for backward compatibility.
     """
 
     source: str
@@ -47,6 +47,25 @@ class CausalEdge:
 
     def key(self) -> tuple[str, str, str]:
         return self.source, self.relation, self.target
+
+
+@dataclass(frozen=True)
+class RelationObservation:
+    """Model-visible evidence that constrains a possible structural relation.
+
+    The observation deliberately stores *evidence kind* rather than a gold
+    relation label. A downstream abductive generator converts observations into
+    candidate structural triples under the ontology schema. This prevents the
+    telemetry adapter from silently becoming the final relation classifier.
+    """
+
+    observation_id: str
+    source: str
+    target: str
+    evidence_kind: str
+    confidence: float = 1.0
+    text: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -66,7 +85,33 @@ class Evidence:
 
 
 @dataclass
+class StructuralHypothesis:
+    """Candidate typed operational relation produced by Stage-1 abduction."""
+
+    edge: CausalEdge
+    observation_ids: list[str]
+    explanation: str
+    abductive_support: float = 0.0
+    semantic_support: float | None = None
+    semantic_contradiction: float | None = None
+    semantic_neutral: float | None = None
+    soft_logic_score: float | None = None
+
+    @property
+    def final_score(self) -> float:
+        if self.soft_logic_score is not None:
+            return max(0.0, min(1.0, self.soft_logic_score))
+        if self.semantic_support is not None:
+            contradiction = self.semantic_contradiction or 0.0
+            margin = self.semantic_support - contradiction
+            return max(0.0, min(1.0, self.abductive_support + 0.25 * margin))
+        return max(0.0, min(1.0, self.abductive_support))
+
+
+@dataclass
 class Hypothesis:
+    """Stage-2 incident-specific causal hypothesis."""
+
     edge: CausalEdge
     evidence_ids: list[str]
     explanation: str
@@ -80,7 +125,8 @@ class Hypothesis:
 
     @property
     def abductive_score(self) -> float:
-        # Connectivity is eligibility, not evidence that an incident propagated.
+        # Structural connectivity is eligibility, not evidence that this
+        # incident propagated over the dependency.
         return 0.55 * self.temporal_score + 0.45 * self.anomaly_score
 
     @property
@@ -111,10 +157,12 @@ class RcaCase:
     gold_paths: list[list[str]] = field(default_factory=list)
     gold_alarm_nodes: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
-    # Stage-1 typed operational relations in their natural direction, e.g.
-    # caller --CALLS--> callee or service --DEPLOYED_ON--> pod. Kept last to
-    # preserve the historical positional RcaCase constructor signature.
+    # Stage-1 recovered typed operational relations in their natural direction.
+    # Kept near the end to preserve the historical positional constructor.
     structural_relations: list[CausalEdge] = field(default_factory=list)
+    # Raw model-visible Stage-1 relation evidence. Appended after
+    # ``structural_relations`` for backward-compatible positional construction.
+    relation_observations: list[RelationObservation] = field(default_factory=list)
 
     def evidence_by_node(self) -> dict[str, list[Evidence]]:
         out: dict[str, list[Evidence]] = {}
