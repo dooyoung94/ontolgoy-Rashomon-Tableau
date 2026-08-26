@@ -17,6 +17,7 @@ from openrca_mr.models import (
     Evidence,
     Hypothesis,
     RcaCase,
+    RelationObservation,
     REL_CALLS,
     REL_CAUSAL,
     REL_DEPLOYED_ON,
@@ -28,9 +29,15 @@ from openrca_mr.models import (
 )
 from openrca_mr.openrca2 import dump_normalized_cases, load_normalized_cases
 from openrca_mr.pipeline import MissingRelationRCA
+from openrca_mr.psl import StructuralSoftLogicApproximation
+from openrca_mr.semantic import DeterministicStructuralScorer
 from openrca_mr.structural import (
+    AbductiveStructuralRelationGenerator,
+    StructuralRelationRecovery,
+    collect_structural_observations,
     extract_structural_relations,
     propagation_service_edges,
+    recover_structural_relations,
     structural_relation_metrics,
 )
 
@@ -52,19 +59,44 @@ def make_case(case_id="c1"):
             Evidence("e4", "ts-other", "metric", "cpu", 0.10, 2.0, "cpu normal"),
             Evidence("e5", "ts-cache", "metric", "cpu", 0.05, 1.0, "cache stable"),
         ],
-        structural_relations=[
-            CausalEdge("service:ts-api", REL_CALLS, "service:ts-worker"),
-            CausalEdge("service:ts-worker", REL_CALLS, "service:ts-db"),
-            CausalEdge("service:ts-api", REL_DEPLOYED_ON, "pod:api-1"),
-            CausalEdge("pod:api-1", REL_RUNS_ON, "node:node-1"),
-        ],
         gold_root_causes=["ts-db"],
         gold_edges=[
             CausalEdge("ts-db", REL_CAUSAL, "ts-worker"),
             CausalEdge("ts-worker", REL_CAUSAL, "ts-api"),
         ],
         gold_alarm_nodes=["ts-api"],
+        structural_relations=[
+            CausalEdge("service:ts-api", REL_CALLS, "service:ts-worker"),
+            CausalEdge("service:ts-worker", REL_CALLS, "service:ts-db"),
+            CausalEdge("service:ts-api", REL_DEPLOYED_ON, "pod:api-1"),
+            CausalEdge("pod:api-1", REL_RUNS_ON, "node:node-1"),
+        ],
+        relation_observations=[
+            RelationObservation(
+                "ro1",
+                "service:ts-api",
+                "service:ts-worker",
+                "trace_parent_child",
+                0.98,
+                "api parent span has worker child span",
+            ),
+            RelationObservation(
+                "ro2",
+                "service:ts-api",
+                "pod:api-1",
+                "service_pod_cooccurrence",
+                0.98,
+                "api telemetry emitted by api-1",
+            ),
+        ],
     )
+
+
+def test_rca_case_legacy_positional_signature_is_preserved():
+    case = RcaCase("legacy-positional", [], [], [], ["root"])
+    assert case.gold_root_causes == ["root"]
+    assert case.structural_relations == []
+    assert case.relation_observations == []
 
 
 def test_service_normalization_and_edge_metric_ignore_relation():
@@ -85,6 +117,7 @@ def test_relation_masking_preserves_endpoints_and_hides_only_causal_labels():
     visible, truth = mask_relation_types(case, 0.5, seed=42)
     assert len(visible.known_edges) == len(case.known_edges)
     assert visible.structural_relations == case.structural_relations
+    assert visible.relation_observations == case.relation_observations
     original_pairs = {(e.source, e.target) for e in case.known_edges}
     visible_pairs = {(e.source, e.target) for e in visible.known_edges}
     assert original_pairs == visible_pairs
@@ -102,7 +135,7 @@ def test_relation_masking_is_reproducible_and_case_salted():
     assert [e.key() for e in a] != [e.key() for e in b]
 
 
-def test_structural_relation_masking_preserves_pairs_and_is_nested():
+def test_structural_relation_masking_preserves_pairs_observations_and_is_nested():
     case = make_case("structural-mask")
     visible20, truth20 = mask_structural_relation_types(case, 0.25, seed=7)
     visible50, truth50 = mask_structural_relation_types(case, 0.50, seed=7)
@@ -112,6 +145,7 @@ def test_structural_relation_masking_preserves_pairs_and_is_nested():
     assert sum(e.relation == REL_STRUCTURAL_MASKED for e in visible20.structural_relations) == 1
     assert {e.key() for e in truth20} <= {e.key() for e in truth50}
     assert visible20.known_edges == case.known_edges
+    assert visible20.relation_observations == case.relation_observations
 
 
 def test_structural_relation_metrics_are_typed_triple_exact():
@@ -129,8 +163,8 @@ def test_structural_relation_metrics_are_typed_triple_exact():
     assert score.f1 == 0.5
 
 
-def test_structural_extraction_keeps_natural_direction_and_propagation_reverses_calls():
-    traces = pd.DataFrame(
+def _synthetic_structural_traces():
+    return pd.DataFrame(
         [
             {
                 "trace_id": "t1",
@@ -154,6 +188,72 @@ def test_structural_extraction_keeps_natural_direction_and_propagation_reverses_
             },
         ]
     )
+
+
+def test_stage1_collects_observations_before_final_relations():
+    observations = collect_structural_observations(_synthetic_structural_traces())
+    kinds = {item.evidence_kind for item in observations}
+    assert "trace_parent_child" in kinds
+    assert "service_pod_cooccurrence" in kinds
+    assert "pod_node_cooccurrence" in kinds
+    assert "db_client_context" in kinds
+    # Observations carry evidence semantics, not a gold/causal relation field.
+    assert all(not hasattr(item, "relation") for item in observations)
+
+
+def test_stage1_abduction_is_grounded_and_not_cartesian_product():
+    observations = [
+        RelationObservation(
+            "x1", "service:a", "service:b", "trace_parent_child", 0.98, "a parent of b"
+        ),
+        RelationObservation(
+            "x2", "service:c", "pod:p1", "service_pod_cooccurrence", 0.98, "c on p1"
+        ),
+    ]
+    hypotheses = AbductiveStructuralRelationGenerator().generate(observations)
+    observed_pairs = {(item.source, item.target) for item in observations}
+    assert {(h.edge.source, h.edge.target) for h in hypotheses} <= observed_pairs
+    assert CausalEdge("service:a", REL_CALLS, "service:b") in [h.edge for h in hypotheses]
+    assert CausalEdge("service:c", REL_DEPLOYED_ON, "pod:p1") in [h.edge for h in hypotheses]
+    # No unrelated a->p1 or c->b hypothesis may be invented.
+    assert all((h.edge.source, h.edge.target) in observed_pairs for h in hypotheses)
+
+
+def test_stage1_generic_cooccurrence_is_not_automatically_a_relation_fact():
+    observations = [
+        RelationObservation(
+            "weak",
+            "service:a",
+            "service:b",
+            "generic_endpoint_cooccurrence",
+            1.0,
+            "a and b appeared in the same broad collection window",
+        )
+    ]
+    result = StructuralRelationRecovery(relation_threshold=0.5).run(observations)
+    assert len(result.hypotheses) == 1
+    assert result.hypotheses[0].abductive_support < 0.5
+    assert result.relations == []
+
+
+def test_stage1_semantic_and_soft_logic_are_explicit_pipeline_steps():
+    observations = [
+        RelationObservation(
+            "x1", "service:a", "service:b", "trace_parent_child", 0.98, "a parent of b"
+        )
+    ]
+    result = StructuralRelationRecovery(
+        semantic_scorer=DeterministicStructuralScorer(),
+        global_inference=StructuralSoftLogicApproximation(),
+        relation_threshold=0.5,
+    ).run(observations)
+    assert result.hypotheses[0].semantic_support is not None
+    assert result.hypotheses[0].soft_logic_score is not None
+    assert result.relations == [CausalEdge("service:a", REL_CALLS, "service:b")]
+
+
+def test_structural_extraction_keeps_natural_direction_and_propagation_reverses_calls():
+    traces = _synthetic_structural_traces()
     relations = extract_structural_relations(traces)
     assert CausalEdge("service:frontend", REL_CALLS, "service:orders") in relations
     assert CausalEdge("service:orders", REL_USES_DATABASE, "database:postgresql:orders-db") in relations
@@ -165,16 +265,25 @@ def test_structural_extraction_keeps_natural_direction_and_propagation_reverses_
     assert all(edge.source != "frontend" or edge.target != "orders" for edge in propagation)
 
 
-def test_normalized_round_trip_preserves_structural_relations(tmp_path):
+def test_recover_structural_relations_exposes_observations_hypotheses_and_relations():
+    result = recover_structural_relations(_synthetic_structural_traces())
+    assert result.observations
+    assert result.hypotheses
+    assert result.relations
+    assert len(result.relations) <= len(result.hypotheses)
+
+
+def test_normalized_round_trip_preserves_structural_relations_and_observations(tmp_path):
     path = tmp_path / "case.jsonl"
     original = make_case("round-trip")
     dump_normalized_cases([original], path)
     loaded = load_normalized_cases(path)[0]
     assert loaded.structural_relations == original.structural_relations
+    assert loaded.relation_observations == original.relation_observations
     assert loaded.known_edges == original.known_edges
 
 
-def test_legacy_artifact_without_structural_relations_still_loads(tmp_path):
+def test_legacy_artifact_without_stage1_fields_still_loads(tmp_path):
     path = tmp_path / "legacy.jsonl"
     path.write_text(
         '{"case_id":"legacy","symptom_nodes":[],"known_edges":[],"evidence":[]}',
@@ -182,6 +291,7 @@ def test_legacy_artifact_without_structural_relations_still_loads(tmp_path):
     )
     loaded = load_normalized_cases(path)[0]
     assert loaded.structural_relations == []
+    assert loaded.relation_observations == []
 
 
 def test_legacy_edge_masking_still_available_for_stress_test():
@@ -189,6 +299,7 @@ def test_legacy_edge_masking_still_available_for_stress_test():
     visible, masked = mask_relations(case, 0.5, seed=13)
     assert len(visible.known_edges) + len(masked) == len(case.known_edges)
     assert visible.structural_relations == case.structural_relations
+    assert visible.relation_observations == case.relation_observations
 
 
 def test_abduction_generates_only_observed_unknown_pairs():
