@@ -4,6 +4,7 @@ import argparse
 import json
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import build_ops_lite_cases as adapter
@@ -11,6 +12,16 @@ from openrca_mr.openrca2 import dump_normalized_cases
 
 
 _original_case = adapter._case
+_CASE_FILES = (
+    "causal_graph.json",
+    "env.json",
+    "normal_traces.parquet",
+    "abnormal_traces.parquet",
+    "normal_metrics.parquet",
+    "abnormal_metrics.parquet",
+    "normal_logs.parquet",
+    "abnormal_logs.parquet",
+)
 
 
 def _retrying_download(url: str, path: Path, max_attempts: int = 6) -> None:
@@ -48,6 +59,19 @@ def _retrying_download(url: str, path: Path, max_attempts: int = 6) -> None:
 adapter._download = _retrying_download
 
 
+def _download_case_payload(name: str, cache: Path) -> None:
+    folder = cache / name
+
+    def one(filename: str) -> None:
+        adapter._download(
+            f"{adapter.BASE}/cases/{name}/{filename}?download=true",
+            folder / filename,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(one, _CASE_FILES))
+
+
 def _prefiltered_case(name: str, cache: Path):
     """Read the tiny label first; download telemetry only for attributed cases."""
     folder = cache / name
@@ -55,10 +79,12 @@ def _prefiltered_case(name: str, cache: Path):
     adapter._download(f"{adapter.BASE}/cases/{name}/label.txt?download=true", label)
     if label.read_text(encoding="utf-8").strip().lower() != "attributed":
         return None
+    _download_case_payload(name, cache)
     return _original_case(name, cache, require_attributed=True)
 
 
 def _standard_case(name: str, cache: Path):
+    _download_case_payload(name, cache)
     return _original_case(name, cache, require_attributed=False)
 
 
@@ -142,6 +168,7 @@ def _build_prefiltered_limit(out: Path, cache: Path, limit: int) -> list:
                 "skipped_invalid": skipped_invalid,
                 "skipped_error": skipped_error,
                 "prefilter_label_before_telemetry": True,
+                "parallel_case_downloads": True,
                 "out": str(out),
             },
             indent=2,
