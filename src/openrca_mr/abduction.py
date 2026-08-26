@@ -11,17 +11,19 @@ from .models import (
 )
 
 
-class AbductiveRelationGenerator:
-    """Generate causal-relation hypotheses only for observed endpoint pairs.
+class AbductiveCausalRelationGenerator:
+    """Stage-2 abductive generator over already grounded dependency pairs.
 
-    Main-track assumption: collectors/traces already reveal the structural edge;
-    the missing information is whether that dependency participated in causal
-    propagation for this incident. Connectivity is candidate eligibility only,
-    never positive causal evidence.
+    The candidate domain is supplied by observed/recovered structural relations
+    and the controlled causal-mask protocol. The missing information at this
+    stage is *incident participation*: whether a dependency actually propagated
+    the current anomaly. Connectivity is eligibility only, never positive causal
+    evidence.
 
-    For controlled relation masking, every masked observed pair must be scored.
+    Every unresolved observed pair is scored in the main benchmark.
     ``max_candidates`` is therefore unlimited by default; an optional cap exists
-    only for explicit stress/debug runs and must not be used in the main benchmark.
+    only for explicit stress/debug runs and must not be used for reported main
+    results.
     """
 
     def __init__(self, max_candidates: int | None = None):
@@ -53,8 +55,8 @@ class AbductiveRelationGenerator:
             anomaly = self._anomaly_score(src_ev, tgt_ev)
             evidence_ids = sorted({x.evidence_id for x in [*src_ev, *tgt_ev]})
             explanation = (
-                f"Observed dependency {observed.source} -> {observed.target}; "
-                f"candidate relation={REL_CAUSAL}, temporal={temporal:.2f}, "
+                f"Grounded dependency {observed.source} -> {observed.target}; "
+                f"candidate incident relation={REL_CAUSAL}, temporal={temporal:.2f}, "
                 f"endpoint_anomaly={anomaly:.2f}."
             )
             hypotheses.append(
@@ -95,3 +97,7 @@ class AbductiveRelationGenerator:
         src = max((x.abnormality for x in source), default=0.0)
         tgt = max((x.abnormality for x in target), default=0.0)
         return min(src, tgt)
+
+
+# Historical public name retained for old scripts/artifacts.
+AbductiveRelationGenerator = AbductiveCausalRelationGenerator

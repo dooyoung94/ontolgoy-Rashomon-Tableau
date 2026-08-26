@@ -1,86 +1,108 @@
 experiment:
-  dataset_family: OpenRCA2
-  controlled_relation_mask:
-    dataset: anon-ops/ops-lite
-    manifest_rows: 500
-    adapter_case_policy: attributed_and_telemetry_valid
-    mask_ratios: [0.2, 0.4, 0.6]
-    seeds: [42]
-    relation_positive: causal_propagates_to
-    relation_negative: non_causal_dependency
-    structural_edge_visibility: preserved
-    gold_graph_usage: mask_construction_and_evaluation_only
-  standard_protocol:
-    topology_input: false
-    dependency_source: traces_only
-    gold_graph_usage: evaluation_only
+  dataset: anon-ops/ops-lite
+  problem: collector_data_available_but_topology_relation_missing
 
-ablation:
-  - graph_only
-  - abduction
-  - abduction_deberta
-  - abduction_psl
-  - full
+  topology_reference:
+    source: complete_structural_relations_from_full_available_collector_data
+    evaluator_only: true
+    note: OpenRCA does not provide a complete persistent topology gold file
 
-abduction:
-  max_candidates: null
-  candidate_policy: all_observed_masked_pairs
-  edge_threshold: 0.5
-  threshold_tuning_on_full_set: false
+  model_input:
+    - incomplete_topology
+    - collector_observations
 
-semantic:
-  model: MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli
-  max_length: 512
-  batch_size: 16
-  combination: neutral_preserving_contrastive_margin
+  topology_missing_ratios: [0.2, 0.4, 0.6]
+  seeds: [42]
 
-psl:
-  implementation: pslpython
-  note: structural connectivity is eligibility only, not causal evidence
-  evidence:
-    - temporal
-    - anomaly_pair
-    - visible_causal_noncausal_facts
-    - semantic_and_contradiction_when_full
-    - downstream_reachability
+  masking_rule:
+    remove_nodes: false
+    remove_collector_data: false
+    remove_topology_relations_only: true
+    expose_missing_marker: false
 
-llm_baselines:
-  runtime: huggingface_transformers_cpu_float32
-  max_input_tokens: 4096
-  max_new_tokens: 128
-  decoding: greedy_do_sample_false
-  models:
-    - model: HuggingFaceTB/SmolLM2-360M-Instruct
-      nominal_parameters: 360000000
-      published_context_window: 8192
-    - model: Qwen/Qwen2.5-0.5B-Instruct
-      nominal_parameters: 490000000
-      published_context_window: 32768
-  actual_loaded_parameters: measured_at_runtime
+  relation_types:
+    - calls
+    - deployed_on
+    - runs_on
+    - uses_database
+    - uses_messaging
+    - has_service
 
-metrics:
-  service_normalization: lower_strip_ts_prefix_remove_separators
-  filter_loadgen_edges: true
-  controlled_primary:
-    - relation_precision
-    - relation_recall
-    - relation_f1
-  process:
-    - node_f1
-    - edge_f1
-    - process_path_reachability
+methods:
+  S0:
+    code: topology_only
+    description: incomplete_topology_without_recovery
+  S1:
+    code: abduction
+    description: abduction
+  S2:
+    code: abduction_deberta
+    description: abduction_plus_deberta
+  S3:
+    code: abduction_psl
+    description: abduction_plus_psl
+  S4:
+    code: abduction_deberta_psl
+    description: abduction_plus_deberta_plus_psl
+
+recovery:
+  candidate_policy: collector_observed_endpoint_pairs_only
+  allow_all_node_pairs: false
+  ontology_type_constraints: true
+  relation_threshold: 0.5
+
+relation_recovery_metrics:
+  primary:
+    - missing_relation_precision
+    - missing_relation_recall
+    - missing_relation_f1
+    - relation_type_f1
+  secondary:
+    - full_topology_precision
+    - full_topology_recall
+    - full_topology_f1
+
+openrca2_rca_evaluation:
+  topology_conditions:
+    - incomplete
+    - recovered
+    - complete
+  invariant_inputs:
+    - incident_evidence
+    - gold_root_causes_for_evaluation_only
+    - gold_causal_process_for_evaluation_only
+  rca_variant_for_current_smoke: full
+  rca_edge_threshold: 0.5
+  metrics:
+    - any_service_hit
+    - all_service_hit
+    - root_precision
+    - root_recall
+    - root_f1
+    - root_exact
     - root_hit_at_1
     - root_hit_at_3
-  score_diagnostics:
-    - a2_a3_pairwise_decision_disagreement
-    - a2_a3_final_score_mae
-    - a2_a3_final_score_pearson
-    - threshold_crossing_counts
-    - semantic_margin
-    - psl_score_shift
+    - path_reachability
+    - node_precision
+    - node_recall
+    - node_f1
+    - edge_precision
+    - edge_recall
+    - edge_f1
+  primary_deltas:
+    - recovered_minus_incomplete_root_f1
+    - recovered_minus_incomplete_path_reachability
+    - recovered_minus_incomplete_node_f1
+    - recovered_minus_incomplete_edge_f1
+  upper_reference_gaps:
+    - complete_minus_recovered_root_f1
+    - complete_minus_recovered_path_reachability
+    - complete_minus_recovered_node_f1
+    - complete_minus_recovered_edge_f1
 
 leakage_policy:
   causal_graph_json: evaluator_only
   injection_json: evaluator_only
-  gold_alarm_nodes: evaluator_only
-  no_full_set_threshold_tuning: true
+  gold_root: evaluator_only
+  collector_observations_are_never_masked: true
+  removed_topology_relations_are_never_shown_to_model: true

@@ -1,93 +1,310 @@
-# OpenRCA Missing-Relation Reasoning
+# 불완전 운영 온톨로지의 관계 복원과 LLM 기반 RCA
 
-## 연구 목표
+## 연구의 최종 명제
 
-완전한 CMDB/온톨로지를 전제로 하지 않고, 관측된 telemetry에서 **누락 causal relation을 복구하고 root-cause propagation path를 추론**한다.
+운영 환경에서는 로그·메트릭·트레이스가 수집되더라도 CMDB 또는 온톨로지의 관계 토폴로지가 완전하지 않을 수 있다. 특히 `CALLS_API`, `USES_DB`와 같은 의미 관계가 누락되면 원인 노드는 찾더라도 장애 전파 경로와 원인 간선을 정확하게 설명하기 어렵다.
 
-핵심 연구 질문:
+본 연구의 최종 명제는 다음과 같다.
 
-> 불완전한 시스템 관계 그래프에서 Abductive Hypothesis Generation + DeBERTa semantic evidence scoring + Probabilistic Soft Logic inference가 원인 관계와 RCA 경로 복원 성능을 개선하는가?
+> **귀추 추론으로 누락 관계 후보를 생성하고, DeBERTa로 수집 증거와의 의미 적합성을 평가하며, PSL로 온톨로지 제약과 전역 일관성을 반영하면 불완전한 운영 관계를 복원할 수 있다. 또한 완벽하지 않은 복원 결과라도 LLM이 관계 신뢰도와 장애 증거를 함께 활용하면 OpenRCA 2.0 기준의 원인 노드·원인 간선·전파 경로 성능을 추가로 향상시킬 수 있다.**
 
-## 메인 파이프라인
+이 연구는 관계가 완벽하게 복원된다고 주장하지 않는다. 핵심은 다음 두 효과를 분리하여 검증하는 것이다.
 
-```text
-OpenRCA 2.x telemetry + incomplete observed structure
-                |
-                v
-      Evidence Normalization
-                |
-                v
- Abductive Relation Hypothesis Generation
-                |
-                v
-      DeBERTa Semantic Scoring
-                |
-                v
-         PSL Inference
-                |
-        +-------+-------+
-        |               |
-        v               v
- Missing Relation    Root Cause Path
- Recovery            Ranking
-```
+1. 관계 복원 자체가 RCA 성능을 얼마나 회복시키는가?
+2. 복원된 관계를 LLM이 활용할 때 RCA 성능이 얼마나 추가 향상되는가?
 
-### 역할
+---
 
-- **Abduction**: 현재 증상을 설명하는 데 필요한 누락 causal relation 후보를 생성한다.
-- **DeBERTa**: 각 가설이 실제 metric/log/trace evidence와 의미적으로 얼마나 부합하는지 점수화한다.
-- **PSL**: noisy evidence와 후보 relation을 soft logic으로 결합한다. 실제 cross-edge path constraint가 포함된 경우에만 `global inference`라고 부른다.
-- **Rashomon principle**: 초기 단계에서 하나의 원인으로 조기 확정하지 않고 근접한 Top-N 가설을 유지한다. 별도 알고리즘으로 사용하지 않는다.
+## 연구 가설
 
-## 데이터 및 평가 트랙
+- **H1 — 관계 복원 효과:** 귀추 + DeBERTa + PSL은 복원하지 않은 불완전 토폴로지와 개별 구성요소 대비 누락 관계 F1을 향상시킨다.
+- **H2 — RCA 회복 효과:** 복원 토폴로지는 마스킹 토폴로지보다 원인 서비스 F1, Process Path Reachability, Node F1, Edge F1을 향상시킨다.
+- **H3 — LLM 추가 효과:** 동일한 복원 토폴로지에서 LLM RCA는 비-LLM RCA보다 원인 노드·간선·경로 성능을 추가로 향상시킨다.
+- **H4 — 결합 시너지:** LLM은 마스킹 토폴로지보다 신뢰도 기반 복원 토폴로지에서 더 큰 성능 향상을 보이며, 완전 토폴로지 + LLM의 상한선에 근접한다.
 
-### Track A — OpenRCA 2.0 standard protocol
+H1~H4는 결론이 아니라 실험으로 검증할 명제다. 결과가 성립하지 않는 마스킹 비율과 관계 유형도 함께 보고한다.
 
-공식 OpenRCA 2.0 평가와 비교할 때는 **agent 입력에 ground-truth topology/causal graph를 제공하지 않는다.** 모델-visible dependency는 traces에서만 관찰해야 한다.
+---
 
-공식 비교 지표:
+## 대상 관계와 코드 표현
 
-- Root-cause exact/F1 및 AnySvc
-- Node-F1
-- Edge-F1: 정규화된 `(source service, target service)` directed pair 기준
-- Path Reachability: 올바른 root service를 실제로 예측했고, 그 root에서 gold alarm service까지 predicted path가 있을 때만 성공
+마스킹 대상은 단순 인과 라벨이 아니라 실제 운영 온톨로지·CMDB에서 사용하는 타입 관계다.
 
-### Track B — Incomplete-Relation Stress Test
+| 의미 관계 | 코드 관계 | 예시 |
+|---|---|---|
+| `CALLS_API` | `CALLS` | frontend → order-api |
+| `USES_DB` | `USES_DATABASE` | order-api → orders-db |
+| 배포 관계 | `DEPLOYED_ON` | service → pod |
+| 실행 관계 | `RUNS_ON` | pod → node |
+| 메시징 사용 | `USES_MESSAGING` | service → kafka |
+| 서비스 포함 | `HAS_SERVICE` | system → service |
 
-모델-visible structural graph의 일부 edge를 입력에서만 mask한다. 이 트랙은 **통제된 missing-relation 내성 실험**이며 공식 standard leaderboard 숫자와 동일 조건으로 직접 비교하지 않는다.
+노드는 유지하고 관계만 제거한다. 제거된 관계와 정답 관계는 모델에 공개하지 않는다.
 
-Mask ratio:
+---
+
+## 전체 연구 구조
 
 ```text
-0% / 20% / 40% / 60% / 80%
+완전한 기준 토폴로지
+        ↓
+관계만 20% / 40% / 60% 마스킹
+        ↓
+불완전한 운영 토폴로지 + 동일한 수집 데이터
+        ↓
+Track A: 귀추 → DeBERTa → PSL → 신뢰도 기반 관계 복원
+        ↓
+Track B: 복원 토폴로지 + OpenRCA 2.0 방식의 LLM RCA
+        ↓
+원인 노드·원인 간선·장애 전파 경로 평가
 ```
 
-핵심 지표:
+Track A와 Track B는 별도 주제가 아니다. Track A의 복원 결과가 Track B의 입력이 되는 순차 연구 구조다.
 
-- Missing-edge Precision / Recall / F1 (service-pair 기준)
-- Node-F1 / Edge-F1
+---
+
+## Track A — 마스킹된 온톨로지 관계 복원
+
+### 연구 질문
+
+> 수집 데이터는 존재하지만 기존 토폴로지에 객체 간 관계가 없을 때, 귀추 + DeBERTa + PSL로 누락된 타입 관계를 얼마나 복원할 수 있는가?
+
+### 통제 조건
+
+- 토폴로지 관계만 20%, 40%, 60% 제거한다.
+- 노드와 수집 데이터는 제거하지 않는다.
+- 제거된 관계의 위치나 타입을 모델에 알려주지 않는다.
+- OpenRCA 2.0의 원인 정답과 원인 경로는 평가기에만 제공한다.
+
+### 관계 복원 Ablation
+
+| 실험군 | 구성 | 검증 목적 |
+|---|---|---|
+| A0 | 복원 없음 | 불완전 토폴로지 기준선 |
+| A1 | 귀추 | 후보 생성 효과 |
+| A2 | 귀추 + DeBERTa | 의미 증거 점수 효과 |
+| A3 | 귀추 + PSL | 온톨로지 제약·전역 일관성 효과 |
+| A4 | 귀추 + DeBERTa + PSL | 전체 제안 방법 |
+| A5 | 완전 토폴로지 | 통제된 상한선 |
+
+### 복원 출력
+
+복원 결과는 관계 존재 여부만이 아니라 관계 유형, 신뢰도, 근거를 포함한다.
+
+$$
+\hat{G}=\{(u,r,v,p_{uv}^{r},e_{uv})\}
+$$
+
+- $u,v$: 출발·도착 객체
+- $r$: 관계 유형
+- $p_{uv}^{r}$: 복원 신뢰도
+- $e_{uv}$: 복원에 사용한 수집 증거와 규칙 근거
+
+### 평가 지표
+
+남아 있는 관계 때문에 전체 점수가 높아지는 착시를 피하기 위해 실제로 제거한 관계만 주 지표로 평가한다.
+
+- Missing Relation Precision / Recall / F1
+- 관계 유형별 F1
+- MRR, Hits@K
+- 잘못된 관계 삽입률
+- PSL 적용 전후 논리적 모순률
+- 복원 후 전체 토폴로지 F1은 보조 지표
+
+---
+
+## Track B — 복원 관계를 활용한 LLM RCA 성능 향상
+
+### 연구 질문
+
+> Track A에서 복원한 관계와 신뢰도를 LLM이 장애 증거와 함께 사용하면, 복원 관계만 사용한 RCA보다 원인 노드·원인 간선·전파 경로 성능을 얼마나 추가 향상시킬 수 있는가?
+
+### 2×2 요인 실험
+
+관계 복원 효과와 LLM 효과를 분리하기 위해 다음 조건을 비교한다.
+
+| 실험군 | 토폴로지 입력 | RCA 방법 | 검증 목적 |
+|---|---|---|---|
+| O0 | 토폴로지 없음 | OpenRCA 2.0 LLM Agent | 공식 no-topology 기준선 |
+| B0 | 마스킹 토폴로지 | 비-LLM RCA | 최저 기준선 |
+| B1 | A4 복원 토폴로지 | 비-LLM RCA | 순수 관계 복원 효과 |
+| B2 | 마스킹 토폴로지 | LLM RCA | 불완전 관계에서의 순수 LLM 효과 |
+| B3 | A4 복원 토폴로지 | LLM RCA | 전체 제안 방법 |
+| B4 | 완전 토폴로지 | LLM RCA | 통제된 상한선 |
+
+O0는 OpenRCA 2.0의 원 조건을 재현하기 위한 외부 기준선이다. OpenRCA 2.0은 평가용 정답 그래프를 제공하지만 에이전트 입력에는 서비스 의존 토폴로지를 주지 않고 trace에서 관계를 추론하게 한다. 따라서 B2~B4는 공식 leaderboard 조건과 동일한 비교가 아니라, 온톨로지 관계 정보의 추가 효과를 측정하는 통제 확장 실험으로 보고한다.
+
+최종 제안 파이프라인은 다음과 같다.
+
+```text
+Abduction → DeBERTa → PSL → Recovered Ontology → OpenRCA 2.0 LLM RCA
+```
+
+### LLM의 역할
+
+LLM은 Track A의 관계 정답을 다시 만드는 평가기가 아니다. 다음 기능으로 RCA를 고도화한다.
+
+- 장애 증거와 관련된 복원 관계 선택
+- 관계 신뢰도를 반영한 원인 후보 재순위화
+- 저신뢰 또는 상충 관계의 RCA 사용 여부 판단
+- 원인 노드에서 장애 현상까지의 전파 경로 추론
+- 로그·메트릭·트레이스·온톨로지 관계를 결합한 장애 유형 판단
+- 선택한 원인과 경로에 대한 근거 생성
+
+Track A의 복원 점수는 고정한 뒤 LLM에 제공한다. LLM이 복원 그래프를 임의로 수정하게 하지 않아야 관계 복원 효과와 LLM 추론 효과를 분리할 수 있다.
+
+### 효과 분해
+
+관계 복원으로 얻은 순수 효과:
+
+$$
+\Delta_{Recovery}=M(B1)-M(B0)
+$$
+
+마스킹 토폴로지에서의 LLM 효과:
+
+$$
+\Delta_{LLM,masked}=M(B2)-M(B0)
+$$
+
+복원 토폴로지에서 LLM이 추가한 효과:
+
+$$
+\Delta_{LLM,recovered}=M(B3)-M(B1)
+$$
+
+복원과 LLM의 결합 시너지:
+
+$$
+S_{interaction}=[M(B3)-M(B1)]-[M(B2)-M(B0)]
+$$
+
+- $S_{interaction}>0$: LLM이 복원 관계를 유효한 RCA 정보로 활용함
+- $S_{interaction}\approx0$: 관계 복원과 LLM의 효과가 독립적임
+- $S_{interaction}<0$: 오복원 관계가 LLM 추론을 방해할 가능성이 있음
+
+완전 토폴로지 대비 성능 회복률:
+
+$$
+Recovery\ Ratio=\frac{M(B3)-M(B2)}{M(B4)-M(B2)}
+$$
+
+완전 복원 여부보다 마스킹으로 손실된 RCA 성능을 어느 정도 회복했는지를 핵심 결과로 보고한다.
+
+### OpenRCA 2.0 기반 평가 지표
+
+- Any-Service Hit / All-Service Hit
+- Root Cause Precision / Recall / F1
+- Root Cause Exact Match
+- Root Cause Hit@1 / Hit@3
 - Process Path Reachability
-- Root Cause Top-1 / Top-3
-- 성능 저하율 vs. missing-edge ratio
+- Node Precision / Recall / F1
+- Edge Precision / Recall / F1
 
-## 필수 Ablation
+주요 결과는 Root F1, Path Reachability, Node F1, Edge F1의 변화량으로 제시한다. 특히 OpenRCA 계열 방법의 약점인 Edge F1과 원인 전파 경로 회복을 핵심 지표로 본다.
+
+---
+
+## 누수 방지 원칙
+
+- 완전 토폴로지는 마스킹 생성과 상한선 평가에만 사용한다.
+- 제거된 관계는 후보 생성, DeBERTa, PSL, LLM 입력에 제공하지 않는다.
+- Gold causal graph, injection label, gold root는 평가기에만 제공한다.
+- 모든 B0~B4 조건에서 장애 사례와 수집 증거는 동일하게 유지한다.
+- 비교 조건에서는 토폴로지와 LLM 사용 여부만 변경한다.
+- LLM 프롬프트, 모델, temperature, 출력 형식, 호출 횟수를 고정한다.
+
+---
+
+## 데이터와 해석 범위
+
+- OpenRCA 2.0의 장애 사례와 단계별 원인 전파 정답을 RCA 평가에 사용한다.
+- OpenRCA 2.0이 완전한 영구 토폴로지 정답을 제공한다고 가정하지 않는다.
+- 현재 완전 기준 토폴로지는 사용 가능한 수집 데이터에서 구성한 통제 실험용 구조다.
+- 공개 mirror 또는 snapshot을 사용하면 dataset ID와 버전을 결과에 기록한다.
+- 결과는 통제된 관계 누락 환경에서의 복원 및 LLM-RCA 효과로 한정하여 해석한다.
+
+---
+
+## 구현 상태
+
+### 현재 구현
+
+- 관계 마스킹 20% / 40% / 60%
+- 귀추 / DeBERTa / PSL 관계 복원 Ablation
+- 마스킹·복원·완전 토폴로지의 비-LLM RCA 비교
+- Root / Path / Node / Edge 지표와 변화량 계산
+- 누수 방지형 OpenRCA 사례 로더와 자동 검증
+
+### 다음 구현
+
+- 동일 복원 그래프에 대한 LLM RCA 인터페이스
+- B0~B4 2×2 요인 실험 자동화
+- LLM 추가 효과와 결합 시너지 계산
+- 20건 검증 후 OpenRCA 2.0 전체 사례 확장
+
+README의 Track B는 최종 연구 명제와 실험 설계다. LLM 평가가 완료되기 전 결과가 확보된 것처럼 표현하지 않는다.
+
+---
+
+## 코드 구조
 
 ```text
-A0  Observed graph only
-A1  Abduction only
-A2  Abduction + DeBERTa
-A3  Abduction + PSL
-A4  Abduction + DeBERTa + PSL   <- Full
+수집 데이터에서 관계 단서 생성
+src/openrca_mr/structural.py
+
+토폴로지 관계 제거 / 복원
+src/openrca_mr/topology_recovery.py
+
+관계 복원 평가
+src/openrca_mr/stage1_eval.py
+
+토폴로지 + OpenRCA 장애 원인 분석 통합 평가
+src/openrca_mr/topology_rca_eval.py
+
+관계 복원 실행
+scripts/run_structural_recovery.py
+
+통합 평가 실행
+scripts/run_topology_rca_evaluation.py
+
+자동 검증 및 실제 20건 실험
+.github/workflows/openrca2-smoke.yml
 ```
 
-## 데이터셋 버전 원칙
+### Track A 실행
 
-- 논문 OpenRCA 2.0 PAVE 500-case 공식 artifact가 확보되면 Track A의 최종 수치는 그 버전에서 산출한다.
-- 공개 mirror/snapshot으로 수행한 실험은 반드시 정확한 dataset ID/version을 결과에 기록하고, 공식 PAVE 결과와 동일 데이터라고 가정하지 않는다.
-- Gold `causal_graph.json` / injection labels는 evaluator에서만 읽는다. 후보 생성·DeBERTa·PSL 입력으로 사용하지 않는다.
+```bash
+python scripts/run_structural_recovery.py \
+  --data artifacts/topology_cases.jsonl \
+  --out results/a4_40.json \
+  --variant abduction_deberta_psl \
+  --topology-missing-ratio 0.40 \
+  --seed 42
+```
 
-## 이전 연구
+### 현재 Track A + 비-LLM RCA 통합 평가
 
-MAGIC, WN18RR, WebQSP, Rashomon Worlds, Tableau, BADP 기반 이전 연구와 실험 결과는 [`studycase.md`](studycase.md)에 보존한다.
+```bash
+python scripts/run_topology_rca_evaluation.py \
+  --data artifacts/topology_cases.jsonl \
+  --out results/topology_rca_40.json \
+  --topology-variant abduction_deberta_psl \
+  --rca-variant full \
+  --topology-missing-ratio 0.40 \
+  --seed 42
+```
 
-전체 전환 전 코드는 브랜치 `archive/pre-openrca2-rewrite-20260825`에서 확인할 수 있다.
+`--rca-variant full`은 현재 귀추 + DeBERTa + PSL 기반 RCA 구성으로, LLM 실행을 의미하지 않는다. 최종 Track B에서는 고정된 복원 토폴로지를 OpenRCA 2.0 방식의 LLM 에이전트에 추가 입력하여 B2~B4를 평가한다.
+
+---
+
+## 최종 논문 기여
+
+1. CMDB·온톨로지의 타입 관계가 누락된 운영 환경을 관계 마스킹 실험으로 정의한다.
+2. 귀추 + DeBERTa + PSL을 결합한 신경-기호 관계 복원 방법을 제안한다.
+3. 관계 복원 성능과 최종 RCA 성능을 분리하여 평가한다.
+4. 복원 관계가 LLM의 원인 노드·간선·전파 경로 추론을 얼마나 추가 향상시키는지 정량화한다.
+5. 완벽한 관계 복원이 아니어도 완전 토폴로지에 근접한 RCA 성능을 낼 수 있는 조건을 분석한다.
+
+이전 MAGIC, WN18RR, WebQSP, Rashomon Worlds, Tableau, BADP 기반 연구와 실험은 [`studycase.md`](studycase.md)에 보존한다.

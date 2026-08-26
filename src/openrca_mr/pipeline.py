@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .abduction import AbductiveRelationGenerator
+from .abduction import AbductiveCausalRelationGenerator
 from .models import Hypothesis, RcaCase, REL_CAUSAL
 from .semantic import apply_semantic_scores
 
@@ -15,18 +15,28 @@ class RcaPrediction:
     predicted_edges: list[tuple[str, str, str]]
 
 
-class MissingRelationRCA:
-    """Composable relation-recovery + RCA pipeline used by all ablations."""
+class IncidentCausalRCA:
+    """Stage-2 incident causal qualification and RCA pipeline.
+
+    Stage 1 structural recovery is intentionally outside this class. Input
+    ``RcaCase.known_edges`` contains grounded service-level propagation
+    candidates (or controlled masked pairs), and this pipeline decides which of
+    them participated in the current incident before ranking roots and paths.
+    """
 
     def __init__(
         self,
-        generator: AbductiveRelationGenerator | None = None,
+        generator: AbductiveCausalRelationGenerator | None = None,
         semantic_scorer=None,
         global_inference=None,
         edge_threshold: float = 0.5,
         max_root_causes: int = 3,
     ):
-        self.generator = generator or AbductiveRelationGenerator()
+        if not 0.0 <= edge_threshold <= 1.0:
+            raise ValueError("edge_threshold must be in [0, 1]")
+        if max_root_causes <= 0:
+            raise ValueError("max_root_causes must be positive")
+        self.generator = generator or AbductiveCausalRelationGenerator()
         self.semantic_scorer = semantic_scorer
         self.global_inference = global_inference
         self.edge_threshold = edge_threshold
@@ -46,6 +56,9 @@ class MissingRelationRCA:
         known_causal = [edge for edge in case.known_edges if edge.relation == REL_CAUSAL]
         predicted_edges = [edge.key() for edge in known_causal]
         predicted_edges.extend(h.edge.key() for h in selected)
+        # Stable deduplication is important when a visible causal edge and a
+        # generated candidate converge to the same normalized triple.
+        predicted_edges = list(dict.fromkeys(predicted_edges))
 
         root_hypotheses = list(selected)
         for edge in known_causal:
@@ -62,9 +75,8 @@ class MissingRelationRCA:
             )
 
         # A standard OpenRCA agent must still name a root cause when no causal
-        # edge crosses the fixed decision threshold (or traces expose no edge).
-        # This fallback uses only model-visible telemetry and therefore does not
-        # introduce topology or gold-label leakage.
+        # candidate crosses the fixed threshold. The fallback reads model-visible
+        # telemetry only and therefore introduces no topology/gold leakage.
         if root_hypotheses:
             roots = self._rank_roots(case, root_hypotheses)
         else:
@@ -84,7 +96,7 @@ class MissingRelationRCA:
         by_node = case.evidence_by_node()
         nodes = {h.edge.source for h in hypotheses if h.edge.source not in symptoms}
         if not nodes:
-            return MissingRelationRCA._rank_evidence_only_roots(case)
+            return IncidentCausalRCA._rank_evidence_only_roots(case)
 
         outgoing: dict[str, float] = {node: 0.0 for node in nodes}
         incoming: dict[str, float] = {node: 0.0 for node in nodes}
@@ -125,12 +137,7 @@ class MissingRelationRCA:
 
     @staticmethod
     def _rank_evidence_only_roots(case: RcaCase) -> list[str]:
-        """Telemetry-only fallback when no causal edge is selected.
-
-        Rank non-symptom services by anomaly magnitude and earliest anomalous
-        onset. Stable-presence evidence remains a weak candidate rather than
-        causing an empty RCA output.
-        """
+        """Telemetry-only fallback when no causal edge is selected."""
         symptoms = set(case.symptom_nodes)
         by_node = case.evidence_by_node()
         nodes = [node for node in by_node if node not in symptoms]
@@ -161,3 +168,7 @@ class MissingRelationRCA:
             ranked.append((node, score))
         ranked.sort(key=lambda x: (-x[1], x[0]))
         return [node for node, _ in ranked]
+
+
+# Historical public class name retained for old scripts and experiment artifacts.
+MissingRelationRCA = IncidentCausalRCA

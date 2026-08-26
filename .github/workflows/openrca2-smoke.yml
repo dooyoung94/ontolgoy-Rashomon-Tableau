@@ -1,9 +1,14 @@
-name: OpenRCA Missing-Relation Smoke
+name: Topology Relation Recovery and RCA
 
 on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      limit:
+        description: Number of OpenRCA cases
+        required: false
+        default: '20'
 
 jobs:
   unit:
@@ -13,55 +18,104 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install core and tests
-        run: pip install -e '.[test]'
-      - name: Run unit tests
-        run: pytest -q
+      - name: Install and test
+        run: |
+          pip install -e '.[test]'
+          pytest -q
 
-  ops_lite_prepare:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
+  psl_smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: Install adapter dependencies
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install PSL
+        run: pip install -e '.[psl]'
+      - name: Check one missing topology relation
+        run: |
+          python - <<'PY'
+          from openrca_mr.models import CausalEdge, RelationObservation, REL_CALLS
+          from openrca_mr.psl import PslStructuralInference
+          from openrca_mr.topology_recovery import recover_missing_topology_relations
+
+          observations = [
+              RelationObservation(
+                  'o1', 'service:frontend', 'service:orders',
+                  'trace_parent_child', 0.98,
+                  'frontend parent span has orders child span'
+              )
+          ]
+          result = recover_missing_topology_relations(
+              visible_relations=[],
+              observations=observations,
+              global_inference=PslStructuralInference(),
+              relation_threshold=0.5,
+          )
+          expected = CausalEdge('service:frontend', REL_CALLS, 'service:orders')
+          assert expected in result.added_relations
+          print('TOPOLOGY_RELATION_RECOVERY_OK', [e.key() for e in result.added_relations])
+          PY
+
+  prepare_topology_cases:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[topology-rca-20]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install collector adapter
         run: |
           python -m pip install --upgrade pip
           pip install -e .
           pip install 'pyarrow>=16'
-      - name: Build leakage-safe 20-case telemetry set
+      - name: Build complete topology reference and collector observations
         env:
           HF_HUB_DISABLE_XET: '1'
+          LIMIT: ${{ github.event.inputs.limit || '20' }}
         run: |
-          python scripts/build_ops_lite_cases_fast.py --limit 20 --out artifacts/ops_lite_20.jsonl
+          python scripts/build_ops_lite_cases_fast.py \
+            --limit "$LIMIT" \
+            --out artifacts/topology_cases.jsonl
           python - <<'PY'
           from openrca_mr.openrca2 import load_normalized_cases
-          cases=load_normalized_cases('artifacts/ops_lite_20.jsonl')
-          assert len(cases) == 20, len(cases)
+          cases = load_normalized_cases('artifacts/topology_cases.jsonl')
+          assert cases
+          assert all(c.structural_relations for c in cases)
+          assert all(c.relation_observations for c in cases)
           assert all(c.gold_root_causes and c.gold_edges for c in cases)
-          assert all(c.known_edges and c.evidence and c.symptom_nodes for c in cases)
-          print('PREPARED', len(cases))
-          print('AVG_KNOWN_EDGES', sum(len(c.known_edges) for c in cases)/len(cases))
-          print('AVG_EVIDENCE', sum(len(c.evidence) for c in cases)/len(cases))
+          print('CASES', len(cases))
+          print('MEAN_TOPOLOGY_RELATIONS', sum(len(c.structural_relations) for c in cases) / len(cases))
+          print('MEAN_COLLECTOR_OBSERVATIONS', sum(len(c.relation_observations) for c in cases) / len(cases))
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: ops-lite-20-normalized
-          path: artifacts/ops_lite_20.jsonl
+          name: topology-cases
+          path: artifacts/topology_cases.jsonl
           retention-days: 7
 
-  ops_lite_benchmark:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
-    needs: ops_lite_prepare
+  topology_recovery:
+    if: github.event_name == 'workflow_dispatch'
+    needs: prepare_topology_cases
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        variant: [graph_only, abduction, abduction_deberta, abduction_psl, full]
+        missing_ratio: [0.2, 0.4, 0.6]
+        variant:
+          - topology_only
+          - abduction
+          - abduction_deberta
+          - abduction_psl
+          - abduction_deberta_psl
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -73,78 +127,144 @@ jobs:
           java-version: '17'
       - uses: actions/download-artifact@v4
         with:
-          name: ops-lite-20-normalized
+          name: topology-cases
           path: artifacts
-      - name: Install inference stack
+      - name: Install recovery stack
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e '.[all]'
-      - name: Run ${{ matrix.variant }} relation mask
+      - name: Recover missing topology relations
         env:
           HF_HUB_DISABLE_XET: '1'
           TOKENIZERS_PARALLELISM: 'false'
           VARIANT: ${{ matrix.variant }}
+          RATIO: ${{ matrix.missing_ratio }}
+          LIMIT: ${{ github.event.inputs.limit || '20' }}
         run: |
-          python scripts/run_openrca2_ablation.py \
-            --data artifacts/ops_lite_20.jsonl \
-            --out results/${{ matrix.variant }}.json \
-            --dataset-id 'anon-ops/ops-lite:20:relation_mask_v1' \
-            --mask-mode relation \
-            --mask-ratio 0.40 \
-            --seed 42 \
+          SAFE_RATIO=$(echo '${{ matrix.missing_ratio }}' | tr '.' '_')
+          OUT="results/${{ matrix.variant }}_${SAFE_RATIO}.json"
+          python scripts/run_structural_recovery.py \
+            --data artifacts/topology_cases.jsonl \
+            --out "$OUT" \
             --variant '${{ matrix.variant }}' \
-            --limit 20
+            --topology-missing-ratio '${{ matrix.missing_ratio }}' \
+            --seed 42 \
+            --relation-threshold 0.5 \
+            --limit "$LIMIT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: topology-result-${{ matrix.variant }}-${{ matrix.missing_ratio }}
+          path: results/*.json
+          retention-days: 14
+
+  topology_rca:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[topology-rca-20]')
+    needs: prepare_topology_cases
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        missing_ratio: [0.2, 0.4, 0.6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: topology-cases
+          path: artifacts
+      - name: Install topology and RCA stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e '.[all]'
+      - name: Run topology recovery plus OpenRCA RCA
+        env:
+          HF_HUB_DISABLE_XET: '1'
+          TOKENIZERS_PARALLELISM: 'false'
+          RATIO: ${{ matrix.missing_ratio }}
+          LIMIT: ${{ github.event.inputs.limit || '20' }}
+        run: |
+          SAFE_RATIO=$(echo "$RATIO" | tr '.' '_')
+          OUT="results/topology_rca_${SAFE_RATIO}.json"
+          python scripts/run_topology_rca_evaluation.py \
+            --data artifacts/topology_cases.jsonl \
+            --out "$OUT" \
+            --topology-variant abduction_deberta_psl \
+            --rca-variant full \
+            --topology-missing-ratio "$RATIO" \
+            --seed 42 \
+            --relation-threshold 0.5 \
+            --rca-edge-threshold 0.5 \
+            --limit "$LIMIT"
           python - <<'PY'
-          import json, os
-          r=json.load(open('results/' + os.environ['VARIANT'] + '.json'))
-          print('RESULT', r['variant'], json.dumps(r['summary'], sort_keys=True))
+          import glob, json
+          path = glob.glob('results/topology_rca_*.json')[0]
+          r = json.load(open(path))
+          print('TOPOLOGY', json.dumps(r['topology_summary'], sort_keys=True))
+          print('RCA_INCOMPLETE', json.dumps(r['rca_summary']['incomplete'], sort_keys=True))
+          print('RCA_RECOVERED', json.dumps(r['rca_summary']['recovered'], sort_keys=True))
+          print('RCA_COMPLETE', json.dumps(r['rca_summary']['complete'], sort_keys=True))
+          print('RCA_DELTA', json.dumps(r['rca_summary']['delta_recovered_vs_incomplete'], sort_keys=True))
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: relation-result-${{ matrix.variant }}
-          path: results/${{ matrix.variant }}.json
-          retention-days: 7
+          name: topology-rca-${{ matrix.missing_ratio }}
+          path: results/topology_rca_*.json
+          retention-days: 14
 
-  ops_lite_aggregate:
-    if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
-    needs: ops_lite_benchmark
+  aggregate_rca:
+    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[topology-rca-20]'))
+    needs: topology_rca
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: relation-result-*
+          pattern: topology-rca-*
           path: results
           merge-multiple: true
-      - name: Aggregate relation-mask A0-A4
+      - name: Build OpenRCA comparison table
         run: |
           python - <<'PY'
-          import json
-          order=['graph_only','abduction','abduction_deberta','abduction_psl','full']
+          import glob, json
           rows=[]
-          for v in order:
-              p=f'results/{v}.json'
-              try: r=json.load(open(p))
-              except FileNotFoundError: continue
-              s=r['summary']
+          for path in sorted(glob.glob('results/topology_rca_*.json')):
+              r=json.load(open(path))
+              t=r['topology_summary']
+              q=r['rca_summary']
               rows.append({
-                  'variant':v,
-                  'relation_accuracy':s.get('relation_accuracy'),
-                  'relation_precision':s.get('relation_precision'),
-                  'relation_recall':s.get('relation_recall'),
-                  'relation_f1':s.get('relation_f1'),
-                  'node_f1':s.get('node_f1'),
-                  'edge_f1':s.get('edge_f1'),
-                  'path_reachability':s.get('process_path_reachability'),
-                  'root_hit_at_1':s.get('root_hit_at_1'),
-                  'root_hit_at_3':s.get('root_hit_at_3'),
+                  'missing_ratio': r['topology_missing_ratio'],
+                  'topology_missing_f1': t['macro_missing_relation_f1'],
+                  'incomplete_root_f1': q['incomplete']['root_f1'],
+                  'recovered_root_f1': q['recovered']['root_f1'],
+                  'complete_root_f1': q['complete']['root_f1'],
+                  'incomplete_path': q['incomplete']['path_reachability'],
+                  'recovered_path': q['recovered']['path_reachability'],
+                  'complete_path': q['complete']['path_reachability'],
+                  'incomplete_node_f1': q['incomplete']['node_f1'],
+                  'recovered_node_f1': q['recovered']['node_f1'],
+                  'complete_node_f1': q['complete']['node_f1'],
+                  'incomplete_edge_f1': q['incomplete']['edge_f1'],
+                  'recovered_edge_f1': q['recovered']['edge_f1'],
+                  'complete_edge_f1': q['complete']['edge_f1'],
+                  'delta_root_f1': q['delta_recovered_vs_incomplete']['root_f1'],
+                  'delta_path': q['delta_recovered_vs_incomplete']['path_reachability'],
+                  'delta_node_f1': q['delta_recovered_vs_incomplete']['node_f1'],
+                  'delta_edge_f1': q['delta_recovered_vs_incomplete']['edge_f1'],
               })
-          print('RELATION_MASK_A0_A4_RESULTS')
+          rows.sort(key=lambda x: x['missing_ratio'])
           print(json.dumps(rows, indent=2))
-          json.dump(rows, open('results/summary.json','w'), indent=2)
+          json.dump(rows, open('openrca_topology_rca_summary.json','w'), indent=2)
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: ops-lite-20-relation-mask-results
-          path: results
+          name: openrca-topology-rca-summary
+          path: openrca_topology_rca_summary.json
           retention-days: 14
