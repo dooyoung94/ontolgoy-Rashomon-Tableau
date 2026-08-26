@@ -7,9 +7,13 @@ from pathlib import Path
 from .models import RcaCase, STRUCTURAL_RELATION_TYPES
 from .openrca2 import load_normalized_cases
 from .psl import PslStructuralInference
+from .research_protocol import audit_reference_protocol, topology_group_id
 from .semantic import DebertaStructuralRelationScorer
 from .structural import relation_type_counts, structural_relation_metrics
-from .topology_recovery import mask_topology_relations, recover_missing_topology_relations
+from .topology_recovery import (
+    mask_topology_relations_by_group,
+    recover_missing_topology_relations,
+)
 
 
 # 논문 표의 이름과 코드 이름을 맞춘다.
@@ -68,6 +72,7 @@ def run_stage1_evaluation(
     seed: int = 42,
     relation_threshold: float = 0.5,
     limit: int = 0,
+    allow_derived_reference: bool = False,
 ) -> dict:
     """Evaluate recovery when relations are absent from an existing topology.
 
@@ -98,10 +103,8 @@ def run_stage1_evaluation(
     if reference_data:
         reference_cases = load_normalized_cases(reference_data)
         reference_map = _unique_case_map(reference_cases, "reference data")
-        reference_protocol = "independent_topology_reference"
     else:
         reference_map = _unique_case_map(cases, "embedded complete topology")
-        reference_protocol = "controlled_topology_relation_missingness"
 
     missing_case_ids = [case.case_id for case in cases if case.case_id not in reference_map]
     if missing_case_ids:
@@ -110,22 +113,44 @@ def run_stage1_evaluation(
             + ", ".join(sorted(missing_case_ids))
         )
 
+    selected_reference_cases = [reference_map[case.case_id] for case in cases]
+    reference_audit = audit_reference_protocol(
+        cases,
+        selected_reference_cases,
+        data=data,
+        reference_data=reference_data,
+        allow_derived_reference=allow_derived_reference,
+    )
+    reference_protocol = (
+        "independent_topology_reference"
+        if reference_audit.independent_reference
+        else "derived_reference_diagnostic_only"
+    )
+
+    full_relations_by_case = {
+        case.case_id: list(reference_map[case.case_id].structural_relations)
+        for case in cases
+    }
+    case_groups = {case.case_id: topology_group_id(case) for case in cases}
+    masks = mask_topology_relations_by_group(
+        full_relations_by_case,
+        case_groups,
+        topology_missing_ratio,
+        seed,
+    )
+
     semantic = DebertaStructuralRelationScorer() if use_deberta else None
     logic = PslStructuralInference() if use_psl else None
 
     rows: list[dict] = []
     missing_tp = missing_fp = missing_fn = 0
+    candidate_gold_hits = candidate_gold_total = 0
     full_tp = full_fp = full_fn = 0
     type_counts = defaultdict(lambda: {"tp": 0, "fp": 0, "fn": 0})
 
     for case in cases:
         full_truth = list(reference_map[case.case_id].structural_relations)
-        masked = mask_topology_relations(
-            case_id=case.case_id,
-            full_relations=full_truth,
-            ratio=topology_missing_ratio,
-            seed=seed,
-        )
+        masked = masks[case.case_id]
 
         if do_recovery:
             recovered = recover_missing_topology_relations(
@@ -138,10 +163,12 @@ def run_stage1_evaluation(
             added_relations = recovered.added_relations
             final_topology = recovered.recovered_topology
             n_hypotheses = len(recovered.hypotheses)
+            hypothesis_keys = _typed_keys(h.edge for h in recovered.hypotheses)
         else:
             added_relations = []
             final_topology = list(masked.visible_relations)
             n_hypotheses = 0
+            hypothesis_keys = set()
 
         # 주 지표: 실제로 토폴로지에서 제거한 관계를 얼마나 되찾았는가.
         missing_score = structural_relation_metrics(added_relations, masked.missing_relations)
@@ -153,6 +180,9 @@ def run_stage1_evaluation(
         missing_tp += len(tp_keys)
         missing_fp += len(fp_keys)
         missing_fn += len(fn_keys)
+        if do_recovery:
+            candidate_gold_hits += len(hypothesis_keys & gold_missing)
+            candidate_gold_total += len(gold_missing)
 
         for key in tp_keys:
             type_counts[key[1]]["tp"] += 1
@@ -172,9 +202,19 @@ def run_stage1_evaluation(
         rows.append(
             {
                 "case_id": case.case_id,
-                "missing_relation_precision": missing_score.precision,
-                "missing_relation_recall": missing_score.recall,
-                "missing_relation_f1": missing_score.f1,
+                "topology_group": case_groups[case.case_id],
+                # Empty-denominator cases are retained for coverage accounting,
+                # but must not inflate macro recovery scores to 1.0.
+                "missing_relation_precision": (
+                    missing_score.precision if gold_missing else None
+                ),
+                "missing_relation_recall": missing_score.recall if gold_missing else None,
+                "missing_relation_f1": missing_score.f1 if gold_missing else None,
+                "candidate_recall_ceiling": (
+                    len(hypothesis_keys & gold_missing) / len(gold_missing)
+                    if do_recovery and gold_missing
+                    else None
+                ),
                 "full_topology_precision": full_score.precision,
                 "full_topology_recall": full_score.recall,
                 "full_topology_f1": full_score.f1,
@@ -204,6 +244,14 @@ def run_stage1_evaluation(
             "f1": f1,
         }
 
+    total_full_relations = sum(row["n_full_relations"] for row in rows)
+    total_missing_relations = sum(row["n_missing_relations"] for row in rows)
+    if topology_missing_ratio > 0.0 and total_missing_relations == 0:
+        raise ValueError(
+            "the requested topology_missing_ratio removed zero relations; "
+            "the experiment has no recovery denominator"
+        )
+
     summary = {
         "macro_missing_relation_precision": _mean(rows, "missing_relation_precision"),
         "macro_missing_relation_recall": _mean(rows, "missing_relation_recall"),
@@ -214,6 +262,25 @@ def run_stage1_evaluation(
         "micro_missing_tp": missing_tp,
         "micro_missing_fp": missing_fp,
         "micro_missing_fn": missing_fn,
+        "false_edge_insertion_rate": (
+            missing_fp / (missing_tp + missing_fp)
+            if missing_tp + missing_fp
+            else 0.0
+        ),
+        "candidate_recall_ceiling": (
+            candidate_gold_hits / candidate_gold_total
+            if candidate_gold_total
+            else None
+        ),
+        "n_evaluable_missing_cases": sum(
+            row["n_missing_relations"] > 0 for row in rows
+        ),
+        "requested_missing_ratio": topology_missing_ratio,
+        "realized_missing_ratio": (
+            total_missing_relations / total_full_relations
+            if total_full_relations
+            else None
+        ),
         "macro_full_topology_f1": _mean(rows, "full_topology_f1"),
         "micro_full_topology_precision": full_micro_p,
         "micro_full_topology_recall": full_micro_r,
@@ -234,6 +301,8 @@ def run_stage1_evaluation(
         "seed": seed,
         "relation_threshold": relation_threshold,
         "reference_protocol": reference_protocol,
+        "claim_scope": reference_audit.claim_scope,
+        "reference_audit": reference_audit.to_dict(),
         "protocol": {
             "problem": "collector_data_available_but_topology_relation_missing",
             "collector_observations_modified": False,
@@ -244,6 +313,9 @@ def run_stage1_evaluation(
             "causal_gold_usage": "none",
             "primary_metric": "recovery_of_removed_topology_relations",
             "secondary_metric": "full_topology_similarity_after_recovery",
+            "masking_unit": "topology_group",
+            "empty_missing_cases_in_macro": "excluded",
+            "visible_topology_constraint_inference": use_psl,
         },
         "summary": summary,
         "per_relation_type": per_relation_type,

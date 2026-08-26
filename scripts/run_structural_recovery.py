@@ -20,6 +20,14 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--relation-threshold", type=float, default=0.5)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument(
+        "--allow-derived-reference",
+        action="store_true",
+        help=(
+            "Allow a telemetry-derived embedded reference for diagnostic smoke tests. "
+            "The output is labelled diagnostic_only and must not be reported as a paper result."
+        ),
+    )
     args = parser.parse_args()
 
     result = run_stage1_evaluation(
@@ -31,6 +39,7 @@ def main() -> None:
         seed=args.seed,
         relation_threshold=args.relation_threshold,
         limit=args.limit,
+        allow_derived_reference=args.allow_derived_reference,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

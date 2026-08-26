@@ -22,6 +22,7 @@ from .topology_recovery import (
     TopologyMask,
     TopologyRecoveryResult,
     mask_topology_relations,
+    mask_topology_relations_by_group,
     recover_missing_topology_relations,
 )
 
@@ -41,6 +42,7 @@ __all__ = [
     "TopologyMask",
     "TopologyRecoveryResult",
     "mask_topology_relations",
+    "mask_topology_relations_by_group",
     "recover_missing_topology_relations",
     "AbductiveCausalRelationGenerator",
     "IncidentCausalRCA",

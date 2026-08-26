@@ -1,5 +1,9 @@
 # 불완전 운영 온톨로지의 관계 복원과 LLM 기반 RCA
 
+> 저장소 이름의 `Rashomon-Tableau`는 초기 연구 이력에서 남은 이름이다. 현재 주 연구는
+> **독립 기준 토폴로지에 대한 typed relation recovery와 downstream LLM RCA 효과 검증**이며,
+> Rashomon Worlds와 Tableau 실험은 `studycase.md`의 선행 탐색 기록으로만 유지한다.
+
 ## 연구의 최종 명제
 
 운영 환경에서는 로그·메트릭·트레이스가 수집되더라도 CMDB 또는 온톨로지의 관계 토폴로지가 완전하지 않을 수 있다. 특히 `CALLS_API`, `USES_DB`와 같은 의미 관계가 누락되면 원인 노드는 찾더라도 장애 전파 경로와 원인 간선을 정확하게 설명하기 어렵다.
@@ -71,7 +75,9 @@ Track A와 Track B는 별도 주제가 아니다. Track A의 복원 결과가 Tr
 
 ### 통제 조건
 
+- 완전 기준 토폴로지는 모델 입력 observation과 독립된 버전 관리 원천에서 가져온다.
 - 토폴로지 관계만 20%, 40%, 60% 제거한다.
+- 동일 시스템의 모든 장애 사례에는 동일한 topology-group mask를 적용한다.
 - 노드와 수집 데이터는 제거하지 않는다.
 - 제거된 관계의 위치나 타입을 모델에 알려주지 않는다.
 - OpenRCA 2.0의 원인 정답과 원인 경로는 평가기에만 제공한다.
@@ -100,16 +106,24 @@ $$
 - $p_{uv}^{r}$: 복원 신뢰도
 - $e_{uv}$: 복원에 사용한 수집 증거와 규칙 근거
 
+현재 PSL의 visible-topology 제약은 snapshot에서 기능성이 명확한 `RUNS_ON`(Pod→Node)과
+`HAS_SERVICE`(Service의 시스템 소속)에만 적용한다. `CALLS`, `DEPLOYED_ON`, `USES_DATABASE`,
+`USES_MESSAGING`은 다중 대상이 정상일 수 있으므로 임의의 단일성 제약을 적용하지 않는다.
+
 ### 평가 지표
 
 남아 있는 관계 때문에 전체 점수가 높아지는 착시를 피하기 위해 실제로 제거한 관계만 주 지표로 평가한다.
 
 - Missing Relation Precision / Recall / F1
 - 관계 유형별 F1
-- MRR, Hits@K
+- Candidate Recall Ceiling
 - 잘못된 관계 삽입률
 - PSL 적용 전후 논리적 모순률
 - 복원 후 전체 토폴로지 F1은 보조 지표
+
+MRR·Hits@K는 query별 negative candidate universe가 확정되기 전에는 주 지표로 보고하지
+않는다. 현재 코드의 후보 공간은 telemetry로 관측된 endpoint pair로 제한되므로, 후보 생성
+단계가 정답 관계를 포함할 수 있는 최대치인 Candidate Recall Ceiling을 먼저 기록한다.
 
 ---
 
@@ -207,12 +221,22 @@ $$
 
 ## 누수 방지 원칙
 
-- 완전 토폴로지는 마스킹 생성과 상한선 평가에만 사용한다.
+- 완전 토폴로지는 마스킹 생성과 상한선 평가에만 사용하며, 반드시 독립 provenance를 가진다.
+- recovery 입력 observation으로 생성한 관계 집합을 다시 정답으로 사용하는 순환 평가는 금지한다.
 - 제거된 관계는 후보 생성, DeBERTa, PSL, LLM 입력에 제공하지 않는다.
 - Gold causal graph, injection label, gold root는 평가기에만 제공한다.
 - 모든 B0~B4 조건에서 장애 사례와 수집 증거는 동일하게 유지한다.
 - 비교 조건에서는 토폴로지와 LLM 사용 여부만 변경한다.
 - LLM 프롬프트, 모델, temperature, 출력 형식, 호출 횟수를 고정한다.
+
+### 연구 실행 게이트
+
+- 기본 실행은 별도 `--reference-data`와 case별 `reference_topology_provenance`가 없으면 중단한다.
+- provenance에는 `source`, `version`, `independent_of_model_observations=true`,
+  `evaluator_only=true`가 필요하다.
+- 기존 telemetry-derived embedded topology는 `--allow-derived-reference`를 붙인 CI·단위검증에서만
+  허용하며, 산출물은 자동으로 `claim_scope=diagnostic_only`가 된다.
+- 제거 관계가 0개인 사례는 missing-relation macro 평균에서 제외한다.
 
 ---
 
@@ -230,11 +254,14 @@ $$
 
 ### 현재 구현
 
-- 관계 마스킹 20% / 40% / 60%
+- topology group 단위 nested 관계 마스킹 20% / 40% / 60%
 - 귀추 / DeBERTa / PSL 관계 복원 Ablation
 - 마스킹·복원·완전 토폴로지의 비-LLM RCA 비교
 - Root / Path / Node / Edge 지표와 변화량 계산
 - 누수 방지형 OpenRCA 사례 로더와 자동 검증
+- 독립 reference provenance 검사와 순환 reference 차단
+- empty-denominator macro 제외, 실제 마스킹 비율 및 candidate ceiling 기록
+- PSL이 visible topology의 기능적 관계 제약을 실제 추론 입력으로 사용
 
 ### 다음 구현
 
@@ -277,6 +304,7 @@ scripts/run_topology_rca_evaluation.py
 ```bash
 python scripts/run_structural_recovery.py \
   --data artifacts/topology_cases.jsonl \
+  --reference-data artifacts/reference_topology.jsonl \
   --out results/a4_40.json \
   --variant abduction_deberta_psl \
   --topology-missing-ratio 0.40 \
@@ -288,6 +316,7 @@ python scripts/run_structural_recovery.py \
 ```bash
 python scripts/run_topology_rca_evaluation.py \
   --data artifacts/topology_cases.jsonl \
+  --reference-data artifacts/reference_topology.jsonl \
   --out results/topology_rca_40.json \
   --topology-variant abduction_deberta_psl \
   --rca-variant full \

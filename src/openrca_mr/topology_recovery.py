@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections import defaultdict
 from dataclasses import dataclass
 
 from .models import CausalEdge, RelationObservation, StructuralHypothesis, STRUCTURAL_RELATION_TYPES
@@ -65,6 +66,55 @@ def mask_topology_relations(
     return TopologyMask(visible_relations=visible, missing_relations=missing)
 
 
+def mask_topology_relations_by_group(
+    case_relations: dict[str, list[CausalEdge]],
+    case_groups: dict[str, str],
+    ratio: float,
+    seed: int = 42,
+) -> dict[str, TopologyMask]:
+    """Create one deterministic nested mask per topology group.
+
+    A service relation shared by multiple incidents in the same system receives
+    the same masking decision. Ranking unique group-level relations also avoids
+    per-case rounding from silently turning a requested 20% mask into 0% or 50%.
+    """
+
+    if not 0.0 <= ratio <= 1.0:
+        raise ValueError("topology missing ratio must be in [0, 1]")
+    if set(case_relations) != set(case_groups):
+        raise ValueError("case_relations and case_groups must contain identical case IDs")
+
+    group_universe: dict[str, set[CausalEdge]] = defaultdict(set)
+    for case_id, relations in case_relations.items():
+        group = case_groups[case_id]
+        group_universe[group].update(
+            edge for edge in relations if edge.relation in STRUCTURAL_RELATION_TYPES
+        )
+
+    missing_by_group: dict[str, set[CausalEdge]] = {}
+    for group, universe in group_universe.items():
+        ordered = sorted(
+            universe,
+            key=lambda edge: _relation_rank(group, seed, edge),
+        )
+        n_missing = round(len(ordered) * ratio)
+        missing_by_group[group] = set(ordered[:n_missing])
+
+    masks: dict[str, TopologyMask] = {}
+    for case_id, relations in case_relations.items():
+        missing_keys = {edge.key() for edge in missing_by_group[case_groups[case_id]]}
+        visible = sorted(
+            [edge for edge in relations if edge.key() not in missing_keys],
+            key=lambda edge: edge.key(),
+        )
+        missing = sorted(
+            [edge for edge in relations if edge.key() in missing_keys],
+            key=lambda edge: edge.key(),
+        )
+        masks[case_id] = TopologyMask(visible, missing)
+    return masks
+
+
 def recover_missing_topology_relations(
     visible_relations: list[CausalEdge],
     observations: list[RelationObservation],
@@ -83,7 +133,7 @@ def recover_missing_topology_relations(
         semantic_scorer=semantic_scorer,
         global_inference=global_inference,
         relation_threshold=relation_threshold,
-    ).run(observations)
+    ).run(observations, visible_relations=visible_relations)
 
     visible_keys = {edge.key() for edge in visible_relations}
     added = sorted(
