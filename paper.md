@@ -14,6 +14,8 @@
 
 본 연구는 이를 두 단계로 분리한다. **Stage 1 Structural Relation Recovery**에서는 model-visible telemetry만 사용하여 `CALLS`, `DEPLOYED_ON`, `RUNS_ON`, `USES_DATABASE`, `USES_MESSAGING`과 같은 typed operational relation을 구성한다. **Stage 2 Incident Causal Qualification**에서는 Stage 1에서 확인된 구조적 dependency를 후보 영역으로 사용하되, 연결성 자체를 causal evidence로 사용하지 않고 incident telemetry의 시간 선후, 이상도, 의미적 지지 및 전역 경로 일관성을 이용하여 `causal_propagates_to`와 `non_causal_dependency`를 판정한다. Stage 2는 Abductive Hypothesis Generation, DeBERTa 기반 contrastive semantic scoring, Probabilistic Soft Logic(PSL), 그리고 선택적으로 constrained LLM adjudication으로 구성된다.
 
+OpenRCA 2.0은 이러한 문제의 난도를 정량적으로 보여준다. 11개 frontier LLM의 평균 Outcome F1은 34.1%, Exact Match는 20.7%였으며, 적어도 하나의 올바른 root service를 찾는 AnySvc는 76.0%인 반면 검증 가능한 root-to-symptom path까지 구성하는 Path Reachability는 61.5%에 그쳤다. 또한 Node F1 62.2%에 비해 Edge F1은 43.4%로 18.8%p 낮아, **관련 component 발견보다 방향 있는 causal relation과 propagation path 구성에서 더 큰 병목이 존재함**을 보여준다 [1].
+
 OpenRCA 2.0 계열 데이터는 trace, metric, log와 root-cause/causal-process 정답을 제공하므로 사건별 causal reconstruction을 평가할 수 있다. 다만 benchmark의 `causal_graph.json`은 구조 관계 타입의 정답표가 아니라 사건별 causal propagation supervision이므로, 본 연구는 PAVE/causal gold를 Stage 1 입력이나 구조 relation 생성에 사용하지 않는다. 구조 relation은 telemetry에 실제 속성이 존재할 때만 생성하며, 데이터가 노출하지 않는 DB·pod·node·messaging 관계를 임의로 보완하지 않는다.
 
 기존 20-case controlled causal-relation masking 개발 실험에서 Abduction의 Relation F1은 29.67%였고, DeBERTa를 결합하면 37.17%로 향상되었다. Full model은 Relation F1 자체는 37.17%로 동일했으나 Path Reachability를 35%에서 40%, Root@3를 40%에서 45%로 개선하였다. Standard 150-case 중간 실험에서는 Edge Recall 80.26%에 비해 Edge Precision이 28.87%로 낮아, 현재 Stage 2의 주 병목이 후보 수의 폭발보다 false-positive causal edge의 과잉 유지임을 확인했다. 이 결과는 structural relation recovery와 incident causal qualification을 분리하여 평가해야 함을 뒷받침한다.
@@ -106,7 +108,54 @@ Root Cause → Propagation Path → Symptom
 
 # 2. OpenRCA 2.0과 데이터 경계
 
-OpenRCA 2.0 계열 benchmark는 microservice incident에 대해 정상/비정상 trace, metric, log와 root-cause 및 causal-process 정답을 제공한다. 본 연구가 사용하는 `anon-ops/ops-lite`는 500개 case로 구성되며 Train-Ticket, Hotel Reservation, OpenTelemetry Demo 세 시스템을 포함한다.
+OpenRCA 2.0은 500개 incident와 step-wise causal process annotation을 제공하여, 기존 outcome-only RCA 평가가 놓치던 **진단 근거와 propagation path 자체를 평가할 수 있게 한 benchmark**이다 [1]. 따라서 아래 수치는 OpenRCA 2.0의 실패라기보다, OpenRCA 2.0이 드러낸 현재 LLM RCA의 한계로 해석한다.
+
+## 2.1 OpenRCA 2.0이 드러낸 현재 LLM RCA의 한계
+
+논문 v2의 11개 frontier LLM 결과를 요약하면 다음과 같다.
+
+| 한계 | 평균/대표 결과 | 의미 |
+|---|---:|---|
+| 낮은 Outcome 정확도 | Outcome F1 **34.1%**, EM **20.7%** | service와 fault kind를 포함한 정확한 root-cause set 복원은 여전히 어려움 |
+| Ungrounded diagnosis | AnySvc **76.0%** vs PR **61.5%** | 올바른 root service를 언급해도 전체 case의 **14.5%p**는 검증 가능한 causal path가 없음 |
+| 관계 추론 병목 | Node F1 **62.2%** vs Edge F1 **43.4%** | 관련 service 발견보다 directed causal dependency 복원이 **18.8%p** 낮음 |
+
+모델별 최고 Outcome F1도 Gemini 3.1 Pro **43.8%**, Claude Opus 4.7 **41.4%**에 그쳤다 [1]. 이는 강한 LLM을 사용하더라도 단순 component identification만으로는 신뢰 가능한 RCA가 완성되지 않음을 보여준다.
+
+특히 AnySvc와 PR의 차이는 중요하다. AnySvc는 root service 하나만 맞아도 성공하지만, PR은 그 올바른 root에서 실제 alarm node까지 유효한 directed path가 있어야 한다. 전체 case 기준 차이는 14.5%p이며, AnySvc 성공 case를 기준으로 보면 약 19%가 path로 grounding되지 못한 셈이다. 따라서 **“정답 서비스를 찾았다”와 “왜 그 서비스가 원인인지 설명 가능한 causal process를 복원했다”는 다른 문제**다.
+
+또한 Node F1과 Edge F1의 18.8%p 차이는 본 연구의 핵심 문제와 직접 연결된다. 현재 LLM은 장애에 관련된 service 집합을 찾는 능력보다, service 사이의 방향성과 propagation relation을 정확히 구성하는 능력이 더 약하다. 이를 본 연구는 다음처럼 분해한다.
+
+```text
+Component discovery
+       ↓
+Structural relation recovery
+       ↓
+Incident causal qualification
+       ↓
+Root-to-symptom causal path
+```
+
+## 2.2 Benchmark 범위와 본 연구의 추가 문제
+
+OpenRCA 2.0의 핵심 기여는 incident-specific causal process supervision이며, 완전한 enterprise operational ontology 복원 자체를 목표로 하지는 않는다.
+
+첫째, agent에게 topology를 직접 제공하지 않고 trace에서 dependency를 추론하게 하는 것은 의도된 설계다. 이는 investigative reasoning을 평가하는 장점이 있지만, **typed structural relation recovery 자체가 별도의 평가 단계로 분리되지는 않는다**. 주 process metric의 primary representation은 service-level Node/Edge/Path이다 [1].
+
+둘째, PAVE의 `causal_graph`는 특정 fault injection에서 검증된 **incident-specific causal propagation graph**이다. 이는 장기간 유지되는 CMDB나 operational ontology와 동일하지 않다. 따라서 `CALLS`, `DEPLOYED_ON`, `RUNS_ON`, `USES_DATABASE`, `USES_MESSAGING`과 같은 persistent structural relation을 독립적으로 복원하는 문제는 별도로 남는다.
+
+셋째, enterprise RCA에서는 service-service 관계만 아니라 database, pod, node, messaging system, SQL/data-source와 같은 heterogeneous relation이 중요하지만, OpenRCA의 headline primary process metric은 service-level causal graph 평가에 집중한다. 본 연구는 이 범위를 벤치마크의 결함으로 보지 않고 **OpenRCA 2.0 위에 추가할 연구 문제**로 정의한다.
+
+따라서 본 연구의 문제 정의는 다음 두 층으로 확장된다.
+
+1. **Structural Relation Recovery** — telemetry에서 시스템의 실제 typed operational relation을 복원한다.
+2. **Incident Causal Qualification** — 복원된 구조 관계 중 이번 incident의 propagation에 실제로 참여한 relation을 판정한다.
+
+이 분리를 통해 OpenRCA 2.0이 보여준 `Node > Edge`, `AnySvc > Path Reachability` 간극을 각각 **구조 관계 복원 오류**, **causal relation 판정 오류**, **root/path reconstruction 오류**로 세분화하여 분석할 수 있다.
+
+## 2.3 데이터 경계
+
+본 연구가 사용하는 `anon-ops/ops-lite`는 500개 case로 구성되며 Train-Ticket, Hotel Reservation, OpenTelemetry Demo 세 시스템을 포함한다.
 
 중요한 데이터 경계는 다음과 같다.
 
@@ -492,7 +541,7 @@ OpenRCA의 causal graph는 typed operational ontology의 완전한 정답이 아
 
 ## 9.3 Service-level Causal Evaluation
 
-현재 OpenRCA causal evaluator는 주로 service-level propagation을 평가하므로 pod/node/database와 같은 heterogeneous entity의 full causal graph를 직접 평가하지 못한다. 본 연구에서는 heterogeneous structure를 보존하되 service projection과 분리한다.
+현재 OpenRCA causal evaluator의 primary process metric은 service-level propagation을 평가하므로 pod/node/database와 같은 heterogeneous entity의 full operational ontology를 직접 평가하지 않는다. 본 연구에서는 heterogeneous structure를 보존하되 service projection과 분리한다.
 
 ## 9.4 Structural Recovery와 Causal Qualification의 오류 전파
 
@@ -507,6 +556,8 @@ Stage 2 결과가 좋아도 Stage 1에서 중요한 dependency를 놓치면 end-
 # 10. 결론
 
 본 연구가 해결하려는 현실적 문제는 단순 “missing causal edge prediction”이 아니다. 실제 운영 환경에서는 먼저 불완전한 CMDB/ontology를 telemetry로 보완하여 **현실적인 typed structural relation**을 구성해야 하고, 이후 그 관계들이 특정 incident의 장애 전파에 실제로 참여했는지를 별도로 판정해야 한다.
+
+OpenRCA 2.0은 이 문제의 필요성을 강하게 뒷받침한다. 11개 frontier LLM이 적어도 하나의 올바른 root service를 비교적 자주 찾더라도(AnySvc 76.0%), 검증 가능한 causal path까지 구성하는 비율은 61.5%로 낮아지고, Node F1 62.2%에 비해 Edge F1은 43.4%로 더 크게 떨어진다 [1]. 즉 현재 RCA의 핵심 병목은 단순한 root-name prediction을 넘어 **관계의 방향과 causal propagation을 근거 있게 복원하는 것**에 있다.
 
 따라서 최종 방법론은 다음과 같이 정리된다.
 
@@ -528,7 +579,7 @@ $$
 
 # 참고문헌
 
-[1] *OpenRCA 2.0: From Outcome Labels to Causal Process Supervision*, 2026.  
+[1] A. Fang, Y. Yang, J. Shang, Q. Lu, J. Xu, R. Wang, S. Zhang, Y. Zhang, B. Yu, and P. He, *OpenRCA 2.0: From Outcome Labels to Causal Process Supervision*, arXiv:2606.27154v2, 2026. https://arxiv.org/html/2606.27154v2  
 [2] J. R. Hobbs et al., *Interpretation as Abduction*, 1993.  
 [3] Abductive reasoning / logical hypothesis generation over knowledge graphs 관련 연구.  
 [4] P. He et al., *DeBERTa: Decoding-enhanced BERT with Disentangled Attention*, ICLR, 2021.  
