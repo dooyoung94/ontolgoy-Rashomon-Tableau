@@ -19,7 +19,7 @@ from openrca_mr.models import (
 )
 from openrca_mr.openrca2 import dump_normalized_cases
 from openrca_mr.pipeline import IncidentCausalRCA, MissingRelationRCA
-from scripts.run_structural_recovery import drop_relation_observations, run
+from openrca_mr.stage1_eval import drop_relation_observations, run_stage1_evaluation
 
 
 def _case(case_id: str = "s1") -> RcaCase:
@@ -92,7 +92,7 @@ def test_stage1_runner_uses_observations_only_and_scores_typed_triples(tmp_path)
     out = tmp_path / "result.json"
     dump_normalized_cases([_case()], data)
 
-    result = run(
+    result = run_stage1_evaluation(
         data=str(data),
         out=str(out),
         variant="observation_abduction",
@@ -102,9 +102,10 @@ def test_stage1_runner_uses_observations_only_and_scores_typed_triples(tmp_path)
     assert result["track"] == "stage1_structural_relation_recovery"
     assert result["reference_protocol"] == "same_artifact_full_observation_reference_diagnostic"
     assert result["protocol"]["all_pairs_generation"] is False
-    assert result["summary"]["structural_precision"] == 1.0
-    assert result["summary"]["structural_recall"] == 1.0
-    assert result["summary"]["structural_f1"] == 1.0
+    assert result["summary"]["macro_structural_precision"] == 1.0
+    assert result["summary"]["macro_structural_recall"] == 1.0
+    assert result["summary"]["macro_structural_f1"] == 1.0
+    assert result["summary"]["micro_structural_f1"] == 1.0
     saved = json.loads(out.read_text(encoding="utf-8"))
     assert saved["rows"][0]["n_candidates"] == 2
     assert saved["rows"][0]["n_selected_relations"] == 2
@@ -115,11 +116,9 @@ def test_stage1_runner_joins_independent_reference_by_case_id(tmp_path):
     reference = tmp_path / "reference.jsonl"
     out = tmp_path / "independent.json"
     dump_normalized_cases([_case("case-A")], data)
-    # Deliberately include a different case first. The runner must join by ID,
-    # never by row order.
     dump_normalized_cases([_case("case-B"), _case("case-A")], reference)
 
-    result = run(
+    result = run_stage1_evaluation(
         data=str(data),
         reference_data=str(reference),
         out=str(out),
@@ -128,4 +127,40 @@ def test_stage1_runner_joins_independent_reference_by_case_id(tmp_path):
     assert result["n"] == 1
     assert result["reference_protocol"] == "independent_reference_artifact"
     assert result["rows"][0]["case_id"] == "case-A"
-    assert result["summary"]["structural_f1"] == 1.0
+    assert result["summary"]["micro_structural_f1"] == 1.0
+
+
+def test_stage1_runner_rejects_missing_reference_case_ids(tmp_path):
+    data = tmp_path / "input.jsonl"
+    reference = tmp_path / "reference.jsonl"
+    out = tmp_path / "out.json"
+    dump_normalized_cases([_case("case-A")], data)
+    dump_normalized_cases([_case("case-B")], reference)
+
+    with pytest.raises(ValueError, match="missing input case_id"):
+        run_stage1_evaluation(
+            data=str(data),
+            reference_data=str(reference),
+            out=str(out),
+            variant="observation_abduction",
+        )
+
+
+def test_stage1_runner_detects_cross_window_protocol(tmp_path):
+    data = tmp_path / "cross-window.jsonl"
+    out = tmp_path / "out.json"
+    case = _case("case-A")
+    case.metadata["structural_reference_protocol"] = (
+        "normal_window_reference_vs_abnormal_window_observations"
+    )
+    dump_normalized_cases([case], data)
+
+    result = run_stage1_evaluation(
+        data=str(data),
+        out=str(out),
+        variant="observation_abduction",
+    )
+    assert result["reference_protocol"] == (
+        "normal_window_reference_vs_abnormal_window_observations"
+    )
+    assert "cross-window structural consistency" in result["protocol"]["warning"].lower()
