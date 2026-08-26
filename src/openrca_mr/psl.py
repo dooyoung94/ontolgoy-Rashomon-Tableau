@@ -1,10 +1,206 @@
 from __future__ import annotations
 
-from .models import Hypothesis, RcaCase, REL_CAUSAL, REL_NON_CAUSAL
+from collections import defaultdict
+
+from .models import (
+    Hypothesis,
+    RcaCase,
+    RelationObservation,
+    StructuralHypothesis,
+    REL_CAUSAL,
+    REL_NON_CAUSAL,
+)
+
+
+class StructuralSoftLogicApproximation:
+    """Dependency-free approximation of Stage-1 PSL selection.
+
+    Type compatibility is enforced by the abductive generator before this
+    point. This layer combines abductive/semantic support and penalizes mutually
+    competing predicates over the same endpoint pair. It is used for tests and
+    smoke checks; paper results that claim PSL must use ``PslStructuralInference``.
+    """
+
+    def infer_structural(
+        self,
+        observations: list[RelationObservation],
+        hypotheses: list[StructuralHypothesis],
+    ) -> list[StructuralHypothesis]:
+        del observations
+        if not hypotheses:
+            return []
+
+        local: dict[tuple[str, str, str], float] = {}
+        by_pair: dict[tuple[str, str], list[StructuralHypothesis]] = defaultdict(list)
+        for h in hypotheses:
+            if h.semantic_support is None:
+                semantic_term = h.abductive_support
+            else:
+                contradiction = h.semantic_contradiction or 0.0
+                margin = h.semantic_support - contradiction
+                semantic_term = 0.5 + 0.5 * max(-1.0, min(1.0, margin))
+            value = 0.70 * h.abductive_support + 0.30 * semantic_term
+            local[h.edge.key()] = max(0.0, min(1.0, value))
+            by_pair[(h.edge.source, h.edge.target)].append(h)
+
+        for pair_hypotheses in by_pair.values():
+            for h in pair_hypotheses:
+                competitors = [
+                    local[other.edge.key()]
+                    for other in pair_hypotheses
+                    if other.edge.relation != h.edge.relation
+                ]
+                competition = max(competitors, default=0.0)
+                h.soft_logic_score = max(
+                    0.0,
+                    min(1.0, local[h.edge.key()] - 0.15 * competition),
+                )
+
+        return sorted(
+            hypotheses,
+            key=lambda h: (
+                -(h.soft_logic_score if h.soft_logic_score is not None else 0.0),
+                h.edge.source,
+                h.edge.relation,
+                h.edge.target,
+            ),
+        )
+
+
+class PslStructuralInference:
+    """PSL inference for Stage-1 structural relation existence.
+
+    The candidate domain is already constrained to telemetry-grounded endpoint
+    pairs and ontology-compatible relation types. PSL therefore selects among
+    candidates; it never invents new endpoints or relation types.
+    """
+
+    def __init__(self):
+        try:
+            from pslpython.model import Model
+            from pslpython.partition import Partition
+            from pslpython.predicate import Predicate
+            from pslpython.rule import Rule
+        except ImportError as exc:
+            raise RuntimeError("Install the PSL extra: pip install -e '.[psl]'") from exc
+        self.Model = Model
+        self.Partition = Partition
+        self.Predicate = Predicate
+        self.Rule = Rule
+
+    def infer_structural(
+        self,
+        observations: list[RelationObservation],
+        hypotheses: list[StructuralHypothesis],
+    ) -> list[StructuralHypothesis]:
+        del observations
+        if not hypotheses:
+            return []
+
+        model = self.Model("openrca_structural_relation_recovery")
+        prior = self.Predicate("STRUCTPRIOR", size=3)
+        relation = self.Predicate("STRUCTREL", size=3)
+        competes = self.Predicate("COMPETES", size=4)
+        predicates = [prior, relation, competes]
+
+        has_semantic = any(h.semantic_support is not None for h in hypotheses)
+        if has_semantic:
+            semantic = self.Predicate("STRUCTSEMANTIC", size=3)
+            contradiction = self.Predicate("STRUCTCONTRA", size=3)
+            predicates.extend([semantic, contradiction])
+        else:
+            semantic = contradiction = None
+
+        for pred in predicates:
+            model.add_predicate(pred)
+
+        obs = self.Partition.OBSERVATIONS
+        targets = self.Partition.TARGETS
+        prior.add_data(
+            obs,
+            [
+                [h.edge.source, h.edge.relation, h.edge.target, h.abductive_support]
+                for h in hypotheses
+            ],
+        )
+        relation.add_data(
+            targets,
+            [[h.edge.source, h.edge.relation, h.edge.target] for h in hypotheses],
+        )
+
+        by_pair: dict[tuple[str, str], list[str]] = defaultdict(list)
+        for h in hypotheses:
+            by_pair[(h.edge.source, h.edge.target)].append(h.edge.relation)
+        competition_rows: list[list[str | float]] = []
+        for (source, target), relations in by_pair.items():
+            unique = sorted(set(relations))
+            for left in unique:
+                for right in unique:
+                    if left != right:
+                        competition_rows.append([source, left, target, right, 1.0])
+        if competition_rows:
+            competes.add_data(obs, competition_rows)
+
+        if has_semantic and semantic is not None and contradiction is not None:
+            semantic.add_data(
+                obs,
+                [
+                    [h.edge.source, h.edge.relation, h.edge.target, h.semantic_support or 0.0]
+                    for h in hypotheses
+                ],
+            )
+            contradiction.add_data(
+                obs,
+                [
+                    [
+                        h.edge.source,
+                        h.edge.relation,
+                        h.edge.target,
+                        h.semantic_contradiction or 0.0,
+                    ]
+                    for h in hypotheses
+                ],
+            )
+
+        model.add_rule(self.Rule("1.4: STRUCTPRIOR(A, R, B) -> STRUCTREL(A, R, B) ^2"))
+        if has_semantic:
+            model.add_rule(
+                self.Rule("1.1: STRUCTSEMANTIC(A, R, B) -> STRUCTREL(A, R, B) ^2")
+            )
+            model.add_rule(
+                self.Rule("1.2: STRUCTCONTRA(A, R, B) -> !STRUCTREL(A, R, B) ^2")
+            )
+        model.add_rule(
+            self.Rule(
+                "0.8: COMPETES(A, R, B, S) & STRUCTREL(A, R, B) -> !STRUCTREL(A, S, B) ^2"
+            )
+        )
+        # Sparsity prior: unsupported relations should not survive merely because
+        # they are type-compatible candidates.
+        model.add_rule(self.Rule("0.20: !STRUCTREL(A, R, B) ^2"))
+
+        inferred = model.infer(psl_options={"runtime.log.level": "ERROR"})
+        frame = inferred[relation]
+        scores: dict[tuple[str, str, str], float] = {}
+        for row in frame.itertuples(index=False):
+            values = list(row)
+            scores[(str(values[0]), str(values[1]), str(values[2]))] = float(values[-1])
+
+        for h in hypotheses:
+            h.soft_logic_score = scores.get(h.edge.key(), 0.0)
+        return sorted(
+            hypotheses,
+            key=lambda h: (
+                -(h.soft_logic_score if h.soft_logic_score is not None else 0.0),
+                h.edge.source,
+                h.edge.relation,
+                h.edge.target,
+            ),
+        )
 
 
 class SoftLogicApproximation:
-    """Dependency-free approximation of the global PSL model for tests."""
+    """Dependency-free approximation of the Stage-2 global PSL model for tests."""
 
     def infer(self, case: RcaCase, hypotheses: list[Hypothesis]) -> list[Hypothesis]:
         if not hypotheses:
@@ -16,8 +212,6 @@ class SoftLogicApproximation:
             contradiction = h.semantic_contradiction if h.semantic_contradiction is not None else 0.5
             margin = semantic - contradiction if h.semantic_support is not None else 0.0
             evidence = 0.55 * h.temporal_score + 0.45 * h.anomaly_score + 0.20 * margin
-            # Lack of endpoint anomaly/temporal order is negative evidence in a
-            # causal-propagation task, not just absence of positive support.
             negative = 0.30 * (1.0 - h.anomaly_score) + 0.15 * (1.0 - h.temporal_score)
             local[(h.edge.source, h.edge.target)] = max(0.0, min(1.0, evidence - negative))
 
@@ -48,12 +242,14 @@ class SoftLogicApproximation:
         for h in hypotheses:
             key = (h.edge.source, h.edge.target)
             downstream = reaches.get(h.edge.target, 0.0)
-            # Global reachability may support a locally plausible edge, but it
-            # cannot turn a locally unsupported dependency into causal by itself.
             score = 0.82 * local[key] + 0.18 * min(local[key], downstream)
             h.soft_logic_score = max(0.0, min(1.0, score))
 
-        return sorted(hypotheses, key=lambda h: h.soft_logic_score if h.soft_logic_score is not None else -1.0, reverse=True)
+        return sorted(
+            hypotheses,
+            key=lambda h: h.soft_logic_score if h.soft_logic_score is not None else -1.0,
+            reverse=True,
+        )
 
 
 class PslGlobalInference:
@@ -129,20 +325,14 @@ class PslGlobalInference:
         if non_symptoms:
             reaches.add_data(targets, [[node] for node in non_symptoms])
 
-        # Incident-local evidence. Structure is omitted on purpose: all targets
-        # are already observed dependencies, so it cannot distinguish causality.
         model.add_rule(self.Rule("1.2: TEMPORAL(A, B) -> CAUSES(A, B) ^2"))
         model.add_rule(self.Rule("1.1: ANOMALYPAIR(A, B) -> CAUSES(A, B) ^2"))
         model.add_rule(self.Rule("0.8: !TEMPORAL(A, B) -> !CAUSES(A, B) ^2"))
         model.add_rule(self.Rule("1.2: !ANOMALYPAIR(A, B) -> !CAUSES(A, B) ^2"))
         if has_semantic:
-            # Contrastive DeBERTa produces complementary soft evidence. Equal
-            # 0.5/0.5 scores cancel rather than introducing a causal bias.
             model.add_rule(self.Rule("1.0: SEMANTIC(A, B) -> CAUSES(A, B) ^2"))
             model.add_rule(self.Rule("1.0: CONTRADICTION(A, B) -> !CAUSES(A, B) ^2"))
 
-        # Global path coherence only reinforces edges that also have local
-        # evidence; known causal relations seed REACHES through CAUSES facts.
         model.add_rule(self.Rule("1.6: CAUSES(A, B) & REACHES(B) -> REACHES(A) ^2"))
         model.add_rule(self.Rule("0.8: TEMPORAL(A, B) & REACHES(B) -> CAUSES(A, B) ^2"))
         model.add_rule(self.Rule("0.5: CAUSES(A, B) -> !CAUSES(B, A) ^2"))
@@ -157,4 +347,8 @@ class PslGlobalInference:
 
         for h in hypotheses:
             h.soft_logic_score = scores.get((h.edge.source, h.edge.target), 0.0)
-        return sorted(hypotheses, key=lambda h: h.soft_logic_score if h.soft_logic_score is not None else -1.0, reverse=True)
+        return sorted(
+            hypotheses,
+            key=lambda h: h.soft_logic_score if h.soft_logic_score is not None else -1.0,
+            reverse=True,
+        )
