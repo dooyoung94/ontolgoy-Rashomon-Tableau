@@ -1,236 +1,131 @@
-# 선행 실험과 연구 문제의 발전 과정
+# 연구 아이디어와 실험의 발전 기록
 
 ## 0. 문서 목적
 
-이 문서는 현재 연구가 **Possible Worlds와 Tableau 기반 상충 추론**에서 출발하여, **불완전한 온톨로지의 관계 보완**, **의미 기반 후보 점수화**, **가지치기 손실 분석**, **BADP**, 그리고 **Conditional BADP / Boundary Risk**로 발전한 과정을 정리한다.
+이 문서는 특정 최종 방법을 정당화하기 위한 문서가 아니라, **연구가 어떤 문제의식에서 시작했고, 어떤 실험을 통해 가설이 강화·수정·폐기되었는지**를 시간 순서와 문제 구조에 따라 정리한 연구 기록이다.
 
-단순한 개발 기록이 아니라 다음 질문에 답하는 것이 목적이다.
-
-1. 각 단계에서 어떤 문제를 해결하려 했는가?
-2. 어떤 데이터셋과 지표를 사용했는가?
-3. 실제로 개선된 것은 무엇이고, 실패하거나 폐기한 가설은 무엇인가?
-4. 코드 오류 또는 평가 설계 때문에 잘못 해석된 값은 무엇인가?
-5. 현재 논문의 핵심 주장은 어디까지 가능한가?
-
-연구 흐름을 먼저 요약하면 다음과 같다.
+현재까지의 연구는 크게 다음 질문을 따라 발전했다.
 
 ```text
-상충하는 여러 설명을 하나로 너무 빨리 합치지 말자
+서로 상충하지만 각각은 그럴듯한 여러 설명이 있을 때
+왜 하나를 너무 일찍 선택해야 하는가?
         ↓
-Possible Worlds + Tableau
+여러 설명을 동시에 보존할 수 있는가?
         ↓
-실제 Ontology는 필요한 relation semantics를 모두 갖고 있지 않음
+논리적으로 불가능한 설명은 제거할 수 있는가?
         ↓
-Multi-hop Relation Candidate를 예측
+좋은 설명이 후보 안에 있어도 최종 선택이 틀리는 이유는 무엇인가?
         ↓
-Semantic Scorer로 후보를 점수화
+좋은 후보가 ranking 또는 pruning에서 사라지는가?
         ↓
-좋은 후보가 존재해도 ranking / pruning에서 사라질 수 있음
-        ↓
-Pruning Regret 정의
-        ↓
-Global / Relative near-optimal preservation 실험
-        ↓
-실제 Top-K cutoff 주변만 보는 BADP
-        ↓
-Always-on BADP의 비용 증가 확인
-        ↓
-Conditional BADP
-        ↓
-단순 boundary margin만으로는 위험한 경계를 충분히 구분하지 못함
-        ↓
-현재: Boundary Risk 추정
+어떤 scorer / selection rule / search policy가 실제 병목인가?
 ```
 
-현재 연구의 가장 직접적인 질문은 다음과 같다.
+중요한 점은 **Rashomon Worlds, Tableau, BADP 중 어느 하나를 최종 방법으로 미리 고정하지 않는 것**이다.
 
-> **다중 홉 추론에서 정답 또는 중요한 증거로 이어질 수 있는 경로가 Top-K 가지치기로 너무 일찍 제거되는 문제를 어떻게 줄일 것인가?**
+현재까지 가장 일관되게 남은 연구 문제는 다음과 같다.
+
+> **불완전하고 상충하는 multi-hop evidence 환경에서 유효한 대안 설명을 너무 일찍 제거하지 않으면서, 최종적으로는 올바른 설명 또는 상충 근거를 선택하는 방법은 무엇인가?**
+
+Possible Worlds는 이 문제를 구현하는 하나의 표현 방식이고, Tableau는 논리 제약을 적용하는 하나의 verifier이며, BADP는 탐색 중 후보 손실을 줄이기 위해 검토한 pruning 정책이다. 연구의 핵심은 이 개별 기법의 이름보다 **delayed commitment, alternative preservation, logical consistency, evidence-aware adjudication**에 있다.
 
 ---
 
-# 1. 먼저 알아야 할 핵심 용어
+# 1. 초기 연구 문제
 
-| 용어 | 의미 | 본 연구에서의 역할 |
-|---|---|---|
-| Knowledge Graph, KG | Entity를 Relation으로 연결한 그래프 | 다중 홉 탐색 공간 |
-| Entity | 사람, 장소, 개념, WordNet synset 등의 노드 | 경로의 시작·중간·목표 노드 |
-| Relation | 두 Entity 사이의 관계 | 그래프 edge의 의미 |
-| Multi-hop path | 여러 relation을 연속해서 따라가는 경로 | 직접 연결되지 않은 정답·증거 탐색 |
-| Candidate path | 현재 단계에서 확장 가능한 경로 후보 | pruning 대상 |
-| Scorer | 후보와 질의의 의미 적합도를 점수화하는 모델 | 주로 DeBERTa NLI support 사용 |
-| Top-K | 점수가 높은 K개 후보만 유지 | 기본 pruning 기준선 |
-| Pruning | 다음 단계로 넘기지 않을 후보를 제거 | 탐색 비용 제어 |
-| Viable path | 남은 hop budget 안에 target 또는 gold evidence까지 갈 수 있는 경로 | 제거되면 안 되는 유효 후보 |
-| Branching factor | 한 단계에서 경쟁하는 후보 수 | 높을수록 Top-K 경쟁 심화 |
-| Boundary | K번째와 K+1번째 후보 사이의 실제 제거 경계 | BADP가 직접 보는 지점 |
-| Boundary margin | K번째와 K+1번째 점수 차이 | 경계 불확실성 후보 지표 |
-| Possible World | 하나의 가능한 관계·사실 해석을 유지한 상태 | 조기 단일 결정을 피하기 위한 표현 |
-| Rashomon set | 점수나 성능이 비슷해 하나로 확정하기 어려운 후보 집합 | 초기 near-optimal 보존 아이디어 |
-| Ontology | relation 의미와 논리 제약을 명시한 지식 체계 | 후보의 의미 제약과 일관성 검증 |
-| Tableau | 논리식이 동시에 참일 수 있는지 확인하는 추론 방법 | SAT/UNSAT 및 contradiction 검증 |
-| Provenance | 사실이나 경로가 어디에서 왔는지 나타내는 정보 | 외부 gold 및 설명 근거 |
-| Pruning Regret | pruning 전에는 viable path가 있었지만 pruning 후 모두 사라진 사건 | pruning 자체의 정보 손실 측정 |
-| BADP | Boundary-Aware Delayed Pruning | Top-K cutoff 바로 아래 near-tie 후보를 추가 보존 |
-| Conditional BADP | 경계가 위험하다고 판단될 때만 BADP를 활성화 | 불필요한 폭 증가 억제 |
+## 1.1 출발점: 상충을 하나로 합치면 정보가 사라진다
 
-## 1.1 Top-K와 BADP를 예로 이해하기
+초기 문제의식은 단순했다.
 
-후보 점수가 다음과 같다고 하자.
+두 출처 또는 두 관점이 서로 다른 사실을 말할 때 이를 처음부터 하나의 사실 집합으로 합쳐버리면 다음 문제가 발생한다.
 
 ```text
-1위  0.910
-2위  0.840
-3위  0.812   ← K=3의 마지막 보존 후보
-4위  0.809   ← Top-3에서는 제거
-5위  0.620
+Perspective A: p
+Perspective B: not p
 ```
 
-Top-3는 1~3위만 유지한다. 그러나 3위와 4위 차이는 0.003밖에 되지 않는다.
-
-수식은 GitHub 렌더링 오류를 피하기 위해 이 문서에서는 가능한 한 코드 블록으로 표기한다.
+이를 하나의 merged state로만 보면 즉시 contradiction으로 처리할 수 있지만, 실제로는 다음 가능성이 남아 있을 수 있다.
 
 ```text
-BoundaryMargin(K) = score(K) - score(K+1)
-                  = 0.812 - 0.809
-                  = 0.003
+A만 신뢰 가능한 world
+B만 신뢰 가능한 world
+A와 B가 서로 다른 scope를 말하는 world
+relation mapping이 다른 world
+추가 evidence가 들어오기 전에는 결정할 수 없는 world
 ```
 
-BADP의 기본 아이디어는 **3위와 거의 동점인 4위를 바로 제거하지 말고 잠시 보존하자**는 것이다.
+따라서 초기 연구 질문은 다음과 같았다.
+
+> **서로 경쟁하는 해석을 하나로 조기 확정하지 않고, 각각의 일관된 설명을 유지한 뒤 나중에 판별하면 더 많은 유효 설명과 상충 근거를 보존할 수 있는가?**
+
+이 질문에서 Rashomon set과 Possible Worlds 아이디어가 등장했다.
+
+## 1.2 초기 연구 가설
+
+초기 연구 방향은 세 가지 가설로 정리할 수 있다.
+
+### H1. Alternative Preservation
+
+여러 가능한 해석을 유지하면 single-world 또는 merged reasoning보다 **유효한 설명의 coverage**가 높아질 것이다.
+
+### H2. Delayed Commitment
+
+초기 단계에서 하나의 해석만 선택하는 early commitment보다, 추가 evidence가 들어올 때까지 결정을 늦추는 것이 **viable explanation loss**를 줄일 것이다.
+
+### H3. Evidence-aware Adjudication
+
+후보를 많이 보존하는 것만으로는 충분하지 않으며, 같은 candidate space에서도 **scorer / ranking / adjudication 방식**에 따라 최종 성능이 크게 달라질 것이다.
+
+이 세 가설은 이후 실험의 대부분을 관통한다.
 
 ---
 
-# 2. 데이터셋과 실험의 역할
+# 2. 초기 구조: Rashomon + Tableau
 
-본 연구에서는 서로 다른 데이터셋을 사용한다. 중요한 점은 **각 데이터셋의 지표를 모두 같은 의미의 정확도로 해석하면 안 된다는 것**이다.
+초기 구현 아이디어는 다음과 같았다.
 
-| 데이터셋 / 실험 | 데이터 성격 | 사용 목적 | 해석 시 주의점 |
-|---|---|---|---|
-| CONAN 공식 benchmark | 탐정 서사의 인물 관계 그래프 | 관점·비밀 관계·다중 인물 relation extraction 문제 이해 | 현재 우리 방법의 공식 CONAN 성능 artifact는 없음 |
-| CONAN-derived controlled verification | CONAN gold relation을 재료로 우리가 생성한 80개 통제 사례 | reasoner 구현 검증 | 100%는 CONAN benchmark 성능이 아님 |
-| Synthetic Controlled Scope | 완전히 합성한 80개 contradiction-scope 사례 | merged vs perspective reasoning 비교 | relation 이름 일부만 CONAN ontology inventory에서 차용 |
-| MAGIC | multi-hop 상충 relation 데이터 | relation 해석, possible worlds, conflict evidence 보존 | structured triplet 진단이며 공식 자연어 MAGIC 점수와 다름 |
-| DAFNA-EA Books | 다수 출처의 상충 저자 주장 | 후보 world 생성과 truth selection 분리 | 100 gold books subset |
-| WN18RR | WordNet 기반 KG benchmark | 통제된 2~4 hop pruning mechanics | 일반 KGC Accuracy나 QA 성능이 아님 |
-| WebQSP | 자연어 KGQA benchmark | 실제 질문에서 pruning 정책 외적 검증 | 현재는 Wikidata 기반 retrieval이며 Freebase ToG 재현이 아님 |
+```text
+Natural-language / structured evidence
+        ↓
+Atomic claims
+        ↓
+Source / perspective separation
+        ↓
+Multiple candidate interpretations
+        ↓
+Possible Worlds
+        ↓
+Tableau SAT / UNSAT validation
+        ↓
+Valid worlds only
+        ↓
+Evidence / provenance based ranking
+        ↓
+Conflict / truth / localization
+```
+
+여기서 역할은 명확히 분리하였다.
+
+| 모듈 | 역할 |
+|---|---|
+| Claim extraction | 자연어를 atomic relation으로 변환 |
+| Possible Worlds | 경쟁하는 여러 설명을 동시에 표현 |
+| Tableau | 논리적으로 공존할 수 없는 world 제거 |
+| Provenance | 어떤 source / sentence / path에서 나온 설명인지 기록 |
+| Scorer | 남은 candidate의 의미적 적합도 판단 |
+| Adjudication | 최종 conflict / truth / localization 결정 |
+
+초기에는 Possible Worlds와 Tableau 자체가 핵심일 것이라 생각했지만, 이후 실험에서 **candidate construction보다 ranking과 scoring이 더 큰 병목일 수 있음**이 반복적으로 나타났다.
 
 ---
 
-# 3. CONAN 결과 교정: 가장 중요한 구분
+# 3. 첫 번째 검증: 논리 구조 자체가 동작하는가
 
-## 3.1 공식 CONAN은 무엇을 평가하는가
+자연어 benchmark를 바로 사용하면 실패 원인이 extraction인지 reasoner인지 구분하기 어렵다. 그래서 먼저 입력 relation과 contradiction scope를 완전히 통제하는 synthetic 실험을 사용하였다.
 
-CONAN은 Zhao et al., *Large Language Models Fall Short: Understanding Complex Relationships in Detective Narratives* (Findings of ACL 2024)에서 공개한 benchmark이다.
+## 3.1 Synthetic Controlled Scope n=80
 
-- 논문: https://aclanthology.org/2024.findings-acl.454/
-- 공식 코드/데이터: https://github.com/BLPXSPG/Conan
-
-CONAN의 핵심은 탐정 서사에서 **인물 관계 그래프를 추출하고 추론하는 것**이다. 데이터는 각 인물 관점의 narrative와 relation label을 제공하며 다음과 같은 관계를 다룬다.
-
-- Public relation: 대부분의 인물이 알고 있는 관계
-- Secret relation: 일부 인물만 알고 있는 비밀 관계
-- Inferred relation: 여러 인물의 정보를 합쳐야 추론할 수 있는 관계
-- Role-oriented / character-oriented perspective
-- Hierarchical relation categories
-
-공식 논문이 정의한 주요 task는 다음과 같다.
-
-```text
-1. Character Extraction
-2. Entity Linking / Character-oriented Relation Recognition
-3. Relation Deduction from all character narratives
-```
-
-즉 CONAN의 공식 gold label은 `consistent / divergence / intra-contradiction / inter-contradiction` 같은 본 연구의 contradiction-scope class가 아니다.
-
-### 공식 논문의 관계추출 난이도
-
-아래 값은 **우리 방법의 결과가 아니라 CONAN 논문에 공개된 GPT-4 baseline**이다.
-
-| 입력 범위 | 전략 | GPT-4 Precision | Recall | F1 |
-|---|---|---:|---:|---:|
-| 단일 인물 관점 | AllTogether | 28.3% | 26.9% | **27.6%** |
-| 단일 인물 관점 | DirRelation | 21.9% | 26.7% | 24.0% |
-| 전체 인물 관점 | AllTogether | 26.7% | 8.2% | **12.5%** |
-| 전체 인물 관점 | DirRelation | 20.2% | 7.5% | 11.0% |
-
-따라서 과거 문서에서 보였던 `100%`를 CONAN 자연어 benchmark 성능으로 해석하면 명백히 잘못이다.
-
-## 3.2 우리 저장소의 실제 CONAN 관련 코드
-
-저장소에는 실제 CONAN 데이터를 읽기 위한 다음 코드가 존재한다.
-
-```text
-scripts/download_conan.py
-src/rashomon_tableau/conan_loader.py
-config/ontology_rules.yaml
-```
-
-`conan_loader.py`는 character perspective별 relation JSON을 읽고 relation label을 정규화한다. ontology rule은 CONAN relation label 중 inverse, hierarchy, symmetric relation 등을 논리 규칙으로 사용한다.
-
-그러나 **현재 확인된 저장소 이력에는 우리 방법을 공식 자연어 CONAN benchmark 전체에 대해 end-to-end 평가하여 성능을 산출한 artifact가 없다.**
-
-즉 현재 논문에서 다음 문장을 쓰면 안 된다.
-
-> CONAN에서 Perspective Tableau가 100% 정확도를 달성하였다.
-
-현재 가능한 정확한 표현은 다음이다.
-
-> CONAN의 gold relation과 relation inventory를 이용해 reasoner 동작을 검증하는 controlled experiment를 구성하였다. 이 값은 공식 CONAN relation extraction 성능이 아니다.
-
-## 3.3 CONAN-derived controlled verification의 실제 의미
-
-커밋 `98b8d4756a98992fdf363d6c21f38c509b7dcc4c`의 `results/preliminary_controlled_metrics.json`은 다음 설정이다.
-
-```text
-평가 유형: preliminary_controlled_verification
-데이터 재료: CONAN Gold relation propositions
-사용 story: 655-The Mysterious Case of Zhangdong Town (6 people)
-사용 perspectives: Xiting, Yang Minxi
-n = 80
-```
-
-우리가 gold relation을 바탕으로 다음 통제 사례를 생성하였다.
-
-```text
-contradiction         40
-consistent            20
-divergence            20
-
-explicit contradiction        20
-implicit hierarchy            10
-implicit inverse              10
-same fact                     20
-different nonconflicting      20
-```
-
-결과는:
-
-| 지표 | 값 |
-|---|---:|
-| Accuracy | 100% |
-| Macro F1 | 100% |
-| Implicit contradiction recall | 100% |
-
-였다.
-
-하지만 이 값은 **reasoner correctness verification**이다. 이 평가의 label을 CONAN에서 직접 제공한 것이 아니라, 우리가 동일 ontology semantics를 이용해 생성하였다.
-
-더구나 이 실행에서는 다음 baseline이 실행되지 않았다.
-
-```text
-Pairwise NLI       not executed
-LLM direct judge   not executed
-Vanilla Tableau    not separately executed
-Perspective Tableau not separately executed
-```
-
-따라서 이 100%를 외부 benchmark 대비 성능 향상으로 사용할 수 없다.
-
-## 3.4 Synthetic Controlled Scope 75% → 100%도 CONAN 결과가 아니다
-
-`src/rashomon_tableau/ablation.py`의 `controlled_scope_ablation`은 더 명확한 합성 실험이다.
-
-코드가 직접 다음 네 class의 사례를 만든다.
+네 종류의 상황을 만들었다.
 
 ```text
 consistent
@@ -239,11 +134,7 @@ intra-perspective contradiction
 inter-perspective contradiction
 ```
 
-예를 들어 `father_of → parent_of` hierarchy와 `not parent_of`를 결합하여 contradiction을 의도적으로 생성한다.
-
-이 실험은 relation predicate 이름 일부를 CONAN-normalized inventory에서 사용했지만, **CONAN narrative를 자연어에서 추출하여 평가한 실험이 아니다.**
-
-검증 결과는:
+결과는 다음과 같다.
 
 | 방법 | Accuracy | Macro F1 |
 |---|---:|---:|
@@ -251,216 +142,164 @@ inter-perspective contradiction
 | Perspective Tableau | **100.00%** | **100.00%** |
 | Rashomon Tableau | **100.00%** | **100.00%** |
 
-이다.
+이 결과에서 확인된 것은 자연어 일반화 성능이 아니라 다음 한 가지다.
 
-따라서 올바른 이름은:
+> **관점이 분리된 상태에서 contradiction scope를 구분하는 논리 구조는 merged reasoning보다 정확하게 동작한다.**
 
-> **Synthetic Controlled Scope Ablation n=80**
+Rashomon 방식은 이 class accuracy에서는 Perspective Tableau보다 추가 개선을 만들지 않았다.
 
-이며, `CONAN 75% → 100%`라고 표현하면 안 된다.
+## 3.2 Explanation Coverage n=20
 
-## 3.5 CONAN 관련 최종 교정
-
-| 과거 오해 가능 표현 | 올바른 해석 |
-|---|---|
-| CONAN Accuracy 100% | CONAN gold relation을 재료로 생성한 controlled reasoner verification 100% |
-| CONAN Perspective Tableau 100% | 완전 합성 controlled_scope_ablation의 Perspective Tableau 100% |
-| CONAN에서 +25%p 개선 | Synthetic Controlled Scope에서 merged baseline 대비 +25%p |
-| CONAN implicit contradiction recall 100% | 우리가 ontology semantics로 생성한 implicit contradiction case에 대한 단위검증 |
-| CONAN이 Possible Worlds/BADP 성능을 입증 | 현재 공식 CONAN end-to-end 평가 artifact 없음 |
-
-CONAN은 현재 연구에서 **관점과 비밀·추론 관계가 존재하는 실제 문제 설정의 외부 근거**로는 중요하다. 그러나 현재 성능 근거는 MAGIC, DAFNA, WN18RR, WebQSP와 별도로 취급한다.
-
----
-
-# 4. Synthetic Controlled Scope: 관점 분리 논리의 단위 검증
-
-## 4.1 왜 통제 실험을 했는가
-
-자연어 데이터에서 실패하면 다음 원인을 분리하기 어렵다.
-
-```text
-자연어 추출 실패인가?
-관계 mapping 오류인가?
-ontology rule 오류인가?
-Tableau 구현 오류인가?
-ranking 오류인가?
-```
-
-그래서 먼저 입력 relation과 gold class를 우리가 완전히 통제하는 synthetic benchmark에서 reasoner 동작을 검증하였다.
-
-## 4.2 결과
-
-| 방법 | Accuracy | Macro F1 |
-|---|---:|---:|
-| Vanilla merged Tableau | 75.00% | 66.67% |
-| Perspective Tableau | **100.00%** | **100.00%** |
-| Rashomon Tableau | **100.00%** | **100.00%** |
-
-개선 폭은:
-
-```text
-Accuracy: 75.00% → 100.00%   (+25.00%p)
-Macro F1: 66.67% → 100.00%   (+33.33%p)
-```
-
-이 결과가 의미하는 것은 자연어 일반화가 아니라 다음이다.
-
-> 관점 내부 contradiction과 관점 간 contradiction을 분리해 둔 통제 환경에서는, 하나의 merged ABox보다 perspective-indexed reasoning이 contradiction scope를 정확히 구분할 수 있었다.
-
-Rashomon은 이 실험에서 Perspective Tableau보다 class accuracy를 추가로 올리지 않았다.
-
-## 4.3 Explanation Coverage
-
-별도 synthetic explanation 실험은 20개 사례, 사례당 2개의 minimal contradiction으로 총 40개의 gold explanation을 사용하였다.
+한 사례에 복수의 최소 contradiction explanation이 존재하도록 만든 통제 실험에서는 다음 결과가 나왔다.
 
 | 방법 | Explanation Coverage |
 |---|---:|
 | Single-path | 50% |
-| Rashomon enumeration | **100%** |
+| Multi-explanation / Rashomon enumeration | **100%** |
 
-즉 Rashomon의 초기 장점은 class accuracy보다 **복수의 타당한 설명을 모두 보존하는 것**에서 나타났다.
+이 결과는 초기 H1과 직접 연결된다.
+
+> **여러 설명을 동시에 유지하는 구조의 첫 번째 장점은 최종 class accuracy보다 explanation coverage였다.**
 
 ---
 
-# 5. 첫 번째 실제 한계: Ontology가 불완전하다
+# 4. CONAN은 어디에 위치하는가
 
-그래프에 경로가 있다고 해서 그 경로의 의미나 논리적 모순을 자동으로 알 수 있는 것은 아니다.
+CONAN은 초기 연구에서 perspective와 secret/inferred relation이 실제 narrative에서도 중요한 문제라는 점을 확인하는 데 사용하였다.
+
+그러나 현재 저장소의 `100%` 결과는 공식 CONAN natural-language benchmark 성능이 아니다.
+
+정확한 구분은 다음과 같다.
+
+| 항목 | 실제 의미 |
+|---|---|
+| CONAN-derived controlled verification 100% | CONAN gold relation을 재료로 우리가 만든 reasoner 단위검증 |
+| Synthetic 75% → 100% | 완전 합성 contradiction-scope 실험 |
+| 공식 CONAN end-to-end 성능 | 현재 우리 방법의 검증 artifact 없음 |
+
+따라서 CONAN은 현재 연구에서 **주요 성능 benchmark가 아니라 초기 문제 설정과 relation inventory를 제공한 참고 데이터**로만 취급한다.
+
+이 문서에서는 이후 CONAN을 성능 근거로 사용하지 않는다.
+
+---
+
+# 5. 첫 번째 실제 한계: Graph path가 있어도 의미를 모른다
+
+실제 multi-hop 데이터로 넘어가면서 초기 구조의 첫 번째 한계가 드러났다.
 
 ```text
-Graph Reachability ≠ Semantic Relation ≠ Logical Contradiction
+Graph Reachability
+≠ Semantic Relation
+≠ Logical Contradiction
 ```
 
-예를 들어:
+예를 들어 다음 path가 존재한다고 하자.
 
 ```text
 h --r1--> e1 --r2--> e2 --r3--> t
 ```
 
-라는 path가 존재해도 우리가 알고 싶은 직접 relation이 `(h, ?, t)`라면, ontology가 `?`를 자동으로 생성하지 않는다.
+그래프는 `h`에서 `t`까지 연결된다는 사실만 알려준다. 하지만 이 전체 path가 어떤 직접 relation을 의미하는지, query를 support하는지 contradiction하는지는 별도 semantic inference가 필요하다.
 
-MAGIC structured multi-hop 분석에서는 이 차이가 명확하게 나타났다.
+Structured MAGIC의 초기 진단에서 다음 차이가 관찰되었다.
 
 | 지표 | 결과 |
 |---|---:|
-| Multi-hop legacy direct detection | 33.16% |
+| Legacy multi-hop direct detection | 33.16% |
 | Bidirectional candidate-path coverage | **68.03%** |
-| Ontology/Tableau conflict detection | **5.44%** |
+| Static Ontology/Tableau conflict detection | **5.44%** |
 
-68.03%는 accuracy가 아니라 **candidate path coverage**다. 핵심은 다음이다.
+핵심은 다음과 같다.
 
-> 경로는 찾았지만, hard ontology만으로는 그 경로가 의미하는 관계와 contradiction을 충분히 결정하지 못했다.
+> **경로를 찾는 것과 경로의 의미를 해석하는 것은 다른 문제였다.**
 
----
-
-# 6. 누락 관계를 후보로 예측하는 구조
-
-Ontology에 직접 relation이 없다고 추론을 끝내는 대신, 다중 홉 path에서 relation candidate를 생성하는 방향을 검토하였다.
-
-```text
-Unknown relation:
-(h, ?, t)
-
-Candidate relations:
-R(h,t) = {r1, r2, ..., rm}
-
-Semantic score:
-score(path, relation) ∈ [0,1]
-```
-
-후보별로 possible world를 만들고, ontology/Tableau는 relation을 생성하는 역할이 아니라 **논리적으로 불가능한 후보를 제거하는 constraint verifier**로 사용하였다.
-
-이 단계에서 문제를 세 단계로 분리하게 되었다.
-
-```text
-1. 좋은 candidate를 생성했는가?
-2. candidate를 올바르게 ranking했는가?
-3. 좋은 candidate가 pruning 후에도 살아남았는가?
-```
-
-이 구분이 현재 pruning 연구의 기반이다.
+이 시점부터 Ontology/Tableau는 relation을 생성하는 주체가 아니라 **constraint verifier**로 역할이 축소되기 시작했다.
 
 ---
 
-# 7. MAGIC Possible Worlds: 후보 보존과 후보 선택의 분리
+# 6. 두 번째 연구 단계: Candidate Construction과 Selection 분리
 
-## 7.1 데이터와 지표 범위
-
-검증된 structured MAGIC 실험은:
+이후 구조를 다음 세 문제로 나누었다.
 
 ```text
-588 rows
-1,056 query conflicts
+1. Candidate Construction
+   좋은 설명 / relation / path / world를 후보 안에 넣었는가?
+
+2. Candidate Validation
+   논리적으로 불가능한 후보를 제거했는가?
+
+3. Candidate Selection
+   살아남은 후보 중 올바른 것을 선택했는가?
 ```
 
-를 사용한다.
+이 분리는 이후 가장 중요한 연구 설계가 되었다.
 
-이는 공식 natural-language MAGIC ID/LOC 평가와 다르며, released structured triplet을 이용한 진단이다.
+특히 다음 두 값을 혼동하지 않도록 하였다.
 
-## 7.2 결과
+```text
+Candidate Coverage ≠ Final Accuracy
+```
 
-| 방법 | Row conflict recall | Query conflict recall | Gold-world query recall | Structured exact LOC |
+좋은 후보가 후보 집합 안에 존재하는 것과, 그 후보를 최종적으로 선택하는 것은 전혀 다른 문제다.
+
+---
+
+# 7. Structured MAGIC: Possible Worlds의 실제 역할
+
+Structured MAGIC에서 588 rows, 1,056 query conflicts를 대상으로 candidate construction과 final selection을 분리해서 보았다.
+
+이 수치는 공식 natural-language MAGIC ID/LOC가 아니라 **structured triplet diagnostic**이다.
+
+## 7.1 주요 결과
+
+| 방법 | Row conflict recall | Query conflict recall | Gold-world retention / coverage | Structured exact LOC |
 |---|---:|---:|---:|---:|
 | Static Tableau | 5.44% | 4.45% | — | — |
-| Early-commit single world | 29.93% | 22.63% | — | — |
-| Possible-world retention | — | — | **39.39%** | **29.42%** |
-| Weakly weighted worlds | 22.79% | 16.86% | — | 7.14% |
+| Early-commit | 29.93% | 22.63% | — | — |
+| Possible-world retention | — | — | Query 39.39% / Row exact 29.42% | — |
+| Weak lexical weighted worlds | 22.79% | 16.86% | — | 7.14% |
 
-Weakly weighted world run의 평균 후보 규모는:
-
-```text
-worlds / row          = 7.34
-worlds / query        = 4.08
-candidate paths/query = 1.45
-```
-
-이었다.
-
-이 결과의 핵심은:
+평균 candidate 규모는 대략 다음이었다.
 
 ```text
-Gold-world candidate coverage ≠ Final selected-world correctness
+candidate paths / query ≈ 1.45
+worlds / query          ≈ 4.10
 ```
 
-라는 점이다.
+이 실험에서 중요한 것은 Possible Worlds라는 이름이 아니라 다음 관찰이다.
 
-좋은 world가 후보 안에 존재해도 ranking이 나쁘면 최종 선택은 실패한다.
+> **좋은 설명을 여러 개 보존하면 candidate coverage는 올라갈 수 있지만, weak scorer를 사용하면 최종 선택 성능은 오히려 낮을 수 있다.**
+
+즉 H1은 일부 지지되었지만 H3가 더 중요한 문제로 떠올랐다.
 
 ---
 
-# 8. Semantic Scorer: 후보 ranking 개선
+# 8. Semantic Scoring: 같은 후보라도 scorer가 바뀌면 결과가 달라진다
 
-Weak lexical weighting 대신 `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli`를 semantic scorer로 사용하였다.
+Weak lexical weighting 대신 `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli`를 discriminative NLI scorer로 사용하였다.
 
-DeBERTa는 relation을 생성하는 모델이 아니라 **동일 candidate 중 질의와 의미적으로 더 잘 맞는 후보를 점수화하는 모듈**이다.
+DeBERTa는 LLM generator가 아니라 **candidate evidence와 query 사이의 support / contradiction / unresolved를 판별하는 scorer**다.
 
-## 8.1 검증된 structured MAGIC 결과
+## 8.1 Structured MAGIC 결과
 
 | 지표 | Weak lexical | DeBERTa | 변화 |
 |---|---:|---:|---:|
-| Row conflict recall | 22.79% | **41.50%** | **+18.71%p** |
+| Row conflict recall | 22.79% | **41.50%** | **+18.70%p** |
 | Query conflict recall | 16.86% | **31.53%** | **+14.68%p** |
-| Structured exact localization | 7.14% | **15.48%** | **+8.33%p** |
+| Structured exact LOC | 7.14% | **15.48%** | **+8.33%p** |
 | Query gold-path selection | — | 22.06% | 참고 |
 
-### 반드시 제외해야 하는 자연어 MAGIC 결과
+이 결과는 candidate construction을 바꾸지 않고 scorer를 바꿨을 때 얻은 변화라는 점이 중요하다.
 
-초기 natural-language 실험 일부에서는 다음 provenance metadata가 semantic proposition과 함께 scorer 입력에 들어갔다.
+따라서 현재까지 가장 강한 초기 결론 중 하나는 다음이다.
 
-```text
-[source=context1, sentence=...]
-[source=context2, sentence=...]
-```
-
-이 정보는 의미 판단 대상이 아니라 audit metadata이다. 따라서 **해당 수정 이전 natural-language MAGIC 결과는 최종 성능 근거에서 전부 제외한다.**
-
-위 표의 수치는 오류가 있었던 자연어 실행이 아니라 structured triplet world-ranking diagnostic 결과다.
+> **Multi-hop conflict reasoning의 주요 병목 중 하나는 candidate generation 자체보다 candidate ranking / scoring일 수 있다.**
 
 ---
 
-# 9. DAFNA-EA Books: 좋은 후보와 좋은 최종 선택은 다르다
+# 9. DAFNA: 후보 coverage가 높아도 최종 truth selection은 어렵다
 
-100개 gold book subset을 사용하였다.
+DAFNA-EA Books 100 gold-book subset에서 다음을 확인하였다.
 
 ```text
 gold books = 100
@@ -468,644 +307,588 @@ claims     = 1,999
 sources    = 227
 ```
 
-Possible-world candidate generation의 gold-world coverage는 **93%**였다. 평균 candidate worlds는 27.94개, 최대 256개였다.
+Candidate truth-world coverage는 **93%**였다.
 
-## 9.1 최종 truth selection
+그러나 최종 결과는:
 
 | 방법 | Exact-set Accuracy | Author F1 |
 |---|---:|---:|
-| Possible-world uniform | 58% | 80.38% |
-| Hard-commit reliability | 61% | 84.04% |
-| Possible-world marginal | **62%** | **84.13%** |
-| Prior atomic resolution | 61% | 82.88% |
+| Uniform worlds | 58% | 80.38% |
+| Hard commit | 61% | 84.04% |
+| Marginal reliability | **62%** | **84.13%** |
+| Prior atomic | 61% | 82.88% |
 | TruthFinder | 57% | 66.85% |
 | AccuSim | 57% | 66.18% |
-| 2-Estimates | 54% | 65.28% |
-| 3-Estimates | 53% | 65.45% |
 
-Prior atomic resolution 대비:
+이었다.
 
-```text
-Exact-set Accuracy: 61% → 62%      (+1%p)
-Author F1:          82.88% → 84.13% (+1.25%p)
-```
-
-하지만 더 중요한 관찰은 다음이다.
+가장 중요한 차이는:
 
 ```text
-Gold-world coverage = 93%
-Best exact selection = 62%
-```
-
-즉 후보 생성보다 ranking/calibration이 더 큰 병목이었다.
-
----
-
-# 10. 연구 초점 이동: 좋은 후보가 pruning에서 사라질 수 있다
-
-Semantic scorer를 개선해도 candidate가 중간 pruning에서 제거되면 다음 단계에서 다시 확장할 수 없다.
-
-따라서 연구 질문이 다음처럼 바뀌었다.
-
-```text
-이전:
-어떤 relation/world가 가장 맞는가?
-
-변경:
-맞는 relation/world가 후보 안에 있었는데
-pruning에서 먼저 사라지는 것은 아닌가?
-```
-
----
-
-# 11. Pruning Regret와 주요 평가 지표
-
-## 11.1 Viable path
-
-현재 partial path가 남은 hop budget 안에 target/gold evidence로 이어질 수 있으면 viable로 정의한다.
-
-## 11.2 Pruning Regret
-
-```text
-PR(i,k) = 1
-iff
-pruning 전 viable path 수 > 0
-AND
-pruning 후 viable path 수 = 0
-```
-
-Query Pruning Regret는 한 query에서 이런 사건이 한 번이라도 발생한 비율이다. **낮을수록 좋다.**
-
-## 11.3 Retained-set validity
-
-후보를 많이 남기면 survival만 높아질 수 있으므로 precision/recall/F1도 함께 본다.
-
-```text
-Precision = viable retained paths / all retained paths
-Recall    = viable retained paths / viable candidate paths
-F1        = 2 × Precision × Recall / (Precision + Recall)
-```
-
-## 11.4 비용
-
-```text
-Average Active Width
-Average Expanded Candidates
-Scorer Calls
-```
-
-를 함께 측정한다.
-
-따라서 최종 평가 축은:
-
-```text
-Search / Evidence Preservation
-× Retained-set Validity
-× Search Cost
+Candidate coverage = 93%
+Best final exact   = 62%
 ```
 
 이다.
 
----
+즉 MAGIC과 DAFNA 모두 같은 방향을 가리켰다.
 
-# 12. WN18RR Frozen n=50: 후보 보존 진단
-
-이 실험은 candidate relation 11개를 한 번 점수화한 frozen diagnostic이다.
-
-검증 run의 실제 값은 다음과 같다.
-
-| 지표 | 결과 |
-|---|---:|
-| Top-1 relation accuracy | **16%** |
-| Rashomon ε=.05 gold relation coverage | **42%** |
-| Tableau 후 gold relation retention | **42%** |
-| Rashomon+Tableau 최종 Top-1 accuracy | **16%** |
-| 평균 Rashomon 후보 수 | 3.82 |
-| 평균 Tableau rejected worlds | 0.00 |
-
-### 중요한 교정
-
-`16%`와 `42%`는 같은 지표가 아니다.
-
-```text
-16% = 가장 높은 relation 하나가 gold인가?
-42% = 여러 near-optimal 후보 안에 gold relation이 포함되는가?
-```
-
-따라서 `정확도가 16%에서 42%로 향상되었다`고 쓰면 안 된다.
-
-정확한 해석은:
-
-> 단일 선택의 Top-1 정확도는 16%였지만 평균 3.82개의 near-optimal 후보를 유지하면 42%의 사례에서 gold relation이 후보 집합 안에는 포함되었다. 그러나 현재 Tableau filtering은 ranking을 개선하지 못해 최종 Top-1 accuracy는 16%로 그대로였다.
-
-이다.
+> **좋은 후보를 만드는 문제와 좋은 후보를 고르는 문제는 분리해야 한다.**
 
 ---
 
-# 13. WN18RR Iterative n=10: Global band의 실패와 Relative-loss
+# 10. 세 번째 연구 분기: 좋은 후보가 pruning에서 사라지는가
 
-실제 iterative search에서는 이전 단계에서 남은 path만 다음 단계에서 확장된다.
+Candidate selection을 살펴보는 과정에서 별도의 질문이 생겼다.
 
 ```text
-Expand → Score → Prune → Expand → Score → Prune
+좋은 후보가 애초에 생성되지 않았는가?
+        vs
+좋은 후보가 생성되었지만 중간 pruning에서 제거되었는가?
 ```
 
-## 13.1 Global additive band
+이 문제를 보기 위해 WN18RR과 MAGIC external gold를 사용해 **Pruning Regret**를 정의하였다.
 
-| 정책 | Search Success | Query Pruning Regret | Avg Width |
+```text
+Pruning Regret =
+pruning 전에는 viable / gold path가 존재했지만
+pruning 후에는 모두 사라진 사건
+```
+
+이 시기의 목적은 Rashomon Worlds를 검증하는 것이 아니라 **delayed commitment가 search 단계에서도 필요한가**를 확인하는 것이었다.
+
+---
+
+# 11. Near-optimal Preservation 실험
+
+## 11.1 WN18RR Frozen n=50
+
+단일 Top-1 relation accuracy는 **16%**였지만, near-optimal candidate set 안에 gold relation이 포함되는 coverage는 **42%**였다.
+
+```text
+Top-1 accuracy       = 16%
+Candidate coverage   = 42%
+```
+
+이 두 값은 같은 metric이 아니다.
+
+이 실험은 다음 가능성을 보여주었다.
+
+> **단일 선택은 틀렸더라도 gold candidate가 근처에 살아 있는 경우가 존재한다.**
+
+그러나 Tableau filtering 후 최종 Top-1은 그대로 16%였기 때문에, 단순 보존만으로 final selection 문제는 해결되지 않았다.
+
+## 11.2 WN18RR Iterative
+
+Global additive near-optimal band는 iterative search에서 Top-K보다 오히려 나빴다.
+
+따라서 다음 가설은 폐기하였다.
+
+> 최고점 주변 후보를 전역적으로 많이 보존하면 일반적으로 Top-K보다 좋다.
+
+Relative-loss .50은 n=10에서 success 60% → 70%를 보였지만 width와 expansion 비용이 증가하였다.
+
+이 시점부터 **보존량 자체가 아니라 어디서 delayed pruning을 해야 하는가**가 중요해졌다.
+
+---
+
+# 12. BADP: Boundary-Aware Delayed Pruning
+
+BADP는 이 문제를 해결하기 위해 검토한 하나의 search policy다.
+
+기본 아이디어는 다음과 같다.
+
+```text
+Top-K 자체는 유지
++
+K번째와 K+1번째가 거의 동점일 때만
+cutoff 바로 아래 후보를 추가 보존
+```
+
+즉 global near-optimal set이 아니라 실제 제거가 일어나는 **Top-K boundary**를 본다.
+
+## 12.1 MAGIC external gold
+
+Recoverable query n=420에서:
+
+| 정책 | Gold Path Survival | Gold F1 | Avg Width |
 |---|---:|---:|---:|
-| Top-3 | **60%** | 40% | 2.67 |
-| Top-5 | **60%** | 40% | 3.88 |
-| Global ε=.05 | 40% | 60% | 2.65 |
-| Global ε=.10 | 40% | 60% | 3.62 |
+| Top-3 | 94.76% | **73.01%** | 1.60 |
+| Boundary Top-3 δ=.01 | **97.86%** | 70.67% | 1.77 |
+| Top-5 | 98.10% | **70.54%** | 1.79 |
+| Boundary Top-5 δ=.01 | **98.81%** | 68.93% | 1.87 |
+| No pruning | 100% | 63.64% | 2.15 |
 
-Frozen candidate에서는 near-optimal preservation이 유망해 보였지만 iterative search에서 Global additive band는 오히려 Top-K보다 나빴다.
+High-branching subset n=32에서는 Top-3 gold-path survival이 37.50%까지 떨어졌고 Boundary Top-3는 78.13%였다.
 
-따라서 다음 가설을 폐기하였다.
+이 결과가 보여준 것은 다음이다.
 
-> 최고점 주변 near-optimal 후보를 전역적으로 보존하면 일반적으로 Top-K보다 좋다.
+> **branching이 큰 구간에서 fixed Top-K가 중요한 evidence path를 비가역적으로 제거할 가능성이 커진다.**
 
-## 13.2 Relative-loss
+하지만 더 많이 살린다고 F1이 좋아지는 것은 아니었다.
 
-| 정책 | Search Success | Pruning Regret | Avg Width | Avg Expanded |
-|---|---:|---:|---:|---:|
-| Top-3 | 60% | 40% | 2.67 | 21.30 |
-| Top-5 | 60% | 40% | 3.88 | 28.30 |
-| Relative-loss .25 | 50% | 50% | 4.09 | 31.40 |
-| Relative-loss .50 | **70%** | **30%** | 5.97 | 31.40 |
+## 12.2 WN18RR iterative n=50
 
-Relative-loss .50은 success를 +10%p 높였지만 폭과 비용도 증가하였다.
+| 정책 | Success | Pruning Regret ↓ | Avg Expanded |
+|---|---:|---:|---:|
+| Top-3 | 40% | 58% | 24.38 |
+| Boundary Top-3 δ=.005 | **46%** | **52%** | 25.42 |
+| Top-5 | 56% | 42% | 29.00 |
+| Boundary Top-5 δ=.010 | **60%** | **38%** | 31.08 |
+
+방향은 긍정적이었지만 비용 증가와 retained-set precision 감소가 있었다.
+
+따라서 BADP는 **유망한 pruning ablation**이지 현재 연구 전체의 최종 방법은 아니다.
 
 ---
 
-# 14. MAGIC External Gold: 실제 증거 보존 분석
+# 13. Conditional BADP와 Boundary Risk: 한계 확인
 
-DeBERTa scorer 자체를 gold로 쓰면 순환 평가가 될 수 있으므로 `perturb_triplet` provenance를 scorer와 독립적인 external gold로 사용하였다.
+BADP를 항상 켜는 비용을 줄이기 위해 단순 K/K+1 margin으로 activation을 결정하는 Conditional BADP를 검토하였다.
+
+WN18RR에서는 일부 설정에서 always-on BADP와 같은 success를 더 낮은 activation rate로 재현했다.
+
+그러나 WebQSP n=20에서는 activation rate가 60~97.5%까지 올라갔고 Top-3보다 search success가 개선되지 않았다.
+
+따라서 다음 가설은 현재 지지되지 않는다.
+
+> **단순 boundary margin 하나만으로 위험한 pruning boundary를 충분히 식별할 수 있다.**
+
+여기서 얻은 연구적 교훈은 BADP 자체보다 다음 구분이다.
 
 ```text
-전체 query                    = 1,056
-candidate path 존재           = 618
-pruning 전 gold path 존재     = 420 (recoverable)
+Preservation operator:
+무엇을 추가로 남길 것인가?
+
+Risk detector:
+언제 추가 보존이 필요한가?
 ```
 
-## 14.1 Recoverable n=420
+Boundary Risk는 이 문제를 탐색하기 위한 후속 아이디어였지만, 아직 최종 연구 주제로 고정할 단계는 아니다.
 
-| 정책 | Gold Path Survival | Gold Precision | Gold Recall | Gold F1 | Avg Width |
+---
+
+# 14. 최근 연구 방향: 방법 이름보다 same-candidate-space 비교
+
+최근에는 연구 질문을 다시 더 근본적으로 좁혔다.
+
+> **같은 base model과 같은 candidate space를 사용할 때, alternative-preserving reasoning과 scorer 선택이 실제 conflict identification에 어떤 영향을 주는가?**
+
+이를 위해 natural-language MAGIC에서 다음 네 조건을 비교하는 구조를 만들었다.
+
+```text
+D   = Direct
+DC  = Fixed two-stage call-matched Direct
+RA  = Alternative-preserving pipeline + same LLM scorer
+RD  = Alternative-preserving pipeline + DeBERTa scorer
+```
+
+여기서 RA/RD는 현재 코드상 Possible Worlds를 사용하지만, 최종 연구가 반드시 Rashomon Worlds라는 이름을 유지해야 한다는 전제는 두지 않는다.
+
+핵심 통제는 다음이다.
+
+```text
+RA와 RD는
+동일 claim extraction
+동일 candidate paths
+동일 possible-world construction
+을 공유한다.
+
+차이는 scorer뿐이다.
+```
+
+---
+
+# 15. HF 20-row natural-language MAGIC pilot
+
+실험 run:
+
+```text
+GitHub Actions Run 32747389414
+Artifact 9528788562
+attempts = 1
+limit    = 20 conflict rows
+retries  = 0
+```
+
+모델은:
+
+```text
+Cohere Command A 111B
+GPT-OSS 120B
+Qwen3 235B A22B Instruct 2507
+```
+
+을 사용하였다.
+
+한 row당 logical provider call은 다음과 같이 고정하였다.
+
+```text
+Direct                         1
+Two-stage Direct               2
+Shared claim extraction        1
+Same-LLM batch world scoring   1
+DeBERTa scoring                local inference
+---------------------------------
+총 provider calls              5 / row
+```
+
+## 15.1 결과
+
+| 모델 | n | Direct conflict recall | Two-stage Direct | Alternative + LLM scorer | Alternative + DeBERTa |
 |---|---:|---:|---:|---:|---:|
-| Top-1 | 80.71% | **80.71%** | 80.52% | **80.62%** | 1.00 |
-| Top-3 | 94.76% | 59.38% | 94.77% | 73.01% | 1.60 |
-| Top-5 | 98.10% | 55.07% | 98.10% | 70.54% | 1.79 |
-| Global ε=.10 | 97.14% | 50.18% | 97.15% | 66.18% | 1.94 |
-| Relative-loss .25 | 83.81% | 74.26% | 83.61% | 78.66% | 1.13 |
-| Boundary Top-3 δ=.01 | **97.86%** | 55.30% | **97.86%** | 70.67% | 1.77 |
-| Boundary Top-5 δ=.01 | **98.81%** | 52.93% | **98.81%** | 68.93% | 1.87 |
-| No pruning | 100% | 46.67% | 100% | 63.64% | 2.15 |
+| Command A 111B | 20 | 80% | 100% | 30% | **80%** |
+| GPT-OSS 120B | 실패 | — | — | — | — |
+| Qwen3 235B | 20 | 55% | 100% | 20% | **75%** |
 
-Top-3 대비 Boundary Top-3의 survival은:
+GPT-OSS는 첫 complete row가 기록되기 전에 HF provider의 `HTTP 504 Gateway Time-out`으로 중단되었다. 따라서 GPT-OSS 값은 성능 비교에 사용하지 않는다.
+
+Command A와 Qwen은 각각 20 rows를 완주했고 physical provider call은 정확히 100/100이었다.
+
+## 15.2 가장 중요한 20-row 관찰
+
+같은 candidate space에서 scorer만 바꾸었을 때:
 
 ```text
-94.76% → 97.86%  (+3.10%p)
+Command A
+LLM scorer      30%
+DeBERTa scorer  80%
+Δ               +50%p
+
+Qwen3
+LLM scorer      20%
+DeBERTa scorer  75%
+Δ               +55%p
 ```
 
-로 증가하였다. 그러나 Gold F1은 73.01%에서 70.67%로 감소했다.
+paired diagnostic에서도 같은 방향이 나왔다.
 
-즉 **gold path를 더 살렸지만 non-gold path도 같이 늘었다.**
+| 모델 | 비교 | Δ | 95% bootstrap CI | exact McNemar p |
+|---|---|---:|---:|---:|
+| Command A | DeBERTa vs LLM scorer | **+50%p** | +30 ~ +70 | 0.00195 |
+| Qwen3 | DeBERTa vs LLM scorer | **+55%p** | +35 ~ +75 | 0.00098 |
 
-## 14.2 High-branching n=32
+20 rows는 최종 통계 표본으로 충분하지 않지만, **scorer bottleneck을 찾는 pilot**으로는 강한 신호다.
 
-후보 path가 5개 이상인 recoverable query에서는 fixed Top-K의 약점이 훨씬 크게 나타났다.
+## 15.3 이 결과가 의미하지 않는 것
 
-| 정책 | Gold Path Survival | Gold Precision | Gold F1 | Avg Width |
-|---|---:|---:|---:|---:|
-| Top-3 | 37.50% | 12.50% | 18.75% | 3.00 |
-| Top-5 | 75.00% | **15.00%** | 25.00% | 5.00 |
-| Boundary Top-3 δ=.01 | **78.13%** | 14.97% | **25.13%** | 5.22 |
-| Boundary Top-5 δ=.01 | **84.38%** | 13.78% | 23.68% | 6.13 |
-| Global ε=.10 | 96.88% | 11.52% | 20.60% | 8.41 |
-| No pruning | 100% | 10.26% | 18.60% | 9.75 |
+이번 20개는 모두 conflict-only MAGIC rows다.
 
-개선 폭은:
+따라서:
 
 ```text
-Top-3: 37.50% → 78.13%  (+40.63%p)
-Top-5: 75.00% → 84.38%  (+9.38%p)
+ID = accuracy가 아니라 conflict recall diagnostic
 ```
 
 이다.
 
-현재까지 가장 강한 구조적 관찰은:
+Two-stage Direct의 100%를 전체 MAGIC accuracy 100%로 해석하면 안 된다. 항상 conflict라고 예측하는 시스템도 이 subset에서는 recall 100%가 될 수 있다.
 
-> **후보 branching이 큰 구간에서 fixed Top-K가 중요한 evidence path를 잃는 위험이 크게 증가한다.**
+또한 이 결과만으로 Possible Worlds가 Direct보다 우수하다고 주장할 수도 없다.
 
-이다.
+오히려 현재 결과는 다음을 보여준다.
 
----
-
-# 15. BADP: 실제 Top-K cutoff를 대상으로 지연
-
-후보를 점수 순서로 정렬했다고 하자.
-
-```text
-s1 ≥ s2 ≥ ... ≥ sK ≥ s(K+1) ≥ ...
-```
-
-BADP는 Top-K를 기본으로 유지하면서 K번째 점수 바로 아래의 후보만 δ 범위 내에서 추가 보존한다.
-
-```text
-BADP(K, δ)
-= TopK
-  + { candidate_j | j > K and score(K) - score(j) ≤ δ }
-```
-
-Global band와의 차이는 최고점 주변 전체가 아니라 **실제로 제거가 일어나는 K/K+1 boundary 주변만 본다**는 것이다.
+> **Alternative-preserving construction은 candidate space를 만들지만, final conflict decision은 scorer에 매우 민감하다.**
 
 ---
 
-# 16. WN18RR Iterative n=20: BADP 첫 반복 탐색
+# 16. 현재까지 연구 가설의 상태
 
-| 정책 | Success | Regret ↓ | Viability Precision | Viability Recall | Viability F1 | Avg Width | Avg Expanded |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Top-3 | 50% | 50% | 24.46% | 53.57% | **33.58%** | 2.71 | 24.80 |
-| Boundary Top-3 δ=.005 | **55%** | **45%** | 22.32% | 56.82% | 32.05% | 3.34 | 27.15 |
-| Top-5 | 55% | 45% | 20.22% | 57.89% | **29.97%** | 4.06 | 32.35 |
-| Boundary Top-5 δ=.010 | **60%** | **40%** | 18.18% | 61.86% | 28.10% | 5.00 | 35.10 |
-| Boundary Top-5 δ=.050 | **65%** | **35%** | 16.24% | 67.74% | 26.20% | 6.16 | 38.25 |
+## 16.1 H1 Alternative Preservation
 
-Success와 regret는 좋아졌지만 precision/F1과 비용이 나빠졌다.
+**부분 지지.**
 
-```text
-Success / Recall ↑
-Pruning Regret ↓
-Precision / F1 ↓
-Search Cost ↑
-```
+근거:
 
-또한 가장 width가 가까운 δ=.001 비교에서는 Top-K 대비 success gain이 없었다. 따라서 n=20에서 **strict same-budget superiority는 확인되지 않았다.**
+- Synthetic explanation coverage 50% → 100%
+- Structured MAGIC에서 early single selection보다 더 높은 gold-world candidate retention
+- WN18RR에서 Top-1 16%보다 candidate coverage 42%
 
----
+하지만 candidate coverage 증가가 final accuracy 증가를 보장하지 않는다.
 
-# 17. WN18RR Iterative n=50: 확대 재검증
+## 16.2 H2 Delayed Commitment
 
-수정 재실행 `32852520635`는 평가, artifact, summary 모두 성공하였다.
+**부분 지지.**
 
-```text
-2-hop = 19
-3-hop = 23
-4-hop = 8
-총 50 query
-```
+근거:
 
-## 17.1 주요 결과
+- Early-commit보다 alternative set에서 더 많은 viable explanation을 보존
+- MAGIC high-branching과 WN18RR에서 aggressive Top-K pruning이 viable/gold path를 제거하는 현상 관찰
 
-| 정책 | Success | Regret ↓ | Viability Precision | Viability Recall | Viability F1 | Avg Width | Avg Expanded |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Top-3 | 40% | 58% | 25.00% | 54.93% | **34.36%** | 2.69 | 24.38 |
-| Boundary Top-3 δ=.001 | 42% | 56% | 24.59% | 55.00% | 33.99% | 2.86 | 25.08 |
-| Boundary Top-3 δ=.005 | **46%** | **52%** | 23.98% | 57.59% | 33.86% | 3.16 | 25.42 |
-| Top-5 | 56% | 42% | 23.60% | 63.07% | **34.35%** | 3.95 | 29.00 |
-| Boundary Top-5 δ=.001 | 58% | 40% | 22.78% | 63.64% | 33.55% | 4.17 | 29.50 |
-| Boundary Top-5 δ=.010 | **60%** | **38%** | 21.42% | 66.26% | 32.37% | 4.73 | 31.08 |
+그러나 항상 더 많은 후보를 유지하는 것은 precision과 비용을 악화시킨다.
 
-Top-3 → Boundary Top-3 δ=.005:
+## 16.3 H3 Evidence-aware Adjudication
 
-```text
-Success: 40% → 46%     (+6%p)
-Regret:  58% → 52%     (-6%p)
-Expanded: 24.38 → 25.42 (+1.04)
-```
+**현재 가장 강하게 지지되는 가설.**
 
-Top-5 → Boundary Top-5 δ=.010:
+근거:
 
-```text
-Success: 56% → 60%     (+4%p)
-Regret:  42% → 38%     (-4%p)
-Expanded: 29.00 → 31.08 (+2.08)
-```
+- Structured MAGIC: weak lexical → DeBERTa에서 row +18.70%p
+- Structured exact LOC +8.33%p
+- 20-row natural-language pilot: 동일 candidate space에서 DeBERTa가 same-LLM scorer보다 +50~55%p
+- DAFNA: 93% candidate coverage 대비 62% final exact selection
 
-작은 δ=.001에서도:
+현재 여러 데이터셋에서 가장 반복적으로 나타나는 병목은 **construction보다 ranking / adjudication**이다.
 
-```text
-Top-3 success 40% → 42%, Expanded +0.70
-Top-5 success 56% → 58%, Expanded +0.50
-```
+## 16.4 Rashomon Worlds 자체가 반드시 필요한가
 
-였다.
+**아직 결론 없음.**
 
-n=20과 n=50에서 boundary-local preservation의 방향은 반복되었지만, Viability F1은 Top-K보다 소폭 낮았다.
+Possible Worlds는 alternative preservation을 표현하는 유용한 구현이지만, 현재 결과만으로 다음을 주장할 수 없다.
+
+> Rashomon Worlds라는 특정 표현 방식이 다른 모든 alternative-preserving 방법보다 우수하다.
+
+따라서 최종 논문은 특정 이름을 고집하기보다 **alternative-preserving / delayed-commitment reasoning**을 상위 개념으로 두고, Possible Worlds를 한 구현으로 평가하는 방향도 열어둔다.
+
+## 16.5 Tableau가 최종 성능의 핵심인가
+
+**제한적으로만 지지.**
+
+Synthetic contradiction scope에서는 논리 검증이 명확히 유효했다.
+
+하지만 WN18RR frozen 실험에서는 Tableau filtering이 최종 Top-1 ranking을 개선하지 못했다. 실제 ontology가 불완전하면 Tableau가 reject할 수 있는 후보 자체가 적을 수 있다.
+
+따라서 Tableau 역시 최종 논문의 필수 중심 모듈인지 재검토 가능하다.
+
+## 16.6 BADP / Boundary Risk가 최종 연구인가
+
+**아직 아님.**
+
+BADP는 pruning regret라는 실제 현상을 보여준 유용한 연구 분기다. 하지만 WebQSP에서 simple conditional policy가 실패했고, strict same-budget superiority도 아직 확립되지 않았다.
+
+따라서 현재는 메인 결론이 아니라 **delayed commitment를 search 단계에서 구현한 ablation / 후속 연구 후보**로 보는 것이 안전하다.
 
 ---
 
-# 18. Conditional BADP: BADP를 항상 켜지 않기
+# 17. 현재까지 가장 강한 연구 관찰
 
-Always-on BADP는 경계가 명확한 경우에도 추가 후보를 보존할 수 있다. 이를 줄이기 위해 K번째와 K+1번째 점수 차이를 이용하였다.
+### 관찰 1. 좋은 candidate가 존재하는 것과 최종 정답을 선택하는 것은 다르다
+
+MAGIC과 DAFNA에서 반복적으로 확인되었다.
 
 ```text
-ΔK = score(K) - score(K+1)
-
-if ΔK ≤ τ:
-    BADP(K, δ)
-else:
-    Top-K
+Candidate Coverage ↑
+≠
+Final Selection Accuracy ↑
 ```
 
-- `τ`: BADP를 켤지 결정하는 boundary-risk threshold
-- `δ`: BADP가 켜졌을 때 추가 보존 범위
+### 관찰 2. Same candidate space에서도 scorer에 따라 결과가 크게 달라진다
 
-## 18.1 WN18RR n=50 Conditional 결과
+20-row natural-language pilot에서 가장 직접적으로 확인되었다.
 
-| 정책 | Success | Regret ↓ | Avg Width | Avg Expanded | Activation Rate |
-|---|---:|---:|---:|---:|---:|
-| Conditional Top-3 τ=.005, δ=.005 | **46%** | **52%** | 3.16 | 25.42 | **28.32%** |
-| Conditional Top-3 τ=.010, δ=.005 | **46%** | **52%** | 3.16 | 25.42 | 43.36% |
-| Conditional Top-3 τ=.020, δ=.010 | 46% | 52% | 3.38 | 26.38 | 62.28% |
-| Conditional Top-5 τ=.010, δ=.010 | **60%** | **38%** | 4.73 | 31.08 | **61.80%** |
-| Conditional Top-5 τ=.020, δ=.010 | **60%** | **38%** | 4.73 | 31.08 | 73.03% |
-| Conditional Top-5 τ=.050, δ=.020 | 60% | 38% | 5.11 | 33.22 | 94.38% |
+```text
+Same construction
+Same paths
+Same extracted claims
+Different scorer
+→ +50~55%p difference
+```
 
-Top-3 τ=.005는 boundary check의 28.32%에서만 활성화되었는데 always-on Boundary Top-3 δ=.005와 동일한 46% success를 보였다.
+### 관찰 3. 여러 설명을 보존하는 것은 coverage에 도움이 될 수 있다
 
-그러나 이것만으로 Conditional BADP의 일반적 우월성을 주장할 수 없다. WebQSP에서 결과가 달랐다.
+Synthetic explanation, structured MAGIC, WN18RR에서 공통적으로 나타났다.
+
+### 관찰 4. 많이 보존하는 것이 항상 좋은 것은 아니다
+
+No-pruning과 wide-band 방식은 survival은 높지만 precision/F1과 비용이 악화될 수 있었다.
+
+### 관찰 5. pruning은 실제 별도 병목이 될 수 있다
+
+특히 high-branching environment에서 fixed Top-K의 viable/gold path loss가 크게 증가했다.
+
+### 관찰 6. 논리 verifier만으로는 semantic uncertainty를 해결할 수 없다
+
+Static Tableau의 낮은 MAGIC detection과 WN18RR의 낮은 filtering 효과가 이를 보여준다.
 
 ---
 
-# 19. WebQSP n=20: 실제 질문에서는 단순 margin gate가 부족
+# 18. 폐기하거나 약화된 가설
 
-현재 WebQSP 실험은:
+다음 주장은 현재 그대로 유지하지 않는다.
 
-```text
-ToG 공개 WebQSP 질문 사용
-qid_topic_entity 사용
-Wikidata outgoing entity statements 탐색
-lexical prefilter 적용
-DeBERTa scorer 공유
-최종 LLM answer generator 없음
-```
+### 18.1 CONAN에서 우리 방법이 100%를 달성했다
 
-인 retrieval/search validation이다.
+폐기. Controlled verification 결과였다.
 
-따라서 Freebase 기반 ToG의 end-to-end QA 성능과 직접 비교하지 않는다.
+### 18.2 Possible Worlds를 만들면 자동으로 final accuracy가 오른다
 
-## 19.1 주요 정책
+폐기. Weak scorer에서는 final selection이 나빠질 수 있다.
 
-| 정책 | Success | Hit@1 | Retrieval F1 | Answer Recall | Answer Pruning Regret ↓ | Avg Width | Avg Expanded |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Top-3 | **35%** | 20% | **10.42%** | 27.08% | **15%** | **3.00** | **33.05** |
-| Top-5 | 35% | 20% | 7.14% | 27.08% | 20% | 5.00 | 46.35 |
-| Relative-loss .50 | **45%** | 20% | 7.25% | 32.42% | 20% | 8.90 | 68.80 |
-| Always BADP Top-3 δ=.005 | 35% | 20% | 8.18% | 27.08% | 20% | 4.25 | 45.65 |
-| Always BADP Top-5 δ=.050 | **45%** | 20% | 5.95% | **34.08%** | 20% | 9.38 | 77.20 |
+### 18.3 Tableau가 알아서 누락 relation semantics를 복원한다
 
-더 넓은 정책은 success가 45%까지 올라가기도 했지만 비용이 크게 증가하고 Retrieval F1은 Top-3보다 낮았다.
+폐기. Tableau는 constraint verifier이지 semantic relation generator가 아니다.
 
-## 19.2 Conditional BADP
+### 18.4 후보를 많이 남기면 항상 성능이 좋아진다
 
-| 정책 | Success | Retrieval F1 | Regret ↓ | Avg Width | Avg Expanded | Activation Rate |
-|---|---:|---:|---:|---:|---:|---:|
-| Top-3 | **35%** | **10.42%** | **15%** | **3.00** | **33.05** | — |
-| Cond. Top-3 τ=.005 δ=.005 | 35% | 8.18% | 20% | 4.25 | 45.65 | 60.0% |
-| Cond. Top-3 τ=.010 δ=.005 | 35% | 8.18% | 20% | 4.25 | 45.65 | 72.5% |
-| Cond. Top-3 τ=.020 δ=.010 | 35% | 6.94% | 20% | 5.18 | 54.55 | 87.5% |
-| Cond. Top-5 τ=.010 δ=.010 | 35% | 5.49% | 20% | 7.38 | 64.45 | 92.5% |
-| Cond. Top-5 τ=.020 δ=.010 | 35% | 5.49% | 20% | 7.38 | 64.45 | 97.5% |
+폐기. Precision/F1과 비용이 악화될 수 있다.
 
-이 설정에서는 Conditional BADP가 Top-3 search success를 높이지 못했고 F1과 비용은 악화되었다.
+### 18.5 Global near-optimal band가 Top-K보다 일반적으로 좋다
 
-또한 activation rate가 60~97.5%로 지나치게 높아 실제로는 always-on에 가까운 경우가 많았다.
+폐기. WN18RR iterative에서 실패했다.
 
-따라서 다음 두 문제를 분리해야 한다.
+### 18.6 Boundary margin 하나면 위험한 pruning point를 찾을 수 있다
 
-```text
-A. Boundary 주변 후보를 추가 보존하면 도움이 되는가?
-B. 어느 boundary에서 추가 보존을 켜야 하는가?
-```
+현재 지지되지 않음. WebQSP에서 activation이 과도했다.
 
-WN18RR에서는 A에 긍정적 신호가 있었으나 WebQSP는 단순 `ΔK ≤ τ` 규칙이 B를 충분히 해결하지 못함을 보여준다.
+### 18.7 Rashomon Worlds를 최종 논문에서 반드시 유지해야 한다
+
+미확정. 현재 연구의 핵심은 특정 이름보다 delayed commitment와 evidence-aware adjudication이다.
 
 ---
 
-# 20. 코드 오류와 평가 해석 교정 내역
+# 19. 다음 재실험에서 확인할 것
 
-| 항목 | 잘못 해석될 수 있었던 내용 | 교정 |
+20-row pilot은 최종 결론보다 **어디를 고쳐야 하는지 찾기 위한 pilot**으로 사용한다.
+
+다음 재실험 전에 수정할 항목은 네 가지다.
+
+## 19.1 GPT-OSS 504를 infrastructure failure로 분리
+
+현재는 한 row의 provider 504가 전체 model run을 중단시킨다.
+
+수정 방향:
+
+```text
+row-level error isolation
+provider / infrastructure error 별도 기록
+completed rows와 failed rows 분리
+성능 metric에는 completed paired rows만 사용
+```
+
+## 19.2 Analyzer의 fixed two-stage baseline 버그 수정
+
+기존 analyzer가 과거 `budget_reached` 필드를 요구하기 때문에 새로운 fixed two-stage Direct 비교가 `null`로 나온다.
+
+새 구조에서는 fixed call이므로 해당 filter를 제거하거나 protocol-version에 따라 분기해야 한다.
+
+## 19.3 Actual HTTP request logging
+
+현재 logical calls는 알 수 있지만 실패한 request까지 정확하게 집계하지 못한다.
+
+최종 실험에서는 다음을 기록한다.
+
+```text
+actual HTTP requests
+logical task calls
+input tokens
+output tokens
+latency
+HTTP / contract failures
+```
+
+## 19.4 Same-LLM batch scorer의 contradiction under-scoring 분석
+
+현재 가장 중요한 기술적 질문이다.
+
+동일 candidate space에서 LLM scorer가 DeBERTa보다 크게 낮은 이유를 분해한다.
+
+검토 항목:
+
+```text
+batch prompt에서 여러 world가 섞여 calibration이 약해지는가?
+contradiction 정의가 모델에게 충분히 명확한가?
+unresolved 쪽으로 과도하게 점수를 주는가?
+path direction / negation 표현이 LLM에 불리한가?
+각 world의 score 분포가 지나치게 평평한가?
+DeBERTa와 disagreement하는 candidate 유형은 무엇인가?
+```
+
+이 분석 결과에 따라 Possible Worlds를 유지할지, path-level evidence aggregation으로 단순화할지, scorer를 별도 discriminative model로 고정할지 결정한다.
+
+---
+
+# 20. 연구 방향 재정비 기준
+
+다음 20-row 재실험 이후에는 특정 기존 방법을 살리는 것이 아니라 결과에 따라 구조를 선택한다.
+
+### 경우 A. DeBERTa 기반 alternative-preserving pipeline이 반복적으로 Direct보다 개선
+
+연구 중심:
+
+> **Alternative Preservation + Evidence-aware Adjudication**
+
+Possible Worlds는 구현 중 하나로 유지 가능하다.
+
+### 경우 B. Possible Worlds 없이 path/evidence aggregation만으로 동일 성능
+
+연구 중심을 더 compact하게 바꾼다.
+
+> **Delayed Evidence Commitment / Multi-hop Evidence Adjudication**
+
+Possible Worlds는 ablation으로 이동할 수 있다.
+
+### 경우 C. Direct 또는 two-stage Direct가 전체 benchmark에서도 계속 우수
+
+현재 구조가 과도하다는 의미이므로 candidate construction과 final decision을 다시 설계한다.
+
+### 경우 D. Pruning regret가 최종 성능의 주 원인으로 확인
+
+BADP / Boundary Risk 계열을 별도 메인 연구로 승격할 수 있다.
+
+현재는 어느 경우도 미리 확정하지 않는다.
+
+---
+
+# 21. 실험 결과 요약
+
+아래는 현재까지 서로 다른 실험이 어떤 연구 질문을 지지했는지를 압축한 표다.
+
+| 실험 | 주요 결과 | 연구적 의미 |
 |---|---|---|
-| CONAN 100% | 실제 CONAN 자연어 benchmark 성능처럼 보임 | CONAN gold relation을 재료로 우리가 생성한 controlled reasoner verification |
-| CONAN 75→100 | Perspective Tableau가 CONAN에서 +25%p 향상한 것처럼 보임 | Synthetic Controlled Scope n=80 결과. CONAN benchmark 아님 |
-| CONAN implicit recall 100% | 실제 secret/inferred relation 탐지 성능처럼 보임 | ontology semantics로 생성한 synthetic implicit contradiction case 단위검증 |
-| Natural-language MAGIC | provenance metadata가 scorer input에 섞인 실행 | 수정 전 값 전부 폐기 |
-| WN18RR Frozen | Top-1 16%와 Rashomon coverage 42%를 같은 정확도로 비교 | 서로 다른 지표. 후보 보존 진단으로만 사용 |
-| MAGIC world 평균 수 | 반올림 값 혼재 | row 7.34 / query 4.08 / path-query 1.45로 통일 |
-| MAGIC DeBERTa 개선폭 | 반올림 차이 혼재 | +18.71 / +14.68 / +8.33%p로 통일 |
-| MAGIC Boundary | δ 미표기 | Top-3 δ=.01 / Top-5 δ=.01로 명시 |
-| WN18RR n=50 이전 failure | 평가 전체 실패처럼 보임 | summary key 후처리 오류. 수정 run 32852520635 전체 성공 |
-| WebQSP Conditional | success만 보면 정책 품질 판단 불충분 | F1, regret, width, expansion, activation을 함께 평가 |
-
-### CONAN에 대한 가장 중요한 결론
-
-현재 저장소에는 **공식 natural-language CONAN benchmark에 대한 우리 방법의 end-to-end 성능을 증명하는 결과 artifact가 없다.**
-
-따라서 CONAN은 현재:
-
-1. perspective-aware relation reasoning 문제의 실제 외부 근거
-2. gold relation proposition 및 relation inventory의 일부 source
-3. reasoner controlled verification을 만들기 위한 재료
-
-로만 사용한다.
+| Synthetic Scope n=80 | 75% → 100% | perspective separation 논리 검증 |
+| Synthetic Explanation n=20 | 50% → 100% coverage | alternative preservation 가능성 |
+| Structured MAGIC Static | row 5.44% | hard ontology/Tableau만으로 부족 |
+| Structured MAGIC Early Commit | row 29.93% | semantic candidate reasoning 필요 |
+| Structured MAGIC PW retention | query gold-world 39.39% | viable explanation 보존 |
+| Structured MAGIC weak scorer | row 22.79%, LOC 7.14% | ranking 병목 |
+| Structured MAGIC DeBERTa | row 41.50%, LOC 15.48% | semantic scorer 효과 |
+| DAFNA n=100 | coverage 93%, exact 62% | construction-selection gap |
+| WN18RR Frozen | Top-1 16%, coverage 42% | single selection loss |
+| MAGIC high-branching | Top-3 survival 37.50% | pruning regret 증가 |
+| WN18RR BADP n=50 | success 40→46%, 56→60% | boundary-local preservation 신호 |
+| WebQSP Conditional | Top-3 개선 실패 | simple risk gate 한계 |
+| HF MAGIC 20-row Command A | LLM scorer 30%, DeBERTa 80% | same-space scorer gap +50%p |
+| HF MAGIC 20-row Qwen3 | LLM scorer 20%, DeBERTa 75% | same-space scorer gap +55%p |
+| HF MAGIC 20-row GPT-OSS | HTTP 504 | infrastructure failure, 성능값 없음 |
 
 ---
 
-# 21. 코드 오류를 제외하고 실제로 개선된 결과
-
-아래 표는 **같은 지표를 baseline과 비교했을 때 실제 개선이 확인된 결과만** 모은 것이다.
-
-CONAN-derived 100%는 baseline comparison이 없고 자연 benchmark가 아니므로 이 표에서 제외한다.
-
-| 실험 | Baseline | 방법 | 같은 지표의 변화 | 주의점 |
-|---|---|---|---|---|
-| Synthetic Controlled Scope n=80 | Accuracy 75%, Macro F1 66.67% | Perspective Tableau | **100%, 100%** | 합성 논리 단위검증 |
-| Synthetic Explanation n=20 | Coverage 50% | Rashomon enumeration | **100%** | 설명 보존 |
-| MAGIC structured | Row recall 22.79% | DeBERTa | **41.50%, +18.71%p** | 공식 자연어 MAGIC 아님 |
-| MAGIC structured | Query recall 16.86% | DeBERTa | **31.53%, +14.68%p** | structured 진단 |
-| MAGIC structured | Exact LOC 7.14% | DeBERTa | **15.48%, +8.33%p** | structured 진단 |
-| DAFNA n=100 | Exact 61% | PW marginal | **62%, +1%p** | truth selection |
-| DAFNA n=100 | Author F1 82.88% | PW marginal | **84.13%, +1.25%p** | truth selection |
-| WN18RR iterative n=10 | Success 60% | Relative-loss .50 | **70%, +10%p** | 폭 크게 증가 |
-| MAGIC recoverable n=420 | Top-3 survival 94.76% | Boundary Top-3 δ=.01 | **97.86%, +3.10%p** | Gold F1 감소 |
-| MAGIC high-branching n=32 | Top-3 survival 37.50% | Boundary Top-3 δ=.01 | **78.13%, +40.63%p** | width 증가 |
-| MAGIC high-branching n=32 | Top-5 survival 75.00% | Boundary Top-5 δ=.01 | **84.38%, +9.38%p** | width 증가 |
-| WN18RR iterative n=20 | Top-3 success 50% | Boundary Top-3 δ=.005 | **55%, +5%p** | strict width-match에서는 동률 |
-| WN18RR iterative n=20 | Top-5 success 55% | Boundary Top-5 δ=.010 | **60%, +5%p** | 비용 증가 |
-| WN18RR iterative n=20 | Top-5 success 55% | Boundary Top-5 δ=.050 | **65%, +10%p** | 비용·noise 크게 증가 |
-| WN18RR iterative n=50 | Top-3 success 40% | Boundary Top-3 δ=.005 | **46%, +6%p** | Viability F1 소폭 감소 |
-| WN18RR iterative n=50 | Top-3 regret 58% | Boundary Top-3 δ=.005 | **52%, -6%p** | 낮을수록 좋음 |
-| WN18RR iterative n=50 | Top-5 success 56% | Boundary Top-5 δ=.010 | **60%, +4%p** | 비용 증가 |
-| WN18RR iterative n=50 | Top-5 regret 42% | Boundary Top-5 δ=.010 | **38%, -4%p** | 낮을수록 좋음 |
-
-WN18RR Frozen의 `Top-1 16%`와 `Rashomon coverage 42%`는 서로 다른 지표이므로 이 개선표에서 제외한다.
-
-WebQSP Conditional BADP도 Top-3 대비 search success가 개선되지 않았으므로 개선표에 넣지 않는다.
-
----
-
-# 22. 실패하거나 제한된 가설
-
-## 22.1 Possible Worlds가 자동으로 최종 정답을 해결한다
-
-지지되지 않는다.
-
-DAFNA:
-
-```text
-Gold-world coverage = 93%
-Best exact selection = 62%
-```
-
-Possible Worlds는 후보 보존 구조이지 자동 truth selector가 아니다.
-
-## 22.2 Ontology/Tableau만으로 실제 multi-hop relation을 모두 해결한다
-
-지지되지 않는다.
-
-MAGIC:
-
-```text
-Candidate path coverage = 68.03%
-Ontology/Tableau conflict detection = 5.44%
-```
-
-## 22.3 Global Rashomon band가 항상 Top-K보다 우수하다
-
-기각하였다.
-
-WN18RR iterative n=10에서 Global .05/.10은 Top-K 60%보다 낮은 40% success였다.
-
-## 22.4 후보를 많이 남길수록 항상 좋다
-
-기각하였다.
-
-MAGIC no-pruning은 survival 100%였지만 Gold F1은 63.64%로 낮았다.
-
-## 22.5 BADP가 같은 비용에서 항상 Top-K보다 우수하다
-
-아직 지지되지 않는다.
-
-WN18RR n=20 strict nearest-width 비교에서는 success gain이 없었다.
-
-## 22.6 Boundary margin 하나면 위험한 경계를 충분히 찾는다
-
-현재로서는 지지되지 않는다.
-
-WebQSP에서 Conditional BADP activation rate가 최대 97.5%까지 올라갔고 Top-3보다 성능이 좋아지지 않았다.
-
-## 22.7 CONAN에서 100% 성능을 달성하였다
-
-명확히 폐기한다.
-
-100%는 공식 CONAN natural-language benchmark 결과가 아니라 controlled verification 결과이다.
-
----
-
-# 23. 현재까지 가장 강한 관찰
-
-### 관찰 1. Branching이 큰 구간에서 fixed Top-K가 특히 취약하다
-
-MAGIC high-branching subset에서 Top-3 gold-path survival은 37.50%까지 하락하였다.
-
-### 관찰 2. 실제 Top-K boundary 주변을 소량 추가 보존하면 일부 환경에서 success/regret가 개선된다
-
-WN18RR n=20과 n=50에서 같은 방향이 반복되었다.
-
-### 관찰 3. 더 많이 보존하면 precision과 비용이 나빠질 수 있다
-
-따라서 목표는 최대 survival이 아니다.
-
-```text
-좋은 pruning 정책
-= 중요한 경로 보존
-+ 보존 집합의 유효성
-+ 감당 가능한 탐색 비용
-```
-
-### 관찰 4. Risk detector와 preservation operator는 다른 문제다
-
-```text
-BADP = 무엇을 추가 보존할 것인가?
-Risk detector = 언제 BADP를 켤 것인가?
-```
-
-WN18RR에서는 boundary-local preservation에 긍정적 신호가 있었지만 WebQSP에서는 margin-only detector가 충분하지 않았다.
-
----
-
-# 24. 다음 단계: Boundary Risk
-
-현재 다음 위험 신호를 함께 보는 방향이 자연스럽다.
-
-```text
-ΔK              = K/K+1 score margin
-Branching        = 현재 후보 수
-Score Entropy    = 후보 점수 분포의 불확실성
-Boundary Density = cutoff 근처 후보 밀도
-Depth            = 현재 탐색 깊이
-Remaining Hops   = 남은 hop budget
-```
-
-개념적으로:
-
-```text
-Risk(k) = f(ΔK, Branching, Entropy, BoundaryDensity, Depth, RemainingHops)
-```
-
-그리고:
-
-```text
-if Risk(k) is high:
-    BADP를 제한적으로 활성화
-else:
-    Top-K 유지
-```
-
-최종 목적은 단순 adaptive beam width가 아니라:
-
-> **실제로 Pruning Regret가 발생할 가능성이 높은 비가역적 경계를 식별하고, 그때만 추가 탐색 예산을 쓰는 것**
-
-이다.
-
----
-
-# 25. 재현 가능한 주요 실행
+# 22. 재현 가능한 주요 실행
 
 | 실험 | Run / Commit | Artifact / 결과 |
 |---|---|---|
-| CONAN-derived controlled verification | commit `98b8d475...` | `preliminary_controlled_metrics.json` — 공식 CONAN 성능 아님 |
-| Synthetic Controlled Scope | commit `457a6ebf...` | `ablation_metrics.json` — 완전 합성 |
+| CONAN-derived controlled verification | commit `98b8d475...` | controlled verification, 공식 CONAN 성능 아님 |
+| Synthetic Controlled Scope | commit `457a6ebf...` | `ablation_metrics.json` |
 | MAGIC Possible Worlds | Run `32725453943` | Artifact `9519356207` |
 | MAGIC DeBERTa structured scoring | Run `32730398659` | Artifact `9521415589` |
 | DAFNA Possible Worlds | Run `32726434311` | Artifact `9519739380` |
 | WN18RR Frozen n=50 | Run `32799621678` | Artifact `9546119681` |
 | WN18RR Relative-loss n=10 | Run `32813194834` | Artifact `9550550657` |
 | MAGIC External Gold pruning | Run `32817516186` | Artifact `9551919328` |
-| WN18RR Iterative budgeted n=20 | Run `32819877566` | Artifact `9553138233` |
+| WN18RR Iterative n=20 | Run `32819877566` | Artifact `9553138233` |
 | WebQSP Conditional BADP n=20 | Run `32829786375` | Artifact `9556981080` |
-| WN18RR Conditional BADP n=50 | Run `32852520635` | Artifact `9566776300` |
+| WN18RR BADP n=50 | Run `32852520635` | Artifact `9566776300` |
+| HF natural-language MAGIC fixed-call pilot n=20 | Run `32747389414` | Artifact `9528788562` |
 
 ---
 
-# 26. 현재 결론
+# 23. 현재 잠정 결론
 
-현재까지 코드 오류와 평가 설계 오해를 제외하면 다음처럼 정리할 수 있다.
+현재까지 연구를 특정 방법 이름 없이 가장 안전하게 정리하면 다음과 같다.
 
-1. **CONAN 100%는 공식 benchmark 성능이 아니며 controlled reasoner verification이다.**
-2. **75% → 100% Perspective Tableau 역시 Synthetic Controlled Scope 결과이지 CONAN 결과가 아니다.**
-3. Perspective separation은 합성 논리 환경에서 contradiction scope 구분에 유효했다.
-4. Possible Worlds는 여러 해석을 보존하는 데 유용했지만 final selection을 자동으로 해결하지 않았다.
-5. 실제 ontology는 multi-hop relation semantics를 모두 갖고 있지 않아 relation candidate prediction이 필요했다.
-6. Structured MAGIC에서 semantic scorer는 weak lexical scoring보다 후보 ranking을 개선했다.
-7. 좋은 candidate가 있어도 pruning에서 사라질 수 있으며 이를 Pruning Regret로 분리해 측정할 수 있다.
-8. Fixed Top-K는 특히 high-branching 구간에서 gold/viable path를 크게 잃었다.
-9. Boundary-local preservation은 MAGIC과 WN18RR에서 survival 또는 success 개선 신호를 반복적으로 보였다.
-10. 그러나 추가 보존은 precision/F1과 탐색 비용을 악화시킬 수 있다.
-11. Simple boundary-margin Conditional BADP는 WebQSP에서 충분히 선택적으로 동작하지 않았다.
-12. 따라서 다음 핵심은 BADP 자체보다 **어떤 경계가 실제로 위험한지를 추정하는 Boundary Risk 모델**이다.
+1. **상충하는 multi-hop evidence를 하나의 state로 너무 일찍 합치는 것은 유효한 대안 설명을 잃을 수 있다.**
+2. Perspective separation과 multiple-explanation preservation은 controlled setting에서 실제 coverage 이점을 보였다.
+3. 그러나 candidate를 많이 만드는 것만으로 final accuracy가 좋아지지는 않는다.
+4. Hard ontology와 Tableau만으로는 실제 multi-hop relation semantics를 충분히 복원할 수 없다.
+5. MAGIC과 DAFNA에서는 candidate construction과 final selection 사이에 큰 gap이 반복적으로 나타났다.
+6. Structured MAGIC과 최근 natural-language pilot 모두 **scorer / adjudication이 주요 병목**이라는 강한 신호를 보였다.
+7. 특히 최근 20-row pilot에서는 동일 candidate space에서 DeBERTa scorer가 same-LLM scorer보다 +50~55%p 높은 conflict recall을 보였다.
+8. 한편 high-branching search에서는 pruning 자체도 viable evidence를 잃게 만드는 별도 병목이 될 수 있다.
+9. BADP는 이 pruning regret를 일부 줄였지만 비용과 precision trade-off가 있어 최종 방법으로 확정되지 않았다.
+10. 현재 연구는 Rashomon Worlds, Tableau, BADP 중 하나를 고집하기보다 **Alternative Preservation → Consistency Check → Evidence-aware Adjudication**이라는 더 일반적인 구조를 검증하는 단계다.
 
-현재 논문에서 가장 안전한 핵심 주장은 다음과 같다.
+현재 연구 질문을 한 문장으로 다시 쓰면 다음과 같다.
 
-> **고정 Top-K는 다중 홉 탐색 비용을 안정적으로 제한하지만, 후보 경쟁이 큰 구간에서는 이후 정답 또는 증거로 이어질 수 있는 경로를 비가역적으로 제거할 수 있다. MAGIC과 WN18RR에서는 Top-K 경계 주변 후보를 제한적으로 추가 보존했을 때 경로 생존 또는 search success가 개선되는 신호가 반복적으로 관찰되었다. 그러나 추가 보존은 precision과 비용을 악화시킬 수 있고, WebQSP에서는 단순 margin 기반 Conditional BADP가 개선되지 않았다. 따라서 현재 핵심 과제는 Pruning Regret 위험이 높은 경계를 더 정확하게 식별하는 것이다.**
+> **불완전하고 상충하는 multi-hop evidence에서 여러 유효한 설명을 필요한 만큼 보존하고, 논리·의미적 근거를 이용해 그중 올바른 설명과 상충 근거를 안정적으로 선택할 수 있는가?**
+
+이 질문을 중심으로 다음 20-row 재실험에서 scorer bottleneck과 provider failure를 먼저 정리한 뒤, 결과가 안정되면 100-row 및 전체 benchmark로 확대한다.
