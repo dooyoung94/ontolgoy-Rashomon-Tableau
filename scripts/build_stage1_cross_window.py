@@ -45,18 +45,21 @@ def build(source: Path, cache: Path, out: Path) -> list[RcaCase]:
         normal_logs = adapter._load_parquet(folder / "normal_logs.parquet")
         abnormal_logs = adapter._load_parquet(folder / "abnormal_logs.parquet")
 
-        system = source_case.metadata.get("system")
+        # Primary Stage-1 metric deliberately excludes HAS_SERVICE membership.
+        # The case-level system label is benchmark metadata, not an explicit
+        # per-service inventory relation. Feeding it to both windows would create
+        # trivially stable HAS_SERVICE triples and inflate cross-window F1.
         normal_reference = recover_structural_relations(
             normal_traces,
             normal_metrics,
             normal_logs,
-            system=str(system) if system else None,
+            system=None,
         )
         abnormal_observations = collect_structural_observations(
             abnormal_traces,
             abnormal_metrics,
             abnormal_logs,
-            system=str(system) if system else None,
+            system=None,
         )
 
         case = RcaCase(
@@ -66,7 +69,7 @@ def build(source: Path, cache: Path, out: Path) -> list[RcaCase]:
             evidence=[],
             metadata={
                 "dataset": "anon-ops/ops-lite",
-                "system": system,
+                "system": source_case.metadata.get("system"),
                 "structural_reference_protocol": (
                     "normal_window_reference_vs_abnormal_window_observations"
                 ),
@@ -75,6 +78,7 @@ def build(source: Path, cache: Path, out: Path) -> list[RcaCase]:
                 ),
                 "structural_model_input_source": "abnormal_telemetry_relation_observations",
                 "causal_gold_usage": "none",
+                "system_membership_in_primary_metric": False,
                 "normal_reference_relation_counts": relation_type_counts(
                     normal_reference.relations
                 ),
@@ -108,6 +112,7 @@ def build(source: Path, cache: Path, out: Path) -> list[RcaCase]:
                 "source": str(source),
                 "out": str(out),
                 "protocol": "normal_window_reference_vs_abnormal_window_observations",
+                "system_membership_in_primary_metric": False,
             },
             indent=2,
         )
