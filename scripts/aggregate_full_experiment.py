@@ -13,6 +13,7 @@ VARIANT_LABELS = {
     "abduction_deberta": "A2 Abduction + DeBERTa",
     "abduction_psl": "A3 Abduction + PSL",
     "full": "A4 Abduction + DeBERTa + PSL",
+    "llm_adjudication": "A5 A4 + LLM Final Adjudication",
 }
 
 
@@ -49,32 +50,66 @@ def _load_results(folder: Path) -> list[dict]:
     return rows
 
 
+def _kind(result: dict) -> str:
+    if result.get("stage") == "A5" or result.get("variant") == "llm_adjudication":
+        return "final_llm"
+    if result.get("variant") in VARIANT_LABELS:
+        return "ablation"
+    if result.get("baseline"):
+        return "direct_llm"
+    return "other"
+
+
 def _method_name(result: dict) -> str:
-    if "variant" in result:
-        return VARIANT_LABELS.get(str(result["variant"]), str(result["variant"]))
-    return f"LLM {result.get('model', 'unknown')}"
+    if result.get("stage") == "A5" or result.get("variant") == "llm_adjudication":
+        return f"A5 A4 + LLM ({result.get('model', 'unknown')})"
+    if result.get("variant") in VARIANT_LABELS:
+        return VARIANT_LABELS[str(result["variant"])]
+    if result.get("baseline"):
+        return f"Direct LLM {result.get('model', 'unknown')}"
+    return str(result.get("method") or result.get("model") or "unknown")
 
 
 def _summary_row(result: dict) -> dict:
     s = result.get("summary", {})
     metadata = result.get("model_metadata", {})
+    path = s.get("path_reachability")
+    if path is None:
+        path = s.get("process_path_reachability")
+    exact = s.get("root_service_exact")
+    if exact is None:
+        exact = s.get("root_exact_set")
     return {
         "mask_ratio": float(result["mask_ratio"]),
         "mask": _ratio_label(float(result["mask_ratio"])),
         "method": _method_name(result),
-        "kind": "ablation" if "variant" in result else "llm",
+        "kind": _kind(result),
         "variant": result.get("variant"),
+        "stage": result.get("stage"),
         "model": result.get("model"),
         "n_cases": result.get("n"),
+        # OpenRCA 2.0-compatible outcome/process metrics.
+        "root_service_precision": s.get("root_service_precision"),
+        "root_service_recall": s.get("root_service_recall"),
+        "root_service_f1": s.get("root_service_f1"),
+        "root_service_exact": exact,
+        "any_service_hit": s.get("any_service_hit"),
+        "all_service_hit": s.get("all_service_hit"),
+        "node_precision": s.get("node_precision"),
+        "node_recall": s.get("node_recall"),
+        "node_f1": s.get("node_f1"),
+        "edge_precision": s.get("edge_precision"),
+        "edge_recall": s.get("edge_recall"),
+        "edge_f1": s.get("edge_f1"),
+        "path_reachability": path,
+        # Controlled relation-recovery diagnostics.
         "relation_accuracy": s.get("relation_accuracy"),
         "relation_precision": s.get("relation_precision"),
         "relation_recall": s.get("relation_recall"),
         "relation_f1": s.get("relation_f1"),
-        "node_f1": s.get("node_f1"),
-        "edge_f1": s.get("edge_f1"),
-        "path_reachability": s.get("process_path_reachability"),
         "root_hit_at_1": s.get("root_hit_at_1"),
         "root_hit_at_3": s.get("root_hit_at_3"),
+        # Runtime/model controls.
         "parse_success": s.get("parse_success"),
         "prompt_truncated": s.get("prompt_truncated"),
         "mean_input_tokens": s.get("input_tokens"),
@@ -179,7 +214,7 @@ def _markdown(summary_rows: list[dict], diagnostics: list[dict], dataset_meta: d
     lines = [
         "# Full Controlled Relation-Masking Benchmark",
         "",
-        "This report is for the controlled incomplete-relation experiment only. It is not the direct OpenRCA standard leaderboard comparison.",
+        "This report measures causal-process recovery after relation semantics are hidden on observed dependency pairs. OpenRCA 2.0-compatible metrics are used as a common RCA outcome/process language; the experiment is not a claim that a masked score should simply match an unmasked leaderboard score.",
         "",
     ]
     if dataset_meta:
@@ -187,42 +222,72 @@ def _markdown(summary_rows: list[dict], diagnostics: list[dict], dataset_meta: d
             "## Dataset adapter coverage",
             "",
             f"- Manifest rows scanned: **{dataset_meta.get('manifest_total_rows', '-')}**",
-            f"- Adapter-valid attributed cases: **{dataset_meta.get('normalized_adapter_valid_cases', '-')}**",
-            "- Every manifest row is inspected; only attributed cases with valid trace-derived topology, telemetry evidence, roots and causal edges enter the controlled experiment.",
+            f"- Adapter-valid controlled cases: **{dataset_meta.get('normalized_adapter_valid_cases', '-')}**",
+            "- Relation masking is evaluated only where the telemetry adapter yields usable observed dependency pairs, evidence, gold roots and evaluable service-level causal edges.",
             "",
         ])
 
+    main_rows = [x for x in summary_rows if x["kind"] in {"ablation", "final_llm"}]
     lines.extend([
-        "## A0-A4 vs Hugging Face LLM baselines",
+        "## Main final table — OpenRCA 2.0-compatible outcome/process metrics",
         "",
-        "| Mask | Method | Rel. P | Rel. R | Rel. F1 | Edge F1 | Path | Root@1 | Root@3 |",
-        "|---:|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| Mask | Method | N | Root F1 | Exact Root Set | AnySvc | AllSvc | Node F1 | Edge F1 | Path Reach. |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ])
-    for row in sorted(summary_rows, key=lambda x: (x["mask_ratio"], x["kind"], x["method"])):
+    for row in sorted(main_rows, key=lambda x: (x["mask_ratio"], x["kind"], x["method"])):
         lines.append(
-            f"| {row['mask']} | {row['method']} | {_pct(row['relation_precision'])} | {_pct(row['relation_recall'])} | "
-            f"{_pct(row['relation_f1'])} | {_pct(row['edge_f1'])} | {_pct(row['path_reachability'])} | "
-            f"{_pct(row['root_hit_at_1'])} | {_pct(row['root_hit_at_3'])} |"
+            f"| {row['mask']} | {row['method']} | {row['n_cases'] or '-'} | {_pct(row['root_service_f1'])} | "
+            f"{_pct(row['root_service_exact'])} | {_pct(row['any_service_hit'])} | {_pct(row['all_service_hit'])} | "
+            f"{_pct(row['node_f1'])} | {_pct(row['edge_f1'])} | {_pct(row['path_reachability'])} |"
         )
 
     lines.extend([
         "",
-        "## Hugging Face LLM runtime/model controls",
+        "## Controlled missing-relation recovery diagnostics",
         "",
-        "| Model | Nominal params | Loaded params | Published context | Max input | Max output | Parse success | Truncated prompts | Mean input tokens | Mean output tokens |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Mask | Method | Rel. P | Rel. R | Rel. F1 | Root@1 | Root@3 |",
+        "|---:|---|---:|---:|---:|---:|---:|",
     ])
-    seen = set()
-    for row in sorted((x for x in summary_rows if x["kind"] == "llm"), key=lambda x: (x["model"], x["mask_ratio"])):
-        key = (row["model"], row["mask_ratio"])
-        if key in seen:
-            continue
-        seen.add(key)
+    for row in sorted(main_rows, key=lambda x: (x["mask_ratio"], x["kind"], x["method"])):
         lines.append(
-            f"| {row['model']} ({row['mask']}) | {row['nominal_parameters'] or '-'} | {row['actual_parameters_loaded'] or '-'} | "
-            f"{row['published_context_window'] or '-'} | {row['benchmark_max_input_tokens'] or '-'} | {row['benchmark_max_new_tokens'] or '-'} | "
-            f"{_pct(row['parse_success'])} | {_pct(row['prompt_truncated'])} | {_num(row['mean_input_tokens'], 1)} | {_num(row['mean_output_tokens'], 1)} |"
+            f"| {row['mask']} | {row['method']} | {_pct(row['relation_precision'])} | {_pct(row['relation_recall'])} | "
+            f"{_pct(row['relation_f1'])} | {_pct(row['root_hit_at_1'])} | {_pct(row['root_hit_at_3'])} |"
         )
+
+    direct_rows = [x for x in summary_rows if x["kind"] == "direct_llm"]
+    if direct_rows:
+        lines.extend([
+            "",
+            "## Direct LLM relation-recovery baselines",
+            "",
+            "These models receive the masked graph and telemetry directly. They are baselines, not the A5 final adjudication stage.",
+            "",
+            "| Mask | Model | Rel. F1 | Edge F1 | Path | Root@1 | Root@3 |",
+            "|---:|---|---:|---:|---:|---:|---:|",
+        ])
+        for row in sorted(direct_rows, key=lambda x: (x["mask_ratio"], x["method"])):
+            lines.append(
+                f"| {row['mask']} | {row['method']} | {_pct(row['relation_f1'])} | {_pct(row['edge_f1'])} | "
+                f"{_pct(row['path_reachability'])} | {_pct(row['root_hit_at_1'])} | {_pct(row['root_hit_at_3'])} |"
+            )
+
+    llm_rows = [x for x in summary_rows if x["kind"] in {"direct_llm", "final_llm"}]
+    if llm_rows:
+        lines.extend([
+            "",
+            "## LLM runtime/model controls",
+            "",
+            "| Stage | Model | Mask | Params | Context | Max input | Max output | Parse success | Truncated | Mean generation sec |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ])
+        for row in sorted(llm_rows, key=lambda x: (x["kind"], str(x["model"]), x["mask_ratio"])):
+            stage = "A5 final" if row["kind"] == "final_llm" else "direct baseline"
+            lines.append(
+                f"| {stage} | {row['model']} | {row['mask']} | {row['actual_parameters_loaded'] or row['nominal_parameters'] or '-'} | "
+                f"{row['config_context_window'] or row['published_context_window'] or '-'} | {row['benchmark_max_input_tokens'] or '-'} | "
+                f"{row['benchmark_max_new_tokens'] or '-'} | {_pct(row['parse_success'])} | {_pct(row['prompt_truncated'])} | "
+                f"{_num(row['mean_generation_seconds'], 2)} |"
+            )
 
     lines.extend([
         "",
@@ -241,7 +306,7 @@ def _markdown(summary_rows: list[dict], diagnostics: list[dict], dataset_meta: d
 
     lines.extend([
         "",
-        "Interpretation rule: equal binary metrics do not imply equal algorithms. If decision disagreement is near zero but score MAE is non-zero, the 0.5 threshold is collapsing different continuous scores to the same labels. If both score MAE and disagreement are near zero, PSL is functionally adding little independent signal on this dataset and its contribution must be reconsidered.",
+        "Interpretation: the primary question is how much masked causal semantics are recovered and how that recovery changes root identification and causal-process reconstruction. The no-mask OpenRCA standard track is reported separately for external comparability; it is not used as a target value that the masked experiment must imitate.",
         "",
     ])
     return "\n".join(lines)
@@ -260,7 +325,7 @@ def main() -> None:
 
     by_variant_ratio = {
         (str(r.get("variant")), float(r["mask_ratio"])): r
-        for r in results if r.get("variant") is not None
+        for r in results if r.get("variant") in {"graph_only", "abduction", "abduction_deberta", "abduction_psl", "full"}
     }
     diagnostics = []
     for ratio in (0.2, 0.4, 0.6):
