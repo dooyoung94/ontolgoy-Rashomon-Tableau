@@ -10,7 +10,7 @@
 
 그러나 실제 운영 프로젝트에서는 LLM 추론 이전에 또 다른 문제가 존재한다. CMDB 또는 운영 온톨로지의 객체가 존재하더라도 `CALLS_API`, `USES_DB`, `DEPLOYED_ON`, `RUNS_ON`과 같은 타입 관계가 누락되거나 최신 실행 상태와 일치하지 않을 수 있다. 정적 설계 정보, 동적으로 변하는 배포 구조, 부분적으로 관측된 트레이스, 서로 다른 식별자를 사용하는 로그·메트릭·자원 정보 사이를 연결하여 의미 관계를 형성하는 작업은 비용이 크고 불완전하다.
 
-본 연구는 이러한 상황을 불완전 운영 온톨로지의 관계 복원 문제로 정의한다. 완전한 기준 토폴로지에서 관계만 20%, 40%, 60% 마스킹하고 노드와 수집 증거는 유지한다. 귀추 추론으로 관측 가능한 객체 쌍의 관계 후보를 생성하고, DeBERTa로 후보와 수집 증거의 의미 적합성을 평가하며, Probabilistic Soft Logic(PSL)으로 온톨로지 타입 제약과 관계 일관성을 결합한다. 평가는 Track A와 Track B로 구성한다. Track A는 실제 마스킹 관계의 Precision, Recall, F1과 관계 유형별 성능을 측정한다. Track B는 복원 토폴로지와 LLM의 효과를 2×2 요인 실험으로 분리하여, 관계 복원 효과, LLM 추가 효과, 두 요소의 결합 시너지를 OpenRCA 2.0의 Root F1, Path Reachability, Node F1, Edge F1로 평가한다. 본 연구는 완벽한 관계 복원을 주장하지 않으며, 불완전한 복원 관계가 완전 토폴로지에 근접한 RCA 성능을 제공할 수 있는 조건을 밝히는 것을 목적으로 한다.
+본 연구는 이러한 상황을 불완전 운영 온톨로지의 관계 복원 문제로 정의한다. 복원 모델의 수집 관측과 독립된 버전 관리 원천에서 구성한 기준 토폴로지에서 관계만 20%, 40%, 60% 마스킹하고 노드와 수집 증거는 유지한다. 귀추 추론으로 관측 가능한 객체 쌍의 관계 후보를 생성하고, DeBERTa로 후보와 수집 증거의 의미 적합성을 평가하며, Probabilistic Soft Logic(PSL)으로 온톨로지 타입 제약과 관계 일관성을 결합한다. 평가는 Track A와 Track B로 구성한다. Track A는 실제 마스킹 관계의 Precision, Recall, F1과 관계 유형별 성능을 측정한다. Track B는 복원 토폴로지와 LLM의 효과를 2×2 요인 실험으로 분리하여, 관계 복원 효과, LLM 추가 효과, 두 요소의 결합 시너지를 OpenRCA 2.0의 Root F1, Path Reachability, Node F1, Edge F1로 평가한다. 본 연구는 완벽한 관계 복원을 주장하지 않으며, 불완전한 복원 관계가 완전 토폴로지에 근접한 RCA 성능을 제공할 수 있는 조건을 밝히는 것을 목적으로 한다.
 
 **주요어:** 근본원인분석, 운영 온톨로지, 토폴로지 복원, 귀추 추론, DeBERTa, Probabilistic Soft Logic, 대규모 언어모델, OpenRCA 2.0
 
@@ -207,6 +207,8 @@ $$
 - Service가 Pod에 배포되고 Pod가 Node에서 실행되면 Service와 Node의 실행 위치 일관성이 유지되어야 한다.
 - 동일 관계에 상반된 방향 후보가 존재하면 trace parent-child와 ontology direction을 우선한다.
 
+현재 snapshot-level functional constraint는 `RUNS_ON`의 Pod별 단일 Node와 `HAS_SERVICE`의 Service별 단일 System에만 적용한다. `CALLS`, `DEPLOYED_ON`, `USES_DB`, `USES_MESSAGING`은 복수 대상이 정상일 수 있으므로 단일성 규칙을 두지 않는다. PSL은 visible topology의 확정 관계와 충돌하는 기능적 후보를 억제하며, 적용 가능한 제약과 미적용 관계를 결과에 함께 기록한다.
+
 ### 4.5 신뢰도·근거 기반 복원 그래프
 
 임계값 $\tau$ 이상인 관계를 기존 토폴로지와 병합한다.
@@ -237,7 +239,7 @@ LLM은 관계를 임의로 수정하는 대신 장애 증거와 관련된 관계
 
 OpenRCA 2.0의 500개 장애 사례와 과정 수준 정답을 사용한다. 공식 데이터 확보 전 공개 snapshot 또는 mirror를 사용할 경우 dataset ID, commit, 사례 수를 결과에 명시하고 공식 500개 결과와 동일 데이터라고 가정하지 않는다.
 
-OpenRCA 2.0의 causal graph와 injection label은 평가기에만 제공한다. 기준 구조 관계는 수집 가능한 전체 정보에서 구성하며, 독립 검증되지 않은 관계는 통제 실험용 reference topology로 명시한다.
+OpenRCA 2.0의 causal graph와 injection label은 평가기에만 제공한다. 기준 구조 관계는 버전 관리된 deployment manifest, service catalog, CMDB export 또는 독립 검수된 구조에서 구성한다. 복원 모델에 제공하는 relation observation과 동일한 추출 규칙으로 생성한 관계는 CI·단위검증용 diagnostic reference로만 사용하며 주 결과에서 제외한다.
 
 ### 5.2 Track A: 관계 복원 실험
 
@@ -250,7 +252,7 @@ OpenRCA 2.0의 causal graph와 injection label은 평가기에만 제공한다. 
 | A4 | 귀추 + DeBERTa + PSL |
 | A5 | 완전 토폴로지 상한선 |
 
-각 방법은 관계 마스킹 20%, 40%, 60%에서 동일 사례와 동일 마스크 seed로 평가한다. 마스킹은 고정 순서를 사용하여 20%에서 제거한 관계가 40%와 60%에도 포함되는 nested masking으로 구성한다.
+각 방법은 관계 마스킹 20%, 40%, 60%에서 동일 사례와 동일 마스크 seed로 평가한다. 마스킹은 사건 ID가 아니라 시스템 또는 배포 버전의 topology group을 단위로 수행한다. 동일 group의 장애 사례는 같은 관계 누락 상태를 공유하며, 고정 순서를 사용하여 20%에서 제거한 관계가 40%와 60%에도 포함되는 nested masking으로 구성한다. seed는 13, 42, 97, 123, 2026을 사용한다.
 
 주 지표는 실제 제거 관계 $M_\rho$에 대한 Precision, Recall, F1이다.
 
@@ -260,7 +262,7 @@ R=\frac{|\hat{M}_\rho\cap M_\rho|}{|M_\rho|},\qquad
 F1=\frac{2PR}{P+R}
 $$
 
-관계 유형별 F1, MRR, Hits@K, 허위 관계 삽입률, 논리 모순률을 함께 보고한다. 복원 후 전체 토폴로지 F1은 잔존 관계의 영향을 받으므로 보조 지표로만 사용한다.
+관계 유형별 F1, Candidate Recall Ceiling, 허위 관계 삽입률, 논리 모순률을 함께 보고한다. MRR과 Hits@K는 query별 negative candidate universe가 확정된 후에만 추가한다. 복원 후 전체 토폴로지 F1은 잔존 관계의 영향을 받으므로 보조 지표로만 사용한다. 마스킹 결과 제거 관계가 0개인 사례는 missing-relation macro 평균에서 제외하고, 요청 비율과 실제 제거 비율을 함께 기록한다.
 
 ### 5.3 Track B: 관계 복원 × LLM 요인 실험
 
@@ -324,6 +326,7 @@ Track A의 typed relation은 관계 유형까지 정확히 일치해야 정답�
 - B0~B4에서 telemetry, 장애 질의, 모델, 프롬프트, temperature, 도구, 호출 예산을 고정한다.
 - LLM은 Track A의 복원 그래프를 수정하지 않고 RCA에 선택적으로 활용한다.
 - 임계값은 test set이 아닌 validation split에서 고정한다.
+- 독립 provenance가 없는 reference topology는 실행 단계에서 거부하며, 명시적으로 허용한 diagnostic run은 논문 결과에서 제외한다.
 
 ---
 

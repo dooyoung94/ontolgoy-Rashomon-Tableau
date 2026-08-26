@@ -3,8 +3,15 @@ experiment:
   problem: collector_data_available_but_topology_relation_missing
 
   topology_reference:
-    source: complete_structural_relations_from_full_available_collector_data
+    source: external_versioned_topology_reference
     evaluator_only: true
+    required: true
+    required_provenance_fields:
+      - source
+      - version
+      - independent_of_model_observations
+      - evaluator_only
+    prohibited_source: telemetry_observation_abduction_used_by_recovery_model
     note: OpenRCA does not provide a complete persistent topology gold file
 
   model_input:
@@ -12,13 +19,16 @@ experiment:
     - collector_observations
 
   topology_missing_ratios: [0.2, 0.4, 0.6]
-  seeds: [42]
+  seeds: [13, 42, 97, 123, 2026]
 
   masking_rule:
     remove_nodes: false
     remove_collector_data: false
     remove_topology_relations_only: true
     expose_missing_marker: false
+    unit: topology_group
+    group_key_priority: [topology_id, system]
+    nested_within_seed: true
 
   relation_types:
     - calls
@@ -50,6 +60,10 @@ recovery:
   allow_all_node_pairs: false
   ontology_type_constraints: true
   relation_threshold: 0.5
+  psl_visible_topology_constraints:
+    functional_by_source: [runs_on]
+    functional_by_target: [has_service]
+    intentionally_multi_valued: [calls, deployed_on, uses_database, uses_messaging]
 
 relation_recovery_metrics:
   primary:
@@ -106,3 +120,5 @@ leakage_policy:
   gold_root: evaluator_only
   collector_observations_are_never_masked: true
   removed_topology_relations_are_never_shown_to_model: true
+  derived_reference_allowed_for_primary_results: false
+  empty_missing_relation_cases_excluded_from_macro_recovery_metrics: true

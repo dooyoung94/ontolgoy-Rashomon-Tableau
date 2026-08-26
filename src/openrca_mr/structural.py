@@ -441,8 +441,13 @@ class StructuralRelationRecovery:
         self.global_inference = global_inference
         self.relation_threshold = relation_threshold
 
-    def run(self, observations: list[RelationObservation]) -> StructuralRecoveryResult:
+    def run(
+        self,
+        observations: list[RelationObservation],
+        visible_relations: list[CausalEdge] | None = None,
+    ) -> StructuralRecoveryResult:
         hypotheses = self.generator.generate(observations)
+        visible_relations = list(visible_relations or [])
 
         if self.semantic_scorer is not None:
             if not hasattr(self.semantic_scorer, "score_structural_many"):
@@ -458,7 +463,11 @@ class StructuralRelationRecovery:
         if self.global_inference is not None:
             if not hasattr(self.global_inference, "infer_structural"):
                 raise TypeError("structural global inference must implement infer_structural")
-            hypotheses = self.global_inference.infer_structural(observations, hypotheses)
+            hypotheses = self.global_inference.infer_structural(
+                observations,
+                hypotheses,
+                visible_relations=visible_relations,
+            )
         else:
             hypotheses.sort(key=lambda h: h.final_score, reverse=True)
 

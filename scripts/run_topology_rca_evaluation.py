@@ -11,6 +11,7 @@ def main() -> None:
         description="Evaluate topology relation recovery and downstream OpenRCA 2.0 RCA together"
     )
     parser.add_argument("--data", required=True)
+    parser.add_argument("--reference-data")
     parser.add_argument("--out", required=True)
     parser.add_argument("--topology-variant", choices=sorted(TOPOLOGY_VARIANTS), default="abduction_deberta_psl")
     parser.add_argument("--rca-variant", choices=sorted(RCA_VARIANTS), default="abduction_psl")
@@ -19,6 +20,14 @@ def main() -> None:
     parser.add_argument("--relation-threshold", type=float, default=0.5)
     parser.add_argument("--rca-edge-threshold", type=float, default=0.5)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument(
+        "--allow-derived-reference",
+        action="store_true",
+        help=(
+            "Allow a telemetry-derived embedded reference for diagnostic smoke tests. "
+            "The output is labelled diagnostic_only and must not be reported as a paper result."
+        ),
+    )
     args = parser.parse_args()
 
     result = run_topology_rca_evaluation(
@@ -31,6 +40,8 @@ def main() -> None:
         relation_threshold=args.relation_threshold,
         rca_edge_threshold=args.rca_edge_threshold,
         limit=args.limit,
+        reference_data=args.reference_data,
+        allow_derived_reference=args.allow_derived_reference,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

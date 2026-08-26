@@ -18,9 +18,13 @@ from .models import RcaCase
 from .openrca2 import load_normalized_cases
 from .pipeline import IncidentCausalRCA
 from .psl import PslGlobalInference, PslStructuralInference
+from .research_protocol import audit_reference_protocol, topology_group_id
 from .semantic import DebertaEvidenceScorer, DebertaStructuralRelationScorer
 from .structural import propagation_service_edges, structural_relation_metrics
-from .topology_recovery import mask_topology_relations, recover_missing_topology_relations
+from .topology_recovery import (
+    mask_topology_relations_by_group,
+    recover_missing_topology_relations,
+)
 
 
 TOPOLOGY_VARIANTS = {
@@ -42,6 +46,18 @@ RCA_VARIANTS = {
 def _mean(rows: list[dict], key: str) -> float | None:
     values = [float(row[key]) for row in rows if isinstance(row.get(key), (int, float))]
     return sum(values) / len(values) if values else None
+
+
+def _unique_case_map(cases: list[RcaCase], label: str) -> dict[str, RcaCase]:
+    out: dict[str, RcaCase] = {}
+    duplicates: set[str] = set()
+    for case in cases:
+        if case.case_id in out:
+            duplicates.add(case.case_id)
+        out[case.case_id] = case
+    if duplicates:
+        raise ValueError(f"duplicate case_id values in {label}: {sorted(duplicates)}")
+    return out
 
 
 def _case_with_topology(case: RcaCase, relations) -> RcaCase:
@@ -141,6 +157,8 @@ def run_topology_rca_evaluation(
     relation_threshold: float = 0.5,
     rca_edge_threshold: float = 0.5,
     limit: int = 0,
+    reference_data: str | None = None,
+    allow_derived_reference: bool = False,
 ) -> dict:
     """Jointly evaluate missing topology relation recovery and OpenRCA-style RCA.
 
@@ -164,8 +182,42 @@ def run_topology_rca_evaluation(
 
     do_recovery, topology_deberta, topology_psl = TOPOLOGY_VARIANTS[topology_variant]
     cases = load_normalized_cases(data)
+    _unique_case_map(cases, "input data")
     if limit:
         cases = cases[:limit]
+
+    if reference_data:
+        reference_cases = load_normalized_cases(reference_data)
+        reference_map = _unique_case_map(reference_cases, "reference data")
+    else:
+        reference_map = _unique_case_map(cases, "embedded complete topology")
+
+    missing_case_ids = [case.case_id for case in cases if case.case_id not in reference_map]
+    if missing_case_ids:
+        raise ValueError(
+            "reference data is missing input case_id values: "
+            + ", ".join(sorted(missing_case_ids))
+        )
+    selected_reference_cases = [reference_map[case.case_id] for case in cases]
+    reference_audit = audit_reference_protocol(
+        cases,
+        selected_reference_cases,
+        data=data,
+        reference_data=reference_data,
+        allow_derived_reference=allow_derived_reference,
+    )
+
+    full_relations_by_case = {
+        case.case_id: list(reference_map[case.case_id].structural_relations)
+        for case in cases
+    }
+    case_groups = {case.case_id: topology_group_id(case) for case in cases}
+    masks = mask_topology_relations_by_group(
+        full_relations_by_case,
+        case_groups,
+        topology_missing_ratio,
+        seed,
+    )
 
     topology_semantic = DebertaStructuralRelationScorer() if topology_deberta else None
     topology_logic = PslStructuralInference() if topology_psl else None
@@ -173,13 +225,8 @@ def run_topology_rca_evaluation(
 
     rows: list[dict] = []
     for case in cases:
-        full_topology = list(case.structural_relations)
-        masked = mask_topology_relations(
-            case_id=case.case_id,
-            full_relations=full_topology,
-            ratio=topology_missing_ratio,
-            seed=seed,
-        )
+        full_topology = full_relations_by_case[case.case_id]
+        masked = masks[case.case_id]
 
         if do_recovery:
             recovery = recover_missing_topology_relations(
@@ -205,12 +252,19 @@ def run_topology_rca_evaluation(
         }
         row = {
             "case_id": case.case_id,
+            "topology_group": case_groups[case.case_id],
             "n_full_topology_relations": len(full_topology),
             "n_missing_topology_relations": len(masked.missing_relations),
             "n_added_topology_relations": len(added),
-            "missing_relation_precision": missing_score.precision,
-            "missing_relation_recall": missing_score.recall,
-            "missing_relation_f1": missing_score.f1,
+            "missing_relation_precision": (
+                missing_score.precision if masked.missing_relations else None
+            ),
+            "missing_relation_recall": (
+                missing_score.recall if masked.missing_relations else None
+            ),
+            "missing_relation_f1": (
+                missing_score.f1 if masked.missing_relations else None
+            ),
             "recovered_full_topology_f1": full_score.f1,
         }
         for name, topology in conditions.items():
@@ -223,6 +277,14 @@ def run_topology_rca_evaluation(
                 row[f"recovered_{key}"] - row[f"incomplete_{key}"]
             )
         rows.append(row)
+
+    total_full_relations = sum(row["n_full_topology_relations"] for row in rows)
+    total_missing_relations = sum(row["n_missing_topology_relations"] for row in rows)
+    if topology_missing_ratio > 0.0 and total_missing_relations == 0:
+        raise ValueError(
+            "the requested topology_missing_ratio removed zero relations; "
+            "the experiment has no recovery denominator"
+        )
 
     incomplete = _summarize_condition(rows, "incomplete")
     recovered = _summarize_condition(rows, "recovered")
@@ -243,6 +305,8 @@ def run_topology_rca_evaluation(
         "rca_variant": rca_variant,
         "topology_missing_ratio": topology_missing_ratio,
         "seed": seed,
+        "claim_scope": reference_audit.claim_scope,
+        "reference_audit": reference_audit.to_dict(),
         "protocol": {
             "collector_observations_modified": False,
             "topology_nodes_removed": False,
@@ -252,6 +316,9 @@ def run_topology_rca_evaluation(
             "same_incident_evidence_across_conditions": True,
             "openrca_causal_gold_usage": "evaluation_only",
             "complete_topology_role": "controlled_upper_reference",
+            "masking_unit": "topology_group",
+            "empty_missing_cases_in_macro": "excluded",
+            "visible_topology_constraint_inference": topology_psl,
         },
         "topology_summary": {
             "mean_missing_relations": _mean(rows, "n_missing_topology_relations"),
@@ -260,6 +327,15 @@ def run_topology_rca_evaluation(
             "macro_missing_relation_recall": _mean(rows, "missing_relation_recall"),
             "macro_missing_relation_f1": _mean(rows, "missing_relation_f1"),
             "macro_recovered_full_topology_f1": _mean(rows, "recovered_full_topology_f1"),
+            "n_evaluable_missing_cases": sum(
+                row["n_missing_topology_relations"] > 0 for row in rows
+            ),
+            "requested_missing_ratio": topology_missing_ratio,
+            "realized_missing_ratio": (
+                total_missing_relations / total_full_relations
+                if total_full_relations
+                else None
+            ),
         },
         "rca_summary": {
             "incomplete": incomplete,

@@ -7,9 +7,45 @@ from .models import (
     RcaCase,
     RelationObservation,
     StructuralHypothesis,
+    CausalEdge,
     REL_CAUSAL,
+    REL_HAS_SERVICE,
     REL_NON_CAUSAL,
+    REL_RUNS_ON,
 )
+
+
+# Snapshot-level functional constraints that are defensible for the current
+# ontology. CALLS, DEPLOYED_ON, USES_DATABASE and USES_MESSAGING are deliberately
+# excluded because multiple targets are normal for those relations.
+_FUNCTIONAL_BY_SOURCE = frozenset({REL_RUNS_ON})
+_FUNCTIONAL_BY_TARGET = frozenset({REL_HAS_SERVICE})
+
+
+def _visible_functional_conflicts(
+    visible_relations: list[CausalEdge],
+    hypotheses: list[StructuralHypothesis],
+) -> set[tuple[str, str, str]]:
+    by_source: dict[tuple[str, str], set[str]] = defaultdict(set)
+    by_target: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for edge in visible_relations:
+        if edge.relation in _FUNCTIONAL_BY_SOURCE:
+            by_source[(edge.source, edge.relation)].add(edge.target)
+        if edge.relation in _FUNCTIONAL_BY_TARGET:
+            by_target[(edge.relation, edge.target)].add(edge.source)
+
+    conflicts: set[tuple[str, str, str]] = set()
+    for hypothesis in hypotheses:
+        edge = hypothesis.edge
+        if edge.relation in _FUNCTIONAL_BY_SOURCE:
+            existing_targets = by_source.get((edge.source, edge.relation), set())
+            if existing_targets and edge.target not in existing_targets:
+                conflicts.add(edge.key())
+        if edge.relation in _FUNCTIONAL_BY_TARGET:
+            existing_sources = by_target.get((edge.relation, edge.target), set())
+            if existing_sources and edge.source not in existing_sources:
+                conflicts.add(edge.key())
+    return conflicts
 
 
 class StructuralSoftLogicApproximation:
@@ -25,12 +61,16 @@ class StructuralSoftLogicApproximation:
         self,
         observations: list[RelationObservation],
         hypotheses: list[StructuralHypothesis],
+        visible_relations: list[CausalEdge] | None = None,
     ) -> list[StructuralHypothesis]:
         del observations
         if not hypotheses:
             return []
 
         local: dict[tuple[str, str, str], float] = {}
+        visible_conflicts = _visible_functional_conflicts(
+            list(visible_relations or []), hypotheses
+        )
         by_pair: dict[tuple[str, str], list[StructuralHypothesis]] = defaultdict(list)
         for h in hypotheses:
             if h.semantic_support is None:
@@ -53,7 +93,12 @@ class StructuralSoftLogicApproximation:
                 competition = max(competitors, default=0.0)
                 h.soft_logic_score = max(
                     0.0,
-                    min(1.0, local[h.edge.key()] - 0.15 * competition),
+                    min(
+                        1.0,
+                        local[h.edge.key()]
+                        - 0.15 * competition
+                        - (0.65 if h.edge.key() in visible_conflicts else 0.0),
+                    ),
                 )
 
         return sorted(
@@ -92,6 +137,7 @@ class PslStructuralInference:
         self,
         observations: list[RelationObservation],
         hypotheses: list[StructuralHypothesis],
+        visible_relations: list[CausalEdge] | None = None,
     ) -> list[StructuralHypothesis]:
         del observations
         if not hypotheses:
@@ -101,7 +147,8 @@ class PslStructuralInference:
         prior = self.Predicate("STRUCTPRIOR", size=3)
         relation = self.Predicate("STRUCTREL", size=3)
         competes = self.Predicate("COMPETES", size=4)
-        predicates = [prior, relation, competes]
+        visible_conflict = self.Predicate("VISIBLEFUNCCONFLICT", size=3)
+        predicates = [prior, relation, competes, visible_conflict]
 
         has_semantic = any(h.semantic_support is not None for h in hypotheses)
         if has_semantic:
@@ -141,6 +188,15 @@ class PslStructuralInference:
         if competition_rows:
             competes.add_data(obs, competition_rows)
 
+        visible_conflicts = _visible_functional_conflicts(
+            list(visible_relations or []), hypotheses
+        )
+        if visible_conflicts:
+            visible_conflict.add_data(
+                obs,
+                [[source, rel, target, 1.0] for source, rel, target in sorted(visible_conflicts)],
+            )
+
         if has_semantic and semantic is not None and contradiction is not None:
             semantic.add_data(
                 obs,
@@ -173,6 +229,11 @@ class PslStructuralInference:
         model.add_rule(
             self.Rule(
                 "0.8: COMPETES(A, R, B, S) & STRUCTREL(A, R, B) -> !STRUCTREL(A, S, B) ^2"
+            )
+        )
+        model.add_rule(
+            self.Rule(
+                "2.0: VISIBLEFUNCCONFLICT(A, R, B) -> !STRUCTREL(A, R, B) ^2"
             )
         )
         # Sparsity prior: unsupported relations should not survive merely because

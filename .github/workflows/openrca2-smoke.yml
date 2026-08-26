@@ -76,7 +76,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
           pip install 'pyarrow>=16'
-      - name: Build complete topology reference and collector observations
+      - name: Build telemetry-derived diagnostic topology and observations
         env:
           HF_HUB_DISABLE_XET: '1'
           LIMIT: ${{ github.event.inputs.limit || '20' }}
@@ -97,7 +97,7 @@ jobs:
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: topology-cases
+          name: diagnostic-topology-cases
           path: artifacts/topology_cases.jsonl
           retention-days: 7
 
@@ -127,7 +127,7 @@ jobs:
           java-version: '17'
       - uses: actions/download-artifact@v4
         with:
-          name: topology-cases
+          name: diagnostic-topology-cases
           path: artifacts
       - name: Install recovery stack
         run: |
@@ -151,7 +151,13 @@ jobs:
             --topology-missing-ratio '${{ matrix.missing_ratio }}' \
             --seed 42 \
             --relation-threshold 0.5 \
-            --limit "$LIMIT"
+            --limit "$LIMIT" \
+            --allow-derived-reference
+          python - <<'PY'
+          import glob, json
+          result = json.load(open(glob.glob('results/*.json')[0], encoding='utf-8'))
+          assert result['claim_scope'] == 'diagnostic_only'
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: topology-result-${{ matrix.variant }}-${{ matrix.missing_ratio }}
@@ -178,7 +184,7 @@ jobs:
           java-version: '17'
       - uses: actions/download-artifact@v4
         with:
-          name: topology-cases
+          name: diagnostic-topology-cases
           path: artifacts
       - name: Install topology and RCA stack
         run: |
@@ -203,11 +209,13 @@ jobs:
             --seed 42 \
             --relation-threshold 0.5 \
             --rca-edge-threshold 0.5 \
-            --limit "$LIMIT"
+            --limit "$LIMIT" \
+            --allow-derived-reference
           python - <<'PY'
           import glob, json
           path = glob.glob('results/topology_rca_*.json')[0]
           r = json.load(open(path))
+          assert r['claim_scope'] == 'diagnostic_only'
           print('TOPOLOGY', json.dumps(r['topology_summary'], sort_keys=True))
           print('RCA_INCOMPLETE', json.dumps(r['rca_summary']['incomplete'], sort_keys=True))
           print('RCA_RECOVERED', json.dumps(r['rca_summary']['recovered'], sort_keys=True))

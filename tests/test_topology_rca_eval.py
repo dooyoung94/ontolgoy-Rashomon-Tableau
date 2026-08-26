@@ -45,11 +45,13 @@ def test_recovered_topology_improves_rca_path_and_edge(tmp_path):
         rca_variant="abduction",
         topology_missing_ratio=1.0,
         seed=42,
+        allow_derived_reference=True,
     )
 
     assert result["track"] == "topology_recovery_plus_openrca2_rca"
     assert result["protocol"]["collector_observations_modified"] is False
     assert result["protocol"]["only_topology_relations_removed"] is True
+    assert result["claim_scope"] == "diagnostic_only"
     assert result["topology_summary"]["macro_missing_relation_f1"] == 1.0
 
     rca = result["rca_summary"]

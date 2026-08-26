@@ -20,7 +20,10 @@ from openrca_mr.models import (
 from openrca_mr.openrca2 import dump_normalized_cases
 from openrca_mr.pipeline import IncidentCausalRCA, MissingRelationRCA
 from openrca_mr.stage1_eval import run_stage1_evaluation
-from openrca_mr.topology_recovery import mask_topology_relations
+from openrca_mr.topology_recovery import (
+    mask_topology_relations,
+    mask_topology_relations_by_group,
+)
 
 
 def _case(case_id: str = "s1") -> RcaCase:
@@ -111,6 +114,7 @@ def test_s0_keeps_incomplete_topology_without_recovery(tmp_path):
         variant="topology_only",
         topology_missing_ratio=0.5,
         seed=42,
+        allow_derived_reference=True,
     )
 
     assert result["track"] == "missing_topology_relation_recovery"
@@ -120,6 +124,7 @@ def test_s0_keeps_incomplete_topology_without_recovery(tmp_path):
     assert result["rows"][0]["n_visible_relations"] == 1
     assert result["rows"][0]["n_missing_relations"] == 1
     assert result["rows"][0]["n_added_relations"] == 0
+    assert result["claim_scope"] == "diagnostic_only"
 
 
 def test_s1_recovers_relation_missing_from_topology_using_unchanged_collector_data(tmp_path):
@@ -133,6 +138,7 @@ def test_s1_recovers_relation_missing_from_topology_using_unchanged_collector_da
         variant="abduction",
         topology_missing_ratio=0.5,
         seed=42,
+        allow_derived_reference=True,
     )
 
     assert result["summary"]["micro_missing_relation_precision"] == 1.0
@@ -145,6 +151,21 @@ def test_s1_recovers_relation_missing_from_topology_using_unchanged_collector_da
     saved = json.loads(out.read_text(encoding="utf-8"))
     assert saved["topology_missing_ratio"] == 0.5
     assert saved["protocol"]["masked_relation_marker_visible_to_model"] is False
+    assert saved["claim_scope"] == "diagnostic_only"
+
+
+def test_primary_runner_rejects_embedded_telemetry_derived_reference(tmp_path):
+    data = tmp_path / "cases.jsonl"
+    out = tmp_path / "out.json"
+    dump_normalized_cases([_case()], data)
+
+    with pytest.raises(ValueError, match="independent, evaluator-only topology"):
+        run_stage1_evaluation(
+            data=str(data),
+            out=str(out),
+            variant="abduction",
+            topology_missing_ratio=0.5,
+        )
 
 
 def test_runner_joins_independent_topology_reference_by_case_id(tmp_path):
@@ -152,7 +173,17 @@ def test_runner_joins_independent_topology_reference_by_case_id(tmp_path):
     reference = tmp_path / "reference.jsonl"
     out = tmp_path / "independent.json"
     dump_normalized_cases([_case("case-A")], data)
-    dump_normalized_cases([_case("case-B"), _case("case-A")], reference)
+    case_b = _case("case-B")
+    case_a = _case("case-A")
+    provenance = {
+        "source": "versioned deployment manifest",
+        "version": "test-v1",
+        "independent_of_model_observations": True,
+        "evaluator_only": True,
+    }
+    case_b.metadata["reference_topology_provenance"] = provenance
+    case_a.metadata["reference_topology_provenance"] = provenance
+    dump_normalized_cases([case_b, case_a], reference)
 
     result = run_stage1_evaluation(
         data=str(data),
@@ -164,6 +195,7 @@ def test_runner_joins_independent_topology_reference_by_case_id(tmp_path):
 
     assert result["n"] == 1
     assert result["reference_protocol"] == "independent_topology_reference"
+    assert result["claim_scope"] == "primary"
     assert result["rows"][0]["case_id"] == "case-A"
 
 
@@ -182,3 +214,17 @@ def test_runner_rejects_missing_reference_case_ids(tmp_path):
             variant="abduction",
             topology_missing_ratio=0.5,
         )
+
+
+def test_group_mask_is_consistent_for_shared_system_relations():
+    shared = CausalEdge("service:frontend", REL_CALLS, "service:orders")
+    extra = CausalEdge("service:orders", REL_DEPLOYED_ON, "pod:orders-1")
+    masks = mask_topology_relations_by_group(
+        case_relations={"incident-a": [shared, extra], "incident-b": [shared, extra]},
+        case_groups={"incident-a": "system-x", "incident-b": "system-x"},
+        ratio=0.5,
+        seed=42,
+    )
+
+    assert masks["incident-a"] == masks["incident-b"]
+    assert len(masks["incident-a"].missing_relations) == 1

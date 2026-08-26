@@ -252,6 +252,27 @@ def test_stage1_semantic_and_soft_logic_are_explicit_pipeline_steps():
     assert result.relations == [CausalEdge("service:a", REL_CALLS, "service:b")]
 
 
+def test_stage1_soft_logic_uses_visible_topology_functional_constraints():
+    observations = [
+        RelationObservation(
+            "run-new",
+            "pod:orders-1",
+            "node:node-new",
+            "pod_node_cooccurrence",
+            0.98,
+            "orders-1 also appeared with node-new in the collection window",
+        )
+    ]
+    visible = [CausalEdge("pod:orders-1", REL_RUNS_ON, "node:node-current")]
+    result = StructuralRelationRecovery(
+        global_inference=StructuralSoftLogicApproximation(),
+        relation_threshold=0.5,
+    ).run(observations, visible_relations=visible)
+
+    assert result.hypotheses[0].soft_logic_score < 0.5
+    assert result.relations == []
+
+
 def test_structural_extraction_keeps_natural_direction_and_propagation_reverses_calls():
     traces = _synthetic_structural_traces()
     relations = extract_structural_relations(traces)

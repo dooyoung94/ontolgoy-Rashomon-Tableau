@@ -61,6 +61,14 @@
 - **병합:** PR #13을 merge commit `1cdfff2ba343615926256600510ee582988385e3`으로 main에 반영
 - **상태:** main 연구 기준선으로 승격 완료
 
+### 2026-08-26 — 연구 프로토콜 안전장치 추가
+
+- **문제:** telemetry observation으로 만든 topology를 동일 observation으로 재복원하면 정답 생성과 모델 입력이 순환하여 Track A 성능이 과대평가될 수 있음
+- **변경:** 독립 reference provenance를 기본 필수로 지정하고 derived reference는 `diagnostic_only`로 격리
+- **마스킹:** 사건별 mask에서 topology group별 nested mask로 변경
+- **지표:** 제거 관계 0건 사례의 macro 평균 제외, realized mask ratio와 Candidate Recall Ceiling 추가
+- **판정:** 연구 결과 산출 전 필수 프로토콜 수정
+
 ---
 
 ## 다음 연구 작업
