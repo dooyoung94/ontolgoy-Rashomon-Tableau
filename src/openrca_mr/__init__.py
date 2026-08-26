@@ -1,5 +1,6 @@
 """OpenRCA structural-relation recovery and causal-process reasoning package."""
 
+from .abduction import AbductiveCausalRelationGenerator, AbductiveRelationGenerator
 from .models import (
     CausalEdge,
     Evidence,
@@ -8,7 +9,7 @@ from .models import (
     RelationObservation,
     StructuralHypothesis,
 )
-from .pipeline import MissingRelationRCA
+from .pipeline import IncidentCausalRCA, MissingRelationRCA
 from .structural import (
     AbductiveStructuralRelationGenerator,
     StructuralRelationRecovery,
@@ -25,11 +26,15 @@ __all__ = [
     "RcaCase",
     "RelationObservation",
     "StructuralHypothesis",
-    "MissingRelationRCA",
     "AbductiveStructuralRelationGenerator",
     "StructuralRelationRecovery",
     "collect_structural_observations",
     "recover_structural_relations",
     "extract_structural_relations",
     "propagation_service_edges",
+    "AbductiveCausalRelationGenerator",
+    "IncidentCausalRCA",
+    # Backward-compatible historical names.
+    "AbductiveRelationGenerator",
+    "MissingRelationRCA",
 ]
