@@ -1,9 +1,14 @@
-name: OpenRCA Structural+Causal Smoke
+name: Topology Relation Recovery
 
 on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      limit:
+        description: Number of OpenRCA cases
+        required: false
+        default: '20'
 
 jobs:
   unit:
@@ -13,122 +18,102 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install core and tests
-        run: pip install -e '.[test]'
-      - name: Run unit tests
-        run: pytest -q
+      - name: Install and test
+        run: |
+          pip install -e '.[test]'
+          pytest -q
 
-  stage1_psl_smoke:
+  psl_smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          # pslpython 2.4 pins JPype1 1.4, which is not compatible with CPython 3.11.
-          # The OpenRCA inference workflows therefore execute PSL on Python 3.10.
           python-version: '3.10'
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install Stage-1 PSL stack
+      - name: Install PSL
         run: pip install -e '.[psl]'
-      - name: Run synthetic structural PSL inference
+      - name: Check one missing topology relation
         run: |
           python - <<'PY'
-          from openrca_mr.models import CausalEdge, RelationObservation, REL_CALLS, REL_DEPLOYED_ON
+          from openrca_mr.models import CausalEdge, RelationObservation, REL_CALLS
           from openrca_mr.psl import PslStructuralInference
-          from openrca_mr.structural import StructuralRelationRecovery
+          from openrca_mr.topology_recovery import recover_missing_topology_relations
 
           observations = [
               RelationObservation(
                   'o1', 'service:frontend', 'service:orders',
                   'trace_parent_child', 0.98,
                   'frontend parent span has orders child span'
-              ),
-              RelationObservation(
-                  'o2', 'service:orders', 'pod:orders-1',
-                  'service_pod_cooccurrence', 0.98,
-                  'orders telemetry is emitted from orders-1'
-              ),
+              )
           ]
-          result = StructuralRelationRecovery(
+          result = recover_missing_topology_relations(
+              visible_relations=[],
+              observations=observations,
               global_inference=PslStructuralInference(),
-              relation_threshold=0.50,
-          ).run(observations)
-          assert CausalEdge('service:frontend', REL_CALLS, 'service:orders') in result.relations
-          assert CausalEdge('service:orders', REL_DEPLOYED_ON, 'pod:orders-1') in result.relations
-          print('STAGE1_PSL_OK', [edge.key() for edge in result.relations])
+              relation_threshold=0.5,
+          )
+          expected = CausalEdge('service:frontend', REL_CALLS, 'service:orders')
+          assert expected in result.added_relations
+          print('TOPOLOGY_RELATION_RECOVERY_OK', [e.key() for e in result.added_relations])
           PY
 
-  ops_lite_prepare:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
+  prepare_topology_cases:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: Install adapter dependencies
+      - name: Install collector adapter
         run: |
           python -m pip install --upgrade pip
           pip install -e .
           pip install 'pyarrow>=16'
-      - name: Build leakage-safe 20-case causal set and cross-window structural set
+      - name: Build complete topology reference and collector observations
         env:
           HF_HUB_DISABLE_XET: '1'
         run: |
-          python scripts/build_ops_lite_cases_fast.py --limit 20 --out artifacts/ops_lite_20.jsonl
-          python scripts/build_stage1_cross_window.py \
-            --source artifacts/ops_lite_20.jsonl \
-            --cache .cache/ops-lite \
-            --out artifacts/ops_lite_20_stage1.jsonl
+          python scripts/build_ops_lite_cases_fast.py \
+            --limit '${{ inputs.limit }}' \
+            --out artifacts/topology_cases.jsonl
           python - <<'PY'
           from openrca_mr.openrca2 import load_normalized_cases
-
-          causal=load_normalized_cases('artifacts/ops_lite_20.jsonl')
-          stage1=load_normalized_cases('artifacts/ops_lite_20_stage1.jsonl')
-          assert len(causal) == 20, len(causal)
-          assert len(stage1) == 20, len(stage1)
-          assert [c.case_id for c in causal] == [c.case_id for c in stage1]
-          assert all(c.gold_root_causes and c.gold_edges for c in causal)
-          assert all(c.known_edges and c.evidence and c.symptom_nodes for c in causal)
-          assert all(c.structural_relations and c.relation_observations for c in stage1)
-          assert all(
-              c.metadata.get('structural_reference_protocol') ==
-              'normal_window_reference_vs_abnormal_window_observations'
-              for c in stage1
-          )
-          print('PREPARED_CAUSAL', len(causal))
-          print('PREPARED_STAGE1', len(stage1))
-          print('AVG_KNOWN_EDGES', sum(len(c.known_edges) for c in causal)/len(causal))
-          print('AVG_EVIDENCE', sum(len(c.evidence) for c in causal)/len(causal))
-          print('AVG_STAGE1_ABNORMAL_OBSERVATIONS', sum(len(c.relation_observations) for c in stage1)/len(stage1))
-          print('AVG_STAGE1_NORMAL_REFERENCE_RELATIONS', sum(len(c.structural_relations) for c in stage1)/len(stage1))
+          cases = load_normalized_cases('artifacts/topology_cases.jsonl')
+          assert cases
+          assert all(c.structural_relations for c in cases)
+          assert all(c.relation_observations for c in cases)
+          print('CASES', len(cases))
+          print('MEAN_TOPOLOGY_RELATIONS', sum(len(c.structural_relations) for c in cases) / len(cases))
+          print('MEAN_COLLECTOR_OBSERVATIONS', sum(len(c.relation_observations) for c in cases) / len(cases))
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: ops-lite-20-normalized
-          path: |
-            artifacts/ops_lite_20.jsonl
-            artifacts/ops_lite_20_stage1.jsonl
+          name: topology-cases
+          path: artifacts/topology_cases.jsonl
           retention-days: 7
 
-  stage1_benchmark:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
-    needs: ops_lite_prepare
+  topology_recovery:
+    if: github.event_name == 'workflow_dispatch'
+    needs: prepare_topology_cases
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
+        missing_ratio: [0.2, 0.4, 0.6]
         variant:
-          - observation_abduction
-          - observation_abduction_deberta
-          - observation_abduction_psl
-          - observation_abduction_deberta_psl
+          - topology_only
+          - abduction
+          - abduction_deberta
+          - abduction_psl
+          - abduction_deberta_psl
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -140,184 +125,78 @@ jobs:
           java-version: '17'
       - uses: actions/download-artifact@v4
         with:
-          name: ops-lite-20-normalized
+          name: topology-cases
           path: artifacts
-      - name: Install structural inference stack
+      - name: Install recovery stack
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e '.[all]'
-      - name: Run cross-window structural recovery ${{ matrix.variant }}
+      - name: Recover missing topology relations
         env:
           HF_HUB_DISABLE_XET: '1'
           TOKENIZERS_PARALLELISM: 'false'
           VARIANT: ${{ matrix.variant }}
+          RATIO: ${{ matrix.missing_ratio }}
         run: |
+          SAFE_RATIO=$(echo '${{ matrix.missing_ratio }}' | tr '.' '_')
+          OUT="results/${{ matrix.variant }}_${SAFE_RATIO}.json"
           python scripts/run_structural_recovery.py \
-            --data artifacts/ops_lite_20_stage1.jsonl \
-            --out results/stage1_${{ matrix.variant }}.json \
+            --data artifacts/topology_cases.jsonl \
+            --out "$OUT" \
             --variant '${{ matrix.variant }}' \
-            --observation-drop-ratio 0.0 \
+            --topology-missing-ratio '${{ matrix.missing_ratio }}' \
             --seed 42 \
             --relation-threshold 0.5 \
-            --limit 20
+            --limit '${{ inputs.limit }}'
           python - <<'PY'
-          import json, os
-          p='results/stage1_' + os.environ['VARIANT'] + '.json'
-          r=json.load(open(p))
-          print('STAGE1_RESULT', r['variant'], r['reference_protocol'], json.dumps(r['summary'], sort_keys=True))
-          print('STAGE1_PER_RELATION', json.dumps(r['per_relation_type'], sort_keys=True))
+          import glob, json, os
+          ratio = os.environ['RATIO'].replace('.', '_')
+          path = f"results/{os.environ['VARIANT']}_{ratio}.json"
+          r = json.load(open(path))
+          print('RESULT', r['variant'], r['topology_missing_ratio'], json.dumps(r['summary'], sort_keys=True))
+          print('PER_RELATION', json.dumps(r['per_relation_type'], sort_keys=True))
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: structural-result-${{ matrix.variant }}
-          path: results/stage1_${{ matrix.variant }}.json
+          name: topology-result-${{ matrix.variant }}-${{ matrix.missing_ratio }}
+          path: results/*.json
           retention-days: 14
 
-  stage1_aggregate:
-    if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
-    needs: stage1_benchmark
+  aggregate:
+    if: always() && github.event_name == 'workflow_dispatch'
+    needs: topology_recovery
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: structural-result-*
+          pattern: topology-result-*
           path: results
           merge-multiple: true
-      - name: Aggregate Stage-1 cross-window results
+      - name: Build final table
         run: |
           python - <<'PY'
-          import json
-          variants=[
-              'observation_abduction',
-              'observation_abduction_deberta',
-              'observation_abduction_psl',
-              'observation_abduction_deberta_psl',
-          ]
+          import glob, json
           rows=[]
-          for v in variants:
-              p=f'results/stage1_{v}.json'
-              try: r=json.load(open(p))
-              except FileNotFoundError: continue
+          for path in sorted(glob.glob('results/*.json')):
+              r=json.load(open(path))
               s=r['summary']
               rows.append({
-                  'variant':v,
-                  'macro_precision':s.get('macro_structural_precision'),
-                  'macro_recall':s.get('macro_structural_recall'),
-                  'macro_f1':s.get('macro_structural_f1'),
-                  'micro_precision':s.get('micro_structural_precision'),
-                  'micro_recall':s.get('micro_structural_recall'),
-                  'micro_f1':s.get('micro_structural_f1'),
-                  'tp':s.get('micro_tp'),
-                  'fp':s.get('micro_fp'),
-                  'fn':s.get('micro_fn'),
-                  'mean_observations':s.get('mean_observations_full'),
-                  'mean_candidates':s.get('mean_candidates'),
-                  'mean_selected_relations':s.get('mean_selected_relations'),
-                  'mean_reference_relations':s.get('mean_reference_relations'),
+                  'missing_ratio': r['topology_missing_ratio'],
+                  'variant': r['variant'],
+                  'missing_precision': s['micro_missing_relation_precision'],
+                  'missing_recall': s['micro_missing_relation_recall'],
+                  'missing_f1': s['micro_missing_relation_f1'],
+                  'full_topology_f1': s['micro_full_topology_f1'],
+                  'mean_missing_relations': s['mean_missing_relations'],
+                  'mean_added_relations': s['mean_added_relations'],
               })
-          print('STAGE1_CROSS_WINDOW_RESULTS')
+          rows.sort(key=lambda x: (x['missing_ratio'], x['variant']))
           print(json.dumps(rows, indent=2))
-          json.dump(rows, open('results/stage1_summary.json','w'), indent=2)
+          json.dump(rows, open('topology_results.json','w'), indent=2)
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: ops-lite-20-stage1-cross-window-results
-          path: results
-          retention-days: 14
-
-  ops_lite_benchmark:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
-    needs: ops_lite_prepare
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [graph_only, abduction, abduction_deberta, abduction_psl, full]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: actions/download-artifact@v4
-        with:
-          name: ops-lite-20-normalized
-          path: artifacts
-      - name: Install causal inference stack
-        run: |
-          python -m pip install --upgrade pip
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -e '.[all]'
-      - name: Run ${{ matrix.variant }} causal relation mask
-        env:
-          HF_HUB_DISABLE_XET: '1'
-          TOKENIZERS_PARALLELISM: 'false'
-          VARIANT: ${{ matrix.variant }}
-        run: |
-          python scripts/run_openrca2_ablation.py \
-            --data artifacts/ops_lite_20.jsonl \
-            --out results/${{ matrix.variant }}.json \
-            --dataset-id 'anon-ops/ops-lite:20:causal_relation_mask_v1' \
-            --mask-mode relation \
-            --mask-ratio 0.40 \
-            --seed 42 \
-            --variant '${{ matrix.variant }}' \
-            --limit 20
-          python - <<'PY'
-          import json, os
-          r=json.load(open('results/' + os.environ['VARIANT'] + '.json'))
-          print('RESULT', r['variant'], json.dumps(r['summary'], sort_keys=True))
-          PY
-      - uses: actions/upload-artifact@v4
-        with:
-          name: causal-relation-result-${{ matrix.variant }}
-          path: results/${{ matrix.variant }}.json
-          retention-days: 7
-
-  ops_lite_aggregate:
-    if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
-    needs: ops_lite_benchmark
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: causal-relation-result-*
-          path: results
-          merge-multiple: true
-      - name: Aggregate causal-relation-mask A0-A4
-        run: |
-          python - <<'PY'
-          import json
-          order=['graph_only','abduction','abduction_deberta','abduction_psl','full']
-          rows=[]
-          for v in order:
-              p=f'results/{v}.json'
-              try: r=json.load(open(p))
-              except FileNotFoundError: continue
-              s=r['summary']
-              rows.append({
-                  'variant':v,
-                  'relation_accuracy':s.get('relation_accuracy'),
-                  'relation_precision':s.get('relation_precision'),
-                  'relation_recall':s.get('relation_recall'),
-                  'relation_f1':s.get('relation_f1'),
-                  'node_f1':s.get('node_f1'),
-                  'edge_f1':s.get('edge_f1'),
-                  'path_reachability':s.get('process_path_reachability'),
-                  'root_hit_at_1':s.get('root_hit_at_1'),
-                  'root_hit_at_3':s.get('root_hit_at_3'),
-              })
-          print('CAUSAL_RELATION_MASK_A0_A4_RESULTS')
-          print(json.dumps(rows, indent=2))
-          json.dump(rows, open('results/summary.json','w'), indent=2)
-          PY
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ops-lite-20-causal-relation-mask-results
-          path: results
+          name: topology-recovery-summary
+          path: topology_results.json
           retention-days: 14
