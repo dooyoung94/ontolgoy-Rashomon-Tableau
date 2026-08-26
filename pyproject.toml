@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "openrca-missing-relation"
 version = "0.1.0"
-description = "Abductive relation recovery with DeBERTa semantic evidence scoring and probabilistic soft-logic inference for OpenRCA 2.0"
+description = "Telemetry-derived structural relation recovery and incident-specific causal path reasoning for OpenRCA 2.0"
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.26",

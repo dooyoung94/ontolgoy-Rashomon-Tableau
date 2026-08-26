@@ -1,997 +1,536 @@
-# 불완전한 운영 관계 그래프에서의 증거 기반 인과관계 복원과 Root Cause Path 추론
+# 불완전한 운영 온톨로지에서의 구조 관계 복원과 사건별 인과 경로 추론
 
-**Evidence-Grounded Causal Relation Recovery and Root Cause Path Reasoning over Incomplete Operational Graphs**
+**Structural Relation Recovery and Incident-Specific Causal Path Reasoning over Incomplete Operational Ontologies**
 
-> 작성 기준 시점: 2026-08-26  
-> 현재 주 실험: OpenRCA 2.0 / ops-lite 500-case standard protocol  
-> 현재 상태: 500/500 데이터 정규화 검증 완료, A4 Full Model은 150/500 case 완료 시점의 중간 결과를 포함함  
-> 이전 MAGIC·DAFNA-EA·WN18RR·BADP 실험은 연구 문제의 발전 과정과 구성요소 검증을 위한 선행 실험으로만 사용함
+> 작성 기준: 2026-08-26  
+> 대상 benchmark: OpenRCA 2.0 계열 `anon-ops/ops-lite` 500-case  
+> 현재 500-case 20/40/60% 실험은 **Stage 2 causal-relation qualification** 실험이며, Stage 1 structural-relation 성능으로 해석하지 않는다.
 
 ---
 
 ## 초록
 
-운영 시스템의 Root Cause Analysis(RCA)는 일반적으로 서비스 의존 관계, 배포 구조, 호출 관계, 데이터베이스 연결 관계와 같은 시스템 지식이 충분히 구축되어 있다는 가정하에 수행된다. 그러나 실제 환경에서는 CMDB, topology, ontology 또는 knowledge graph가 불완전하며, 장애 발생 시점에 필요한 인과관계가 명시적으로 존재하지 않는 경우가 많다. 이러한 환경에서 단순 그래프 탐색은 관찰된 연결성만 제공할 뿐 해당 연결이 실제 장애 전파에 참여했는지를 판단하지 못하며, 반대로 LLM 기반 RCA는 적절한 root service를 찾더라도 원인에서 증상까지의 검증 가능한 causal path를 제시하지 못하는 문제가 있다.
+실제 Root Cause Analysis(RCA) 환경에서는 CMDB나 ontology가 완전하지 않다. 서비스 호출, 배포 위치, 데이터베이스 사용, 메시징 사용과 같은 운영 구조가 부분적으로 누락될 수 있으며, 구조적으로 연결된 두 구성요소가 특정 incident에서 실제 장애 전파에 참여했는지도 별도의 추론이 필요하다. 기존 접근은 이 두 문제를 하나의 causal edge prediction 문제로 합치는 경우가 많아, **운영 구조를 복원하는 문제**와 **사건별 인과관계를 판정하는 문제**가 혼재될 수 있다.
 
-본 연구는 이 문제를 **불완전한 운영 관계 그래프에서 incident-specific causal relation을 복원하고, 복원된 관계를 이용하여 root cause에서 사용자 관찰 증상까지의 propagation path를 추론하는 문제**로 정식화한다. 제안 방법은 (1) 관찰된 dependency endpoint를 대상으로 하는 Abductive Hypothesis Generation, (2) 정상·비정상 telemetry와 인과/비인과 명제를 비교하는 DeBERTa 기반 contrastive semantic scoring, (3) temporal precedence, anomaly co-occurrence, semantic evidence, path coherence를 결합하는 Probabilistic Soft Logic(PSL) inference로 구성된다. 연결성 자체는 causal evidence로 사용하지 않고 후보 생성의 자격 조건으로만 사용하여 structural bias를 줄인다.
+본 연구는 이를 두 단계로 분리한다. **Stage 1 Structural Relation Recovery**에서는 model-visible telemetry만 사용하여 `CALLS`, `DEPLOYED_ON`, `RUNS_ON`, `USES_DATABASE`, `USES_MESSAGING`과 같은 typed operational relation을 구성한다. **Stage 2 Incident Causal Qualification**에서는 Stage 1에서 확인된 구조적 dependency를 후보 영역으로 사용하되, 연결성 자체를 causal evidence로 사용하지 않고 incident telemetry의 시간 선후, 이상도, 의미적 지지 및 전역 경로 일관성을 이용하여 `causal_propagates_to`와 `non_causal_dependency`를 판정한다. Stage 2는 Abductive Hypothesis Generation, DeBERTa 기반 contrastive semantic scoring, Probabilistic Soft Logic(PSL), 그리고 선택적으로 constrained LLM adjudication으로 구성된다.
 
-20-case controlled relation-masking development benchmark에서 Graph-only는 높은 Relation Accuracy(73.83%)에도 불구하고 causal positive class를 전혀 복원하지 못해 Relation F1이 0%였으며, Abduction은 Relation F1 29.67%, Abduction+DeBERTa는 37.17%를 기록했다. Full model은 Relation F1 37.17%로 분류 자체에서는 추가 이득이 없었지만 Path Reachability를 35%에서 40%로, Root@3를 40%에서 45%로 개선하였다. 이는 local relation classification과 global process reconstruction이 서로 다른 평가 대상임을 보여준다.
+OpenRCA 2.0 계열 데이터는 trace, metric, log와 root-cause/causal-process 정답을 제공하므로 사건별 causal reconstruction을 평가할 수 있다. 다만 benchmark의 `causal_graph.json`은 구조 관계 타입의 정답표가 아니라 사건별 causal propagation supervision이므로, 본 연구는 PAVE/causal gold를 Stage 1 입력이나 구조 relation 생성에 사용하지 않는다. 구조 relation은 telemetry에 실제 속성이 존재할 때만 생성하며, 데이터가 노출하지 않는 DB·pod·node·messaging 관계를 임의로 보완하지 않는다.
 
-OpenRCA 2.0 standard 500-case 실험에서는 데이터 500/500 정규화 및 gold leakage 차단 검증이 완료되었다. 현재 완료된 150개 case에서 Full model은 Any Service Hit 60.00%, All Service Hit 39.33%, Process Path Reachability 57.33%, Node-F1 52.94%, Edge-F1 38.11%를 기록했다. 특히 Edge Recall 80.26%에 비해 Edge Precision이 28.87%로 낮아, 현재 모델의 주요 병목이 **causal edge를 찾지 못하는 것보다 불필요한 edge를 과도하게 유지하는 데 있음**을 확인하였다. 따라서 다음 단계의 핵심 개선 대상은 hypothesis generation 확대가 아니라 causal edge calibration 및 pruning이다.
+기존 20-case controlled causal-relation masking 개발 실험에서 Abduction의 Relation F1은 29.67%였고, DeBERTa를 결합하면 37.17%로 향상되었다. Full model은 Relation F1 자체는 37.17%로 동일했으나 Path Reachability를 35%에서 40%, Root@3를 40%에서 45%로 개선하였다. Standard 150-case 중간 실험에서는 Edge Recall 80.26%에 비해 Edge Precision이 28.87%로 낮아, 현재 Stage 2의 주 병목이 후보 수의 폭발보다 false-positive causal edge의 과잉 유지임을 확인했다. 이 결과는 structural relation recovery와 incident causal qualification을 분리하여 평가해야 함을 뒷받침한다.
 
-**주요어:** Root Cause Analysis, OpenRCA 2.0, Causal Relation Recovery, Abductive Reasoning, DeBERTa, Probabilistic Soft Logic, Knowledge Graph, Observability
+**주요어:** Root Cause Analysis, OpenRCA 2.0, Operational Ontology, Structural Relation Recovery, Causal Process Reconstruction, Abductive Reasoning, DeBERTa, Probabilistic Soft Logic
 
 ---
 
 # 1. 서론
 
-## 1.1 연구 배경
+## 1.1 현실적 문제
 
-현대의 마이크로서비스 및 분산 시스템에서는 장애 원인이 사용자에게 관찰되는 증상과 동일한 서비스에서 발생하지 않을 수 있다. 데이터베이스 지연, downstream service failure, resource saturation, network latency와 같은 원인은 여러 서비스 및 구성요소를 거쳐 전파된 뒤 최종적으로 API latency, error rate 증가 또는 서비스 가용성 저하의 형태로 나타난다.
+운영자가 RCA를 수행할 때 필요한 지식은 단순한 서비스 목록이 아니다. 실제로는 다음과 같은 관계가 필요하다.
 
-따라서 RCA의 핵심은 단순히 “어떤 서비스가 이상했는가”를 찾는 것이 아니라 다음의 인과적 연결을 복원하는 것이다.
+```text
+System      --HAS_SERVICE-->   Service
+Service     --CALLS-->         Service
+Service     --DEPLOYED_ON-->   Pod
+Pod         --RUNS_ON-->       Node
+Service     --USES_DATABASE--> Database
+Service     --USES_MESSAGING--> MessagingSystem
+```
+
+그러나 현실의 CMDB, topology, ontology는 자주 불완전하다. 신규 배포, 동적 scaling, 외부 DB 연결, 비정형 로그 기반 의존성 등은 정적 자산관리 정보에 즉시 반영되지 않을 수 있다. 따라서 RCA 이전에 **“무엇이 무엇과 어떤 관계로 연결되어 있는가”**를 관측 데이터로 보완해야 한다.
+
+그 다음에는 또 다른 문제가 있다. 예를 들어
+
+```text
+frontend --CALLS--> order-service
+```
+
+가 정상 구조로 존재하더라도 모든 incident에서 `order-service`가 `frontend` 장애의 원인은 아니다. 특정 incident에서는 다음과 같은 별도의 인과 판정이 필요하다.
+
+```text
+order-service --causal_propagates_to--> frontend
+```
+
+즉 본 연구는 다음을 구분한다.
 
 $$
-r \rightarrow v_1 \rightarrow v_2 \rightarrow \cdots \rightarrow a
+\text{Structural Relation} \neq \text{Incident Causal Relation}
 $$
 
-여기서 $r$은 root-cause service, $a$는 alarm 또는 symptom service, 중간 노드 $v_i$는 장애가 전파된 서비스 또는 구성요소를 의미한다.
+## 1.2 연구 목적
 
-OpenRCA 2.0은 이러한 문제를 명시적으로 평가하기 위해 root-cause label뿐 아니라 step-wise causal propagation annotation을 제공한다. OpenRCA 2.0 연구에서는 frontier LLM들이 적어도 하나의 올바른 root-cause service를 찾는 비율은 평균 76.0%였으나, 이를 검증된 causal propagation path에 grounding하는 비율은 61.5%에 그쳤다고 보고하였다. 이는 root-cause identification과 causal process reconstruction이 동일한 문제가 아님을 보여준다 [1].
+본 연구의 목적은 완전한 운영 ontology를 가정하지 않고 telemetry로 구조적 관계를 구성한 뒤, 그 구조 위에서 사건별 causal process와 root cause를 추론하는 것이다.
 
-## 1.2 기존 접근의 한계
+```text
+Telemetry
+   ↓
+Stage 1. Structural Relation Recovery
+   CALLS / DEPLOYED_ON / RUNS_ON / USES_DATABASE / ...
+   ↓
+Operational Graph G_S
+   ↓
+Stage 2. Incident Causal Qualification
+   causal_propagates_to / non_causal_dependency
+   ↓
+Incident Causal Graph G_C^(i)
+   ↓
+Root Cause → Propagation Path → Symptom
+```
 
-본 연구가 다루는 현실적 제약은 **운영 지식 그래프가 완전하지 않다**는 점이다. 실제 시스템에서 다음 세 개념은 동일하지 않다.
-
-$$
-Graph\ Reachability \neq Semantic\ Relation \neq Causal\ Relation
-$$
-
-A 서비스가 B 서비스를 호출한다는 사실은 두 서비스가 구조적으로 연결되어 있음을 의미하지만, 특정 incident에서 A의 이상이 B로 전파되었다는 것을 자동으로 의미하지 않는다. 반대로 장애 전파가 실제로 발생했더라도 CMDB 또는 ontology에 해당 causal relation이 사전에 정의되어 있지 않을 수 있다.
-
-초기 연구에서는 Rashomon Worlds와 Tableau를 이용하여 여러 가능한 설명을 보존한 뒤 논리적으로 모순된 설명을 제거하려 하였다. 그러나 실험 과정에서 다음 한계가 확인되었다.
-
-1. Tableau는 ontology에 정의되지 않은 관계 의미를 스스로 생성하지 못한다.
-2. 가능한 world를 많이 보존해도 semantic scorer가 약하면 올바른 설명을 선택하기 어렵다.
-3. Boolean consistency만으로는 noisy telemetry와 confidence-valued evidence를 충분히 표현하기 어렵다.
-4. RCA에서는 “모순인가 아닌가”보다 “여러 noisy evidence를 종합할 때 어느 causal edge가 더 가능성이 높은가”가 더 직접적인 문제다.
-
-이에 따라 현재 방법은 Rashomon을 별도 알고리즘으로 사용하지 않고, 여러 후보를 조기에 하나로 확정하지 않는 **candidate-preservation principle**로만 유지한다. 누락 관계 생성은 abduction, 의미 적합도는 DeBERTa NLI, 전역 soft consistency는 PSL로 역할을 분리한다.
+이 분리는 연구의 설명력을 높인다. Stage 1이 실패했는지, Stage 2의 causal discrimination이 실패했는지, 또는 causal graph는 적절하지만 root ranking이 실패했는지를 각각 측정할 수 있기 때문이다.
 
 ## 1.3 연구 질문
 
-본 연구는 다음 세 질문을 검증한다.
+**RQ1. Structural induction.** Telemetry만으로 RCA에 필요한 typed operational relation을 어느 범위까지 관찰·복원할 수 있는가?
 
-**RQ1.** 불완전한 운영 관계 그래프에서 incident telemetry를 이용한 abductive relation hypothesis generation이 causal relation 복원에 기여하는가?
+**RQ2. Abduction.** 관찰된 구조 relation을 후보 공간으로 제한한 abductive hypothesis generation이 무제한 node-pair 생성 없이 incident causal relation 복원에 기여하는가?
 
-**RQ2.** 정상/비정상 telemetry와 causal/non-causal 명제를 비교하는 semantic scorer가 구조·시간 정보만 사용하는 방법보다 causal relation discrimination을 개선하는가?
+**RQ3. Semantic discrimination.** DeBERTa 기반 causal/non-causal contrastive scoring이 시간·이상도 기반 추론보다 causal relation precision/F1을 개선하는가?
 
-**RQ3.** local relation score만으로 결정하는 것보다 PSL 기반 global path coherence를 결합하는 것이 root-cause propagation path 복원에 기여하는가?
+**RQ4. Global coherence.** PSL을 이용한 soft global inference가 local relation classification을 넘어 causal process path reconstruction을 개선하는가?
+
+**RQ5. Final adjudication.** A5 constrained LLM adjudication이 새로운 endpoint를 발명하지 않으면서 false-positive causal edge를 줄이고 최종 RCA 성능을 개선하는가?
 
 ## 1.4 연구 기여
 
-본 연구의 현재 기여는 다음과 같이 정리된다.
+본 연구의 기여는 다음과 같다.
 
-- 완전한 ontology를 전제로 하지 않고, **관찰된 dependency 위에서 incident-specific causal relation을 복원하는 RCA 문제**를 정의한다.
-- 구조적 연결성을 causal evidence로 사용하지 않고 **candidate eligibility**로만 사용하여 topology 자체가 정답을 암시하는 문제를 줄인다.
-- Abduction, semantic NLI, soft logical inference의 역할을 분리한 모듈형 RCA 파이프라인을 제안한다.
-- Root-cause hit뿐 아니라 Relation-F1, Node-F1, Edge-F1, Process Path Reachability를 함께 측정하여 “원인을 맞힘”과 “인과과정을 복원함”을 분리하여 평가한다.
-- controlled relation-masking 실험과 OpenRCA 2.0 standard 실험을 분리하여, **누락 관계 내성**과 **표준 RCA 성능**을 서로 다른 조건에서 검증한다.
+1. 운영 topology 복원과 incident causal reconstruction을 **두 개의 명시적 relation layer**로 분리한다.
+2. 구조 관계는 PAVE gold가 아니라 **model-visible telemetry만으로 생성**하여 gold leakage를 차단한다.
+3. `CALLS`와 causal propagation의 방향을 분리한다. 구조상 `caller→callee`와 장애 전파 후보 `callee→caller`를 같은 edge로 취급하지 않는다.
+4. Abduction의 후보 범위를 실제 관찰된 structural dependency에 제한하여 all-pairs candidate explosion을 방지한다.
+5. DeBERTa, PSL, LLM의 역할을 각각 semantic discrimination, global consistency, final adjudication으로 분리한다.
+6. Structural relation, causal relation, process graph, root cause를 서로 다른 metric으로 평가한다.
 
 ---
 
-# 2. 관련 연구
+# 2. OpenRCA 2.0과 데이터 경계
 
-## 2.1 OpenRCA 2.0과 causal process supervision
+OpenRCA 2.0 계열 benchmark는 microservice incident에 대해 정상/비정상 trace, metric, log와 root-cause 및 causal-process 정답을 제공한다. 본 연구가 사용하는 `anon-ops/ops-lite`는 500개 case로 구성되며 Train-Ticket, Hotel Reservation, OpenTelemetry Demo 세 시스템을 포함한다.
 
-OpenRCA 2.0은 500개의 cross-system RCA instance에 대해 PAVE 기반 step-wise causal annotation을 제공한다. PAVE는 fault injection이라는 알려진 intervention에서 출발하여 cause-to-effect 방향으로 propagation을 검증한다. 따라서 단순 root label보다 causal process 자체를 평가할 수 있다는 점이 본 연구의 핵심 요구와 일치한다 [1].
+중요한 데이터 경계는 다음과 같다.
 
-본 연구는 OpenRCA 2.0의 gold causal graph를 추론 입력으로 사용하지 않는다. Standard track에서 model-visible structure는 telemetry의 trace dependency로부터만 구성하며, gold root 및 causal graph는 evaluation 단계에서만 사용한다.
+### Model-visible
 
-## 2.2 Abductive Reasoning
+- normal/abnormal traces
+- normal/abnormal metrics
+- normal/abnormal logs
+- incident symptom information
+- telemetry에서 직접 추출된 structural observations
 
-Abduction은 관찰된 현상을 가장 잘 설명하는 가설을 찾는 추론 방식이다. 고전적으로 Hobbs 등은 weighted abduction을 “관찰을 설명하기 위한 최소 비용의 가설” 문제로 설명하였다 [2]. 최근에는 knowledge graph 상의 관찰을 설명하는 complex logical hypothesis generation 연구도 제안되었다 [3].
+### Evaluator-only
 
-본 연구의 abduction은 생성형 LLM을 이용해 임의의 relation을 발명하는 방식이 아니다. 운영 trace가 관찰한 endpoint pair를 후보 영역으로 제한하고, 해당 dependency가 이번 incident의 causal propagation에 참여했는지를 가설로 둔다. 이는 후보 폭발과 hallucinated topology를 피하기 위한 설계이다.
+- `causal_graph.json`
+- root-cause gold
+- injection ground truth
+- PAVE/manifest-derived causal process label
 
-## 2.3 DeBERTa 기반 Semantic Evidence Scoring
+`causal_graph.json`은 사건별 causal propagation을 평가하기 위한 supervision이다. 이를 `CALLS`, `USES_DATABASE`, `RUNS_ON` 등의 구조 관계 생성에 사용하면 Stage 1과 Stage 2가 다시 섞이고 leakage가 발생할 수 있으므로 사용하지 않는다.
 
-DeBERTa는 disentangled attention과 enhanced mask decoder를 이용하는 pretrained language model로 다양한 NLU 및 NLI task에서 강한 성능을 보였다 [4]. 본 연구에서는 DeBERTa를 독립적인 RCA 모델이 아니라 **telemetry description이 causal claim과 non-causal claim 중 어느 쪽을 더 지지하는지 판단하는 semantic evidence scorer**로 사용한다.
-
-## 2.4 Probabilistic Soft Logic
-
-PSL은 first-order logic 형태의 규칙에 soft truth value를 부여하고, Hinge-Loss Markov Random Field를 통해 MAP inference를 수행하는 probabilistic programming framework이다 [5]. RCA telemetry는 완전한 Boolean fact보다 confidence-valued evidence에 가깝기 때문에, hard Tableau보다 PSL이 현재 문제에 더 적합하다.
+또한 OpenRCA benchmark는 완전한 기업 CMDB가 아니다. 따라서 telemetry에 DB system, pod, node, messaging destination 속성이 없다면 해당 typed relation은 **unknown/unsupported**로 남겨야 하며, 서비스 이름 패턴이나 gold causal edge에서 추측하여 채우지 않는다.
 
 ---
 
 # 3. 문제 정의
 
-## 3.1 입력
+## 3.1 Stage 1: Structural Relation Recovery
 
-각 incident case를 다음과 같이 정의한다.
-
-$$
-X = (V, E_{obs}, Z, S)
-$$
-
-- $V$: 관찰된 service node 집합
-- $E_{obs}$: trace 등 telemetry에서 관찰된 dependency endpoint pair
-- $Z$: metric, log, trace로부터 생성된 incident evidence
-- $S$: 관찰된 symptom node 집합
-
-중요한 점은 $E_{obs}$가 causal edge 집합이 아니라는 것이다. 즉
+운영 구조 그래프를 다음과 같이 정의한다.
 
 $$
-(u,v) \in E_{obs}
+G_S=(V_S,E_S,T)
 $$
 
-는 단지 “$u$와 $v$ 사이의 dependency가 관찰되었다”는 의미이며,
+여기서 $V_S$는 service, pod, node, database, messaging system 등의 entity이며, $T$는 structural relation type 집합이다.
 
 $$
-CAUSES(u,v)=1
+T=\{CALLS, DEPLOYED\_ON, RUNS\_ON, USES\_DATABASE, USES\_MESSAGING, \ldots\}
 $$
 
-을 의미하지 않는다.
-
-## 3.2 출력
-
-모델은 다음 두 출력을 생성한다.
+각 구조 relation은 typed triple이다.
 
 $$
-\hat{E}_{causal}
+e_s=(u,t,v), \quad t\in T
+$$
+
+예:
+
+$$
+(service{:}frontend, CALLS, service{:}orders)
 $$
 
 $$
-\hat{R} = [\hat{r}_1, \hat{r}_2, \ldots, \hat{r}_k]
+(service{:}orders, USES\_DATABASE, database{:}postgresql{:}orders-db)
 $$
 
-여기서 $\hat{E}_{causal}$은 incident-specific causal propagation edge 집합이고, $\hat{R}$은 root-cause service ranking이다.
-
-최종적으로 올바른 root service가 예측되고 해당 root에서 gold alarm service까지 directed path가 존재해야 causal process reconstruction에 성공한 것으로 본다.
-
-## 3.3 연구 목표
-
-본 연구의 최적화 목표는 단순 root-cause classification이 아니라 다음 두 조건을 동시에 만족하는 것이다.
+Stage 1은 raw telemetry $Z$로부터
 
 $$
-\hat{R} \approx R^*
+\hat E_S=f_{struct}(Z)
 $$
 
+를 구성한다.
+
+## 3.2 Stage 2: Incident Causal Qualification
+
+incident $i$에 대해 structural dependency가 실제 장애 전파에 참여했는지를 이진 변수로 둔다.
+
 $$
-\hat{E}_{causal} \approx E^*_{causal}
+z_e^{(i)}\in\{0,1\}
 $$
 
-따라서 root hit가 높더라도 edge/path가 낮으면 완전한 RCA로 간주하지 않는다.
+- $z_e^{(i)}=1$: incident causal propagation에 참여
+- $z_e^{(i)}=0$: 구조적으로 존재하지만 해당 incident의 causal propagation에는 참여하지 않음
+
+Stage 2 출력은
+
+$$
+G_C^{(i)}=(V_C,E_C^{(i)})
+$$
+
+이며 $E_C^{(i)}$는 incident-specific causal edge 집합이다.
+
+서비스 호출에서는 자연 topology 방향과 장애 전파 후보 방향을 명시적으로 구분한다.
+
+```text
+Natural structural direction
+caller --CALLS--> callee
+
+Potential synchronous failure propagation
+callee --causal_propagates_to--> caller
+```
+
+따라서 단순 graph reachability는 causal relation의 증거가 아니다.
+
+## 3.3 최종 RCA
+
+모델은 causal graph와 root ranking을 함께 출력한다.
+
+$$
+\hat R^{(i)}=[\hat r_1,\hat r_2,\ldots,\hat r_k]
+$$
+
+최종 목표는 단순 root hit가 아니라 올바른 root에서 symptom/alarm까지 검증 가능한 predicted path를 제공하는 것이다.
 
 ---
 
 # 4. 제안 방법
 
-## 4.1 전체 구조
+## 4.1 Telemetry-derived Structural Induction
+
+현재 구현은 relation별로 명시적 extractor를 사용한다.
+
+### CALLS
+
+분산 trace의 `trace_id`, `span_id`, `parent_span_id`, `service_name`을 결합하여 parent span의 service를 caller, child span의 service를 callee로 해석한다.
 
 ```text
-Normal / Abnormal Telemetry
-          |
-          v
-Observed Dependency Extraction
-          |
-          v
-Abductive Causal Hypotheses
-          |
-          v
-DeBERTa Contrastive NLI
-          |
-          v
-PSL Soft Global Inference
-          |
-     +----+----+
-     |         |
-     v         v
-Causal Edges  Root Ranking
-     |         |
-     +----+----+
-          v
-Root-to-Symptom Propagation Path
+parent service --CALLS--> child service
 ```
 
-### 4.1.1 핵심 설계 원칙
+### DEPLOYED_ON / RUNS_ON
 
-구조적 연결성은 후보 생성에만 사용한다.
+trace/metric/log에 노출된 Kubernetes 또는 host attribute를 이용한다.
 
-$$
-ObservedDependency(u,v) \Rightarrow EligibleHypothesis(u,v)
-$$
+```text
+service --DEPLOYED_ON--> pod
+pod     --RUNS_ON--> node
+```
 
-그러나 다음 규칙은 사용하지 않는다.
+### USES_DATABASE
 
-$$
-ObservedDependency(u,v) \nRightarrow Causes(u,v)
-$$
+`db.system`, server/peer address, namespace/name과 같은 OpenTelemetry 속성이 존재할 때만 생성한다.
 
-즉 topology가 있다는 이유만으로 causal score를 올리지 않는다.
+```text
+service --USES_DATABASE--> database
+```
 
----
+### USES_MESSAGING
 
-## 4.2 Abductive Hypothesis Generation
+`messaging.system`, destination 속성이 존재할 때만 생성한다.
 
-각 관찰 dependency $(u,v)$에 대해 다음 가설을 생성한다.
+```text
+service --USES_MESSAGING--> messaging target
+```
 
-$$
-h_{uv}: Causes(u,v)
-$$
+핵심 원칙은 **relation type별 evidence가 없으면 생성하지 않는 것**이다.
 
-후보는 모든 node pair의 Cartesian product가 아니라 $E_{obs}$에 존재하는 endpoint pair로 제한한다.
+## 4.2 Structural Graph에서 Causal Candidate로의 Projection
 
-### 4.2.1 Temporal score
+현재 OpenRCA service-level causal evaluator와 호환하기 위해 `CALLS` relation만 service causal candidate로 projection한다.
 
-source와 target에서 최초 anomaly 시점을 각각 $t_u$, $t_v$라고 하고
+```text
+frontend --CALLS--> orders
+                 ↓ projection
+orders --dependency_propagates_to?--> frontend
+```
 
-$$
-\Delta t = t_v - t_u
-$$
+DB/pod/node와 같은 heterogeneous relation은 `structural_relations`에 보존하고 임의로 service-service causal edge로 붕괴시키지 않는다. 향후 heterogeneous causal evaluator가 확보되면 직접 causal reasoning 대상으로 확장할 수 있다.
 
-로 정의한다. 현재 구현의 temporal score $T(h)$는 다음과 같다.
+## 4.3 Abductive Hypothesis Generation
 
-| 조건 | $T(h)$ |
-|---|---:|
-| source 또는 target anomaly time 없음 | 0.00 |
-| $\Delta t < 0$ | 0.00 |
-| $0 \le \Delta t \le 5$ | 1.00 |
-| $5 < \Delta t \le 30$ | 0.80 |
-| $30 < \Delta t \le 120$ | 0.55 |
-| $\Delta t > 120$ | 0.20 |
-
-이 값은 “원인이 결과보다 먼저 나타나는가”를 incident-local causal support로 사용한다. 단, temporal precedence 자체를 causal proof로 해석하지 않는다.
-
-### 4.2.2 Endpoint anomaly score
-
-source와 target에서 관찰된 최대 abnormality를 각각 $a_u$, $a_v$라 하면,
+Abduction은 모든 node pair를 조합하지 않는다. Stage 1에서 관찰된 dependency 또는 Stage 2 controlled masking에서 endpoint가 보존된 pair만 causal hypothesis 후보가 된다.
 
 $$
-A(h) = \min(a_u, a_v)
+H_i=\{CAUSES(u,v)\mid (u,v)\in E_{candidate}^{(i)}\}
 $$
 
-로 정의한다. 한쪽 endpoint만 강하게 이상하고 다른 쪽이 정상이라면 causal propagation support를 높게 주지 않기 위한 보수적 결합이다.
-
-### 4.2.3 Abductive score
-
-현재 local abductive prior는 다음과 같다.
+각 후보의 초기 점수는 incident-specific temporal precedence와 endpoint anomaly로 계산한다.
 
 $$
-S_{abd}(h) = 0.55T(h) + 0.45A(h)
+A_{uv}=0.55T_{uv}+0.45N_{uv}
 $$
 
-이 식에는 structural score가 포함되지 않는다. 구조는 후보 자격만 결정한다.
+연결성 자체는 $A_{uv}$에 가산되지 않는다.
 
----
+## 4.4 DeBERTa Contrastive Semantic Scoring
 
-## 4.3 DeBERTa Contrastive Semantic Scoring
+각 후보에 대해 같은 telemetry premise에 다음 두 가설을 비교한다.
 
-절대 entailment만 사용할 경우 telemetry 문장이 중립적으로 표현되었을 때 모든 score가 0에 가까워지는 문제가 발생하였다. 이를 줄이기 위해 동일한 evidence premise에 대해 서로 경쟁하는 두 claim을 비교한다.
+```text
+H+ : source anomaly causally propagated to target
+H- : observed dependency did not propagate the incident anomaly
+```
 
-Causal claim:
+DeBERTa NLI의 절대 entailment만 사용하는 대신 두 가설의 상대적 entailment margin을 사용하고, 두 가설 모두 entailment가 낮으면 neutral에 가깝게 유지한다.
 
-> incident anomaly at service $u$ causally propagated to service $v$.
+이를 통해 낮은 entailment 값의 작은 수치 차이를 과대증폭하는 문제를 줄인다.
 
-Non-causal claim:
+## 4.5 PSL Global Inference
 
-> observed dependency $u \rightarrow v$ did not causally propagate the incident anomaly.
+PSL은 temporal, anomaly, semantic evidence와 path coherence를 soft logic으로 결합한다. 구조적 dependency만 존재한다는 이유로 `CAUSES`를 강제하는 규칙은 사용하지 않는다.
 
-각 claim의 entailment probability를 $e_c$, $e_n$이라 한다.
+PSL의 역할은 개별 edge classifier를 대체하는 것이 아니라, locally plausible한 관계들이 전체 root-to-symptom process에서 일관된지 조정하는 것이다.
 
-### 4.3.1 Contrastive preference
+## 4.6 A5 Constrained LLM Adjudication
 
-$$
-p = \frac{e_c - e_n}{e_c + e_n}
-$$
+A5는 A4 결과에 대한 최종 adjudicator이다. 입력은 masked observed pair, A4 decision/score, temporal/anomaly signal, semantic margin, PSL score, root ranking 및 telemetry evidence이다.
 
-단, $e_c+e_n$이 0에 가까우면 $p=0$으로 처리한다.
-
-### 4.3.2 Reliability attenuation
-
-두 claim 모두 entailment mass가 매우 낮으면 작은 수치 차이를 과대해석하지 않도록 reliability를 둔다.
-
-$$
-r = \min\left(1, \max\left(0, \frac{e_c+e_n}{0.5}\right)\right)
-$$
-
-최종 semantic margin은
-
-$$
-m = p \cdot r
-$$
-
-이다.
-
-Semantic support와 contradiction은 다음과 같이 정의한다.
-
-$$
-S_{sem}(h) = 0.5 + 0.5m
-$$
-
-$$
-C_{sem}(h) = 0.5 - 0.5m
-$$
-
-Neutrality는
-
-$$
-N_{sem}(h) = 1-r
-$$
-
-이다.
-
-PSL을 사용하지 않는 semantic ablation에서는 다음 보정 점수를 사용한다.
-
-$$
-S_{local}(h) = clip\left(S_{abd}(h) + 0.25(S_{sem}(h)-C_{sem}(h)), 0, 1\right)
-$$
-
-이 구조의 목적은 DeBERTa가 telemetry prior를 완전히 덮어쓰는 것이 아니라 causal-vs-noncausal preference만 제한적으로 보정하도록 하는 것이다.
-
----
-
-## 4.4 PSL Global Inference
-
-각 candidate edge의 soft truth value를
-
-$$
-y_{uv} = Causes(u,v) \in [0,1]
-$$
-
-로 둔다. PSL은 weighted logical rule의 violation을 최소화하는 MAP assignment를 계산한다.
-
-개념적으로 다음 목적함수를 최소화한다.
-
-$$
-y^* = \arg\min_y \sum_j w_j \phi_j(y,x)^2
-$$
-
-여기서 $x$는 관찰 evidence, $w_j$는 규칙 weight, $\phi_j$는 soft rule violation을 의미한다.
-
-현재 Full model의 주요 규칙은 다음과 같다.
-
-| Weight | Soft rule | 역할 |
-|---:|---|---|
-| 1.2 | `TEMPORAL(A,B) -> CAUSES(A,B)` | 시간 선행성의 positive support |
-| 1.1 | `ANOMALYPAIR(A,B) -> CAUSES(A,B)` | 양 endpoint 이상 동반 support |
-| 0.8 | `!TEMPORAL(A,B) -> !CAUSES(A,B)` | 시간 조건 부재의 negative evidence |
-| 1.2 | `!ANOMALYPAIR(A,B) -> !CAUSES(A,B)` | endpoint anomaly 부재의 negative evidence |
-| 1.0 | `SEMANTIC(A,B) -> CAUSES(A,B)` | DeBERTa causal support |
-| 1.0 | `CONTRADICTION(A,B) -> !CAUSES(A,B)` | DeBERTa non-causal support |
-| 1.6 | `CAUSES(A,B) & REACHES(B) -> REACHES(A)` | downstream symptom 방향 path coherence |
-| 0.8 | `TEMPORAL(A,B) & REACHES(B) -> CAUSES(A,B)` | local evidence와 global reachability 결합 |
-| 0.5 | `CAUSES(A,B) -> !CAUSES(B,A)` | 역방향 동시 causal edge 억제 |
-| 0.25 | `!CAUSES(A,B)` | 약한 sparsity prior |
-
-PSL의 역할은 local edge score를 무조건 높이는 것이 아니다. downstream symptom으로 이어지는 global path context를 이용하되, local temporal/anomaly/semantic support가 약한 edge를 path 존재만으로 causal로 만들지 않도록 설계하였다.
-
----
-
-## 4.5 Edge Selection
-
-PSL 이후 각 hypothesis의 score를 $S_{psl}(h)$라 하고, 현재 threshold는 0.5이다.
-
-$$
-\hat{E}_{causal} = \{h \mid S_{psl}(h) \ge 0.5\}
-$$
-
-현재 standard 중간 결과에서 recall은 높고 precision은 낮게 나타나므로 이 고정 threshold 및 PSL calibration이 다음 개선의 핵심 대상이다.
-
----
-
-## 4.6 Root Cause Ranking
-
-선택된 causal hypotheses의 source node를 root 후보로 사용한다. 각 node $v$에 대해 다음 특성을 계산한다.
-
-- $O(v)$: 최대 outgoing causal hypothesis score
-- $I(v)$: 최대 incoming causal hypothesis score
-- $A(v)$: node의 최대 abnormality
-- $E(v)$: earliest anomaly score, 빠를수록 1에 가까움
-
-Rootness는 다음과 같다.
-
-$$
-R(v) = 0.38O(v) + 0.30A(v) + 0.20E(v) + 0.12(1-I(v))
-$$
-
-causal edge가 threshold를 넘지 못한 경우에도 standard RCA agent가 빈 답을 반환하지 않도록 evidence-only fallback을 둔다.
-
-$$
-R_{fallback}(v) = 0.75A(v) + 0.25E(v)
-$$
-
-현재 최대 root prediction 수는 3개이다.
+LLM은 **기존 observed candidate pair의 causal/non-causal 판정만 수정할 수 있고 새로운 endpoint pair를 생성할 수 없다.** 따라서 A5의 목표는 candidate expansion이 아니라 false-positive pruning과 최종 root/path 조정이다.
 
 ---
 
 # 5. 실험 설계
 
-## 5.1 Dataset
+연구를 두 relation layer와 최종 RCA로 분리하여 다음 트랙을 사용한다.
 
-주 데이터셋은 OpenRCA 2.0의 `anon-ops/ops-lite` 500-case release를 사용한다. 각 case에서 normal/abnormal traces, metrics, logs를 읽고 service-level dependency 및 evidence를 정규화한다.
+## 5.1 Track S — Structural Relation Audit / Recovery
 
-Standard 500-case adapter의 원칙은 다음과 같다.
+Stage 1 자체를 평가한다.
 
-- dependency candidate는 telemetry trace에서만 추출한다.
-- root-cause gold는 manifest의 root service label을 evaluator에서만 사용한다.
-- causal edge 및 alarm gold는 `causal_graph.json`을 evaluator에서만 사용한다.
-- model inference 직전에 모든 gold field를 제거한다.
-- service-level causal path가 하나의 service 내부에서 끝나는 경우 gold edge set이 비어 있을 수 있으며, 이 case도 denominator에서 제거하지 않는다.
+1. normal telemetry에서 structural relation을 추출한다.
+2. relation type별 관찰 coverage를 보고한다.
+3. independent telemetry window 또는 별도 topology reference가 가능한 relation에 대해 typed triple P/R/F1을 측정한다.
+4. endpoint entity type만으로 정답 relation이 자명해지는 단순 label-mask는 main structural benchmark로 사용하지 않는다.
 
-## 5.2 두 개의 평가 트랙
+핵심 지표:
 
-### Track A. Standard OpenRCA 2.0
+- relation type별 count/coverage
+- typed triple Precision / Recall / F1 (reference가 존재하는 경우)
+- service CALLS coverage
+- DB/pod/node/messaging relation observable-case rate
 
-입력 구조를 인위적으로 mask하지 않고 telemetry-derived dependency만 제공한다. 공식 OpenRCA 2.0의 process-level metric과 최대한 동일한 service normalization을 사용하여 직접 비교 가능한 표준 결과를 만드는 것이 목표이다.
+## 5.2 Track C — Controlled Incident Causal Qualification
 
-### Track B. Controlled Relation-Masking
+현재 진행 중인 20/40/60% relation masking 실험이다.
 
-관찰된 endpoint connectivity는 유지하되 해당 dependency가 `causal_propagates_to`인지 `non_causal_dependency`인지의 relation label 일부를 숨긴다. 이 트랙의 목적은 **불완전한 ontology/관계 그래프에서 relation semantics가 누락되었을 때 이를 telemetry로 복원할 수 있는가**를 직접 측정하는 것이다.
+여기서 mask되는 것은 `CALLS`, `USES_DATABASE`가 아니라 **관찰된 service dependency pair의 incident causal semantics**이다.
 
-따라서 Track B 수치는 official standard leaderboard와 직접 비교하지 않는다.
+```text
+causal_propagates_to
+vs
+non_causal_dependency
+```
 
-## 5.3 Ablation
+Mask ratio:
 
-| Variant | 구성 | 검증 목적 |
-|---|---|---|
-| A0 | Observed graph only | topology만으로 가능한 수준 측정 |
-| A1 | Abduction | temporal + anomaly evidence의 기여 측정 |
-| A2 | Abduction + DeBERTa | semantic NLI의 추가 기여 측정 |
-| A3 | Abduction + PSL | semantic model 없이 soft global logic의 기여 측정 |
-| A4 | Abduction + DeBERTa + PSL | 전체 방법의 local + semantic + global 결합 효과 측정 |
+```text
+20% / 40% / 60%
+```
 
----
+endpoint pair는 보존되며 gold causal label은 evaluator에서만 사용한다.
 
-# 6. 평가 지표와 검증 목적
+### Ablation
 
-본 연구에서는 하나의 지표만 높다고 RCA가 성공했다고 판단하지 않는다. 지표마다 검증하는 실패 유형이 다르기 때문이다.
+```text
+A0  Graph/visible causal facts only
+A1  Abduction
+A2  Abduction + DeBERTa
+A3  Abduction + PSL
+A4  Abduction + DeBERTa + PSL
+A5  A4 + constrained LLM adjudication
+```
 
-## 6.1 Precision, Recall, F1
+Direct LLM relation baseline은 A5와 분리하여 비교한다.
 
-일반적인 binary/set 평가를 다음과 같이 정의한다.
+## 5.3 Track O — OpenRCA Standard
 
-$$
-Precision = \frac{TP}{TP+FP}
-$$
+agent에 gold topology/causal graph를 주지 않고 telemetry만으로 구조와 incident causal process를 추론한다. 이 트랙이 최종 end-to-end 현실성 검증이다.
 
-$$
-Recall = \frac{TP}{TP+FN}
-$$
+## 5.4 Two-stage End-to-End 평가
 
-$$
-F1 = \frac{2 \cdot Precision \cdot Recall}{Precision+Recall}
-$$
+최종 연구에서는 다음 두 조건을 분리해 비교한다.
 
-Precision은 “예측한 것 중 실제로 맞는 비율”, Recall은 “실제 정답 중 얼마나 찾아냈는가”를 의미한다.
+### C1 — Observed-Structure / Oracle-Candidate Condition
 
-본 연구에서 특히 중요한 해석은 다음과 같다.
+관찰 가능한 structural candidate가 확보되었다고 두고 Stage 2 성능을 격리한다. 현재 500-case controlled causal-mask 실험이 이 역할에 가깝다.
 
-- **High Recall + Low Precision**: 정답 causal edge는 많이 찾지만 불필요한 edge를 과다 예측함.
-- **High Precision + Low Recall**: 보수적으로 맞는 edge만 예측하지만 실제 causal propagation을 많이 놓침.
+### C2 — Recovered-Structure Condition
 
-## 6.2 Relation Accuracy / Relation F1
+Stage 1에서 telemetry로 복원한 structural graph를 실제 Stage 2 입력으로 사용한다.
 
-Controlled masking에서 각 masked observed pair를 causal positive 또는 non-causal negative로 분류한다.
-
-**검증 목적:** 누락된 relation semantics 자체를 복원할 수 있는가?
-
-Accuracy만 사용하지 않는 이유는 non-causal dependency가 많을 때 모든 edge를 negative로 예측해도 높은 accuracy가 나올 수 있기 때문이다. 실제 20-case 실험에서 Graph-only가 정확히 이 현상을 보였다.
-
-## 6.3 Root Service Precision / Recall / F1
-
-예측 root service set과 gold root service set을 비교한다.
-
-**검증 목적:** 모델이 장애의 시작점을 service level에서 얼마나 정확히 특정하는가?
-
-현재 모델은 최대 3개의 root를 반환하므로 올바른 root를 포함하면서 추가 root도 반환하면 recall은 높고 precision/exact는 낮을 수 있다.
-
-## 6.4 Root Exact Set
-
-$$
-ExactRoot = 1[\hat{R}=R^*]
-$$
-
-예측 root 집합과 gold root 집합이 정확히 동일할 때만 1이다.
-
-**검증 목적:** “정답 중 하나를 포함했다”가 아니라 root set 전체를 정확히 복원했는가?
-
-이 지표는 매우 엄격하다. 예를 들어 gold가 `{A}`인데 모델이 `{A,B,C}`를 반환하면 Any Hit은 성공하지만 Exact Root는 실패한다.
-
-## 6.5 Any Service Hit
-
-$$
-AnyHit = 1[\hat{R} \cap R^* \neq \emptyset]
-$$
-
-**검증 목적:** top root candidates 중 최소 하나라도 실제 root service를 포함하는가?
-
-실무적으로 “조사 범위를 올바른 서비스까지 좁혔는가”를 보여주지만, extra false-positive root를 허용하므로 단독으로는 충분하지 않다.
-
-## 6.6 All Service Hit
-
-$$
-AllHit = 1[R^* \subseteq \hat{R}]
-$$
-
-**검증 목적:** 복수 root가 존재하는 incident에서 필요한 모든 root service를 포함했는가?
-
-Any Hit보다 엄격하지만 여전히 extra predicted roots를 허용한다.
-
-## 6.7 Node-F1
-
-Predicted propagation edge의 endpoint와 predicted root를 node set으로 만들고, gold causal edge endpoint와 gold root node set과 비교한다.
-
-**검증 목적:** causal process에 참여하는 **서비스 범위**를 얼마나 잘 복원했는가?
-
-Node-F1이 높고 Edge-F1이 낮다면 “관련 서비스는 찾았지만 서비스 사이의 올바른 인과 연결을 잘못 구성했다”는 의미가 된다.
-
-## 6.8 Edge-F1
-
-service name을 정규화한 directed pair `(source service, target service)`를 비교한다. Standard metric에서는 relation label 자체보다 directed service-pair propagation 구조를 평가한다.
-
-**검증 목적:** 장애가 어떤 서비스에서 어떤 서비스로 전파되었는지 **인과 구조의 연결 관계**를 복원했는가?
-
-본 연구의 핵심 지표 중 하나이다. 불완전한 relation recovery가 실제 causal graph reconstruction으로 이어졌는지를 가장 직접적으로 보여준다.
-
-## 6.9 Process Path Reachability
-
-본 연구의 standard evaluator에서 성공 조건은 두 가지를 동시에 요구한다.
-
-1. predicted roots 중 실제 gold root가 존재한다.
-2. 해당 correct root에서 gold alarm service까지 predicted directed edge path가 존재한다.
-
-이를 다음과 같이 표현할 수 있다.
-
-$$
-PR = 1[\exists r \in (\hat{R} \cap R^*),\ \exists a \in A^*:\ r \leadsto a]
-$$
-
-**검증 목적:** root service를 단순히 맞힌 것이 아니라, root에서 관찰된 symptom까지 설명 가능한 propagation chain을 실제로 구성했는가?
-
-OpenRCA 2.0이 강조하는 “ungrounded diagnosis”를 직접 드러내는 지표이다.
-
-## 6.10 지표 간 해석 관계
-
-| 관찰 패턴 | 의미 |
-|---|---|
-| Root Hit 높음, Path 낮음 | 원인 서비스는 찾지만 전파 설명이 약함 |
-| Node-F1 높음, Edge-F1 낮음 | 관련 서비스는 찾지만 관계 방향/연결이 부정확함 |
-| Edge Recall 높음, Precision 낮음 | causal graph를 과도하게 넓게 예측함 |
-| Relation F1 상승, Path 변화 없음 | local relation 분류 개선이 global path 개선으로 연결되지 않음 |
-| Path 상승, Relation F1 동일 | global inference가 동일한 local decision에서도 process-level 연결을 개선함 |
+C1과 C2 차이는 structural recovery error가 최종 RCA에 미치는 영향을 보여준다.
 
 ---
 
-# 7. 실험 결과
+# 6. 평가 지표
 
-## 7.1 선행 실험 1: Ontology/Tableau만으로는 누락 관계를 생성할 수 없음
+## 6.1 Structural Recovery
 
-초기 MAGIC multi-hop 실험에서 양방향 path coverage는 68.03%였지만 ontology/Tableau 기반 conflict detection은 5.44%에 그쳤다.
+- Structural typed-triple Precision
+- Structural typed-triple Recall
+- Structural typed-triple F1
+- relation type별 telemetry coverage
 
-이 결과의 의미는 Tableau의 절대 성능이 낮다는 것이 아니라, **그래프에서 path를 찾았다는 사실만으로 path의 semantic relation이 ontology에 자동으로 존재하지 않는다**는 점이다.
+## 6.2 Incident Causal Qualification
 
-따라서 다음 관계가 성립하지 않음을 실험적으로 확인하였다.
+- Relation Precision / Recall / F1 (`causal_propagates_to` positive)
+- Predicted-positive rate
+- false-positive causal retention
 
-$$
-PathFound \nRightarrow RelationKnown
-$$
+## 6.3 Process Reconstruction
 
-이 결과가 누락 relation을 먼저 hypothesis로 생성해야 한다는 현재 연구 방향의 출발점이 되었다.
+- Node Precision / Recall / F1
+- Edge Precision / Recall / F1
+- Process Path Reachability
 
-## 7.2 선행 실험 2: 후보 생성과 후보 선택은 다른 문제
+## 6.4 Final RCA
 
-DAFNA-EA 100개 gold subset에서 candidate generation은 gold world를 93% 포함했으나 최종 exact selection은 최고 62%였다.
+- Any Service Hit (AnySvc)
+- Root-service Precision / Recall / F1
+- Root@1 / Root@3
+- Exact root set
 
-| 방법 | Exact-set Accuracy | Author F1 |
-|---|---:|---:|
-| Possible-world uniform | 58% | 80.38% |
-| Hard commit reliability | 61% | 84.04% |
-| Possible-world marginal | **62%** | **84.13%** |
-| Atomic resolution | 61% | 82.88% |
-
-핵심은 다음 차이이다.
-
-$$
-GoldCandidateCoverage = 93\%
-$$
-
-$$
-BestExactSelection = 62\%
-$$
-
-즉 정답 후보가 존재해도 ranking/inference가 올바른 후보를 선택하지 못할 수 있다. 현재 연구에서 Abduction과 Semantic/PSL을 별도 구성요소로 분리하여 ablation하는 이유이다.
-
-## 7.3 선행 실험 3: DeBERTa semantic scorer의 필요성
-
-MAGIC structured experiment에서 weak lexical scorer를 DeBERTa NLI scorer로 교체했을 때 다음 개선이 관찰되었다.
-
-| Metric | Weak lexical | DeBERTa | Improvement |
-|---|---:|---:|---:|
-| Row conflict recall | 22.79% | **41.50%** | **+18.71%p** |
-| Query conflict recall | 16.86% | **31.53%** | **+14.68%p** |
-| Structured exact localization | 7.14% | **15.48%** | **+8.33%p** |
-
-이 결과가 검증한 것은 “DeBERTa가 RCA를 해결한다”가 아니다. 동일 candidate set에서 lexical similarity보다 semantic NLI가 의미적으로 유효한 candidate를 더 잘 구분한다는 점을 확인한 것이다.
-
-이후 provenance metadata가 NLI input에 섞였던 구현 오류를 발견하여 수정 전 자연어 MAGIC 결과는 최종 논문 성능 수치에서 제외하였다. 위 표는 현재 `studycase.md`에 보존된 검증된 structured comparison의 역할로만 사용한다.
+본 코드의 `root_service_f1`은 service-only 보조 지표이며 OpenRCA 공식 `(service, fault-kind)` F1과 동일 지표로 주장하지 않는다.
 
 ---
 
-## 7.4 Controlled Relation-Masking 20-case Development Benchmark
+# 7. 현재 실험 결과
 
-### 7.4.1 실험 조건
+## 7.1 20-case Controlled Causal-Relation Masking Pilot
 
-- Dataset: `anon-ops/ops-lite`
-- Case 수: 20
-- Incident-specific relation label mask: 40%
-- Seed: 42
-- Endpoint connectivity: 유지
-- Positive class: `causal_propagates_to`
-- Gold causal label: model input에 노출하지 않고 masking construction/evaluation에만 사용
+40% incident causal relation label을 masking한 개발용 20-case 결과는 다음과 같다.
 
-### 7.4.2 결과
+| Variant | Relation F1 | Node F1 | Edge F1 | Path Reachability | Root@1 | Root@3 |
+|---|---:|---:|---:|---:|---:|---:|
+| A0 Graph-only | 0.00% | 78.86% | 72.83% | 20% | 10% | 25% |
+| A1 Abduction | 29.67% | 69.02% | 61.76% | 30% | 15% | 30% |
+| A2 Abduction + DeBERTa | **37.17%** | 75.68% | 67.43% | 35% | **20%** | 40% |
+| A3 Abduction + PSL | **37.17%** | 75.68% | 67.43% | 35% | **20%** | 40% |
+| A4 Full | **37.17%** | 75.68% | 67.43% | **40%** | 15% | **45%** |
 
-| Variant | Relation Acc. | Relation Precision | Relation Recall | Relation F1 | Node F1 | Edge F1 | Path Reachability | Root@1 | Root@3 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| A0 Graph-only | **73.83%** | 0.00% | 0.00% | 0.00% | **78.86%** | **72.83%** | 20% | 10% | 25% |
-| A1 Abduction | 32.17% | 21.67% | 50.00% | 29.67% | 69.02% | 61.76% | 30% | 15% | 30% |
-| A2 Abduction + DeBERTa | 34.83% | 30.83% | **57.50%** | **37.17%** | 75.68% | 67.43% | 35% | **20%** | 40% |
-| A3 Abduction + PSL | 34.83% | 30.83% | **57.50%** | **37.17%** | 75.68% | 67.43% | 35% | **20%** | 40% |
-| A4 Abduction + DeBERTa + PSL | 34.83% | 30.83% | **57.50%** | **37.17%** | 75.68% | 67.43% | **40%** | 15% | **45%** |
+A1→A2에서 Relation F1이 29.67%에서 37.17%로 증가하여 semantic discrimination의 이득이 나타났다. A2/A3/A4의 thresholded Relation F1은 동일하지만 A4는 Path Reachability와 Root@3를 추가 개선했다. 이는 local relation classification과 global process reconstruction이 동일한 문제가 아님을 보여준다.
 
-### 7.4.3 결과 해석 1: Accuracy는 causal recovery를 대표하지 못함
+이 표는 **Stage 2 causal-relation 성능**이며 `CALLS/USES_DATABASE/RUNS_ON` 복원 성능으로 해석해서는 안 된다.
 
-A0 Graph-only의 Relation Accuracy는 73.83%로 가장 높지만 Relation F1은 0%이다. Graph-only는 masked pair에 대해 positive causal relation을 하나도 복원하지 않았다.
+## 7.2 Standard 150-case Intermediate Result
 
-즉 class imbalance가 존재할 때
+A4 Full의 150/500 case 중간 결과는 다음과 같다.
 
-$$
-HighAccuracy \nRightarrow CausalRecovery
-$$
-
-이다. 이 때문에 본 연구는 relation masking에서 positive-class F1을 핵심 지표로 사용한다.
-
-### 7.4.4 결과 해석 2: Abduction은 causal positive recall을 회복함
-
-A1은 Relation Recall 50.00%, Relation F1 29.67%를 기록했다. 이는 temporal precedence와 endpoint anomaly만으로도 일부 causal relation을 복원할 수 있음을 의미한다.
-
-반면 Relation Precision은 21.67%로 낮다. 즉 Abduction은 hypothesis coverage를 확보하는 데 유리하지만, 단독 사용 시 false positive를 충분히 억제하지 못한다.
-
-### 7.4.5 결과 해석 3: Semantic evidence는 relation discrimination을 개선함
-
-A2는 A1 대비 Relation Precision을 21.67%에서 30.83%로, Recall을 50.00%에서 57.50%로, F1을 29.67%에서 37.17%로 개선했다.
-
-이는 DeBERTa contrastive NLI가 단순 temporal/anomaly prior 위에서 causal/non-causal relation을 구분하는 추가 정보를 제공했음을 의미한다.
-
-### 7.4.6 결과 해석 4: PSL의 가치는 local relation F1만으로 평가할 수 없음
-
-A2, A3, A4의 thresholded Relation F1은 모두 37.17%였다. 작은 20-case development set에서는 PSL이 최종 binary edge decision을 바꾸지 못했다.
-
-그러나 A4의 Path Reachability는 35%에서 40%로, Root@3는 40%에서 45%로 상승했다. 반대로 Root@1은 20%에서 15%로 하락했다.
-
-이 결과는 PSL의 역할을 다음과 같이 해석하게 한다.
-
-$$
-LocalRelationClassification \neq GlobalProcessReconstruction
-$$
-
-즉 동일한 relation-level F1에서도 hypothesis score/order와 path coherence가 달라져 process-level 결과가 달라질 수 있다. 다만 표본이 20개이므로 이 차이는 confirmatory conclusion이 아니라 **다음 500-case ablation에서 검증해야 하는 가설**로 취급한다.
-
----
-
-## 7.5 OpenRCA 2.0 Standard 500-case: 데이터 검증 상태
-
-현재 standard workflow는 500개 case를 10개 shard, 각 50개로 구성한다. 다음 검증이 완료되었다.
-
-| 검증 항목 | 상태 |
-|---|---|
-| 10개 standard shard 생성 | 완료 |
-| 각 shard 50 case assertion | 완료 |
-| 총 500 case merge | 완료 |
-| unique case ID = 500 | 완료 |
-| gold field inference input 제거 | 코드 검증 완료 |
-| A4 Full model inference | **150/500 완료 시점** |
-| 500-case aggregate | 실행 완료 전이므로 본 문서에 미기재 |
-
-따라서 아래 standard 결과는 **중간 결과(interim result)**이며 최종 논문 성능표로 확정하지 않는다.
-
----
-
-## 7.6 OpenRCA 2.0 Standard A4 중간 결과: 150/500
-
-완료된 shard 3, 4, 5는 각각 50 case이며, 총 150 case의 macro average는 다음과 같다.
-
-| Metric | A4 Interim 150/500 |
+| Metric | Result |
 |---|---:|
-| Root Service Precision | 27.89% |
-| Root Service Recall | 49.67% |
-| Root Service F1 | 34.18% |
-| Root Exact Set | 4.67% |
-| **Any Service Hit** | **60.00%** |
-| **All Service Hit** | **39.33%** |
-| **Process Path Reachability** | **57.33%** |
-| Node Precision | 42.17% |
-| **Node Recall** | **87.07%** |
-| **Node F1** | **52.94%** |
+| Any Service Hit | 60.00% |
+| All Service Hit | 39.33% |
+| Process Path Reachability | 57.33% |
+| Node F1 | 52.94% |
+| Edge F1 | 38.11% |
+| Edge Recall | 80.26% |
 | Edge Precision | 28.87% |
-| **Edge Recall** | **80.26%** |
-| **Edge F1** | **38.11%** |
 
-### 7.6.1 Shard별 안정성 확인
+Recall에 비해 Precision이 크게 낮다. 따라서 현재 병목은 “관계를 더 많이 생성해야 한다”가 아니라 **관찰된 후보 중 causal로 남길 edge를 더 엄격하게 판정해야 한다**는 데 있다.
 
-| Shard | Cases | Any Hit | Path Reachability | Node F1 | Edge F1 |
-|---|---:|---:|---:|---:|---:|
-| 3 | 50 | 66% | 62% | 53.55% | 33.34% |
-| 4 | 50 | 58% | 56% | 55.06% | 39.92% |
-| 5 | 50 | 56% | 54% | 50.21% | 41.07% |
-| **150-case mean** | **150** | **60.00%** | **57.33%** | **52.94%** | **38.11%** |
+## 7.3 500-case Final Controlled Run
 
-세 shard에서 Any Hit은 56~66%, Path Reachability는 54~62%, Node-F1은 50.21~55.06% 범위로 나타났다. Edge-F1은 33.34~41.07%로 상대적으로 변동이 더 크다.
+500-case × mask 20/40/60% × A0-A5 실험은 Stage 2 causal qualification의 최종 controlled evaluation으로 사용한다. 완료 전 수치를 논문에 추정하여 채우지 않는다.
 
-단, shard는 random sample이 아니라 manifest index에 따른 분할이므로 이 범위를 confidence interval처럼 해석해서는 안 된다.
+최종 표에서는 최소 다음을 보고한다.
 
-### 7.6.2 핵심 결과 1: Root를 찾는 것과 Exact Root Set을 맞히는 것은 큰 차이가 있음
+| Mask | Variant | Rel F1 | Edge P | Edge R | Edge F1 | Path | AnySvc | Root@1 | Root@3 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 20 | A0-A5 | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| 40 | A0-A5 | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| 60 | A0-A5 | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
 
-Any Service Hit은 60.00%인 반면 Root Exact Set은 4.67%이다.
-
-이는 현재 모델이 상당수 case에서 실제 root service를 후보 안에 포함하지만, 최대 3개의 root를 반환하는 정책과 imperfect ranking으로 인해 extra root service를 함께 예측한다는 뜻이다.
-
-즉
-
-$$
-AnyHit \gg ExactRoot
-$$
-
-이며, 현재 root ranking은 **coverage 중심으로는 일정 수준 동작하지만 calibration과 false-positive suppression이 부족하다.**
-
-### 7.6.3 핵심 결과 2: Root를 맞힌 경우 상당수가 실제 propagation path로 연결됨
-
-Any Hit 60.00%와 Process Path Reachability 57.33%의 차이는 2.67%p이다.
-
-Path Reachability는 올바른 root가 있어야만 성공할 수 있으므로, 현재 완료 subset에서는 correct root를 포함한 case 중 상당수가 alarm service까지 predicted path를 형성하고 있음을 시사한다.
-
-그러나 이 값을 조건부 비율로 직접 해석하려면 case-level 결과로 `P(Path | CorrectRoot)`를 별도로 계산해야 한다. 현재 표의 57.33/60.00 단순 비율을 공식 conditional metric으로 사용하지 않는다.
-
-### 7.6.4 핵심 결과 3: Node는 많이 찾지만 Edge 구조가 과도하게 넓음
-
-Node Recall은 87.07%로 높지만 Node Precision은 42.17%이다. Edge에서도 Recall 80.26%, Precision 28.87%로 동일한 패턴이 더 강하게 나타난다.
-
-가장 중요한 현재 병목은 다음과 같다.
-
-$$
-EdgeRecall = 80.26\% \gg EdgePrecision = 28.87\%
-$$
-
-이는 hypothesis generator가 gold causal path의 많은 edge를 candidate/selected graph에 포함시키는 데는 성공하고 있지만, non-causal dependency까지 causal propagation으로 남기는 경우가 많다는 뜻이다.
-
-따라서 현재의 오류는 주로
-
-```text
-Missing causal edge
-```
-
-보다
-
-```text
-Too many causal edges
-```
-
-형태에 가깝다.
-
-이 결과는 다음 연구 방향을 명확하게 만든다.
-
-$$
-MoreHypotheses \not\approx BetterRCA
-$$
-
-현재 필요한 것은 후보 확대가 아니라 **causal edge precision을 높이는 calibration/pruning**이다.
-
-### 7.6.5 핵심 결과 4: Edge-F1 38.11%를 단독으로 낮다고 해석하면 안 되는 이유
-
-Edge-F1은 38.11%로 Node-F1 52.94%와 Path Reachability 57.33%보다 낮다. 이는 모델이 관련 service와 root-to-alarm 연결 가능성은 일정 부분 포착하면서도, graph 전체의 exact edge structure를 세밀하게 맞히는 데 어려움이 있음을 의미한다.
-
-즉 현재 모델은 다음 상태에 가깝다.
-
-```text
-관련 서비스 탐색       : 비교적 잘 됨
-정답 causal edge recall : 높음
-불필요 edge 제거        : 부족함
-정확한 전체 graph 복원  : 아직 부족함
-```
-
-따라서 다음 개선에서 Edge Precision이 상승하면서 Path Reachability가 유지되는지가 가장 중요한 검증 대상이다.
+특히 A5가 A4 대비 recall을 지나치게 훼손하지 않으면서 precision을 높이는지가 핵심이다.
 
 ---
 
-## 7.7 공식 OpenRCA 2.0 결과와의 관계
+# 8. 코드-연구 정합성 원칙
 
-OpenRCA 공식 사이트는 standard harness에 대해 Node-F1, Edge-F1, any-hit, all-hit, path-acc 등을 제공한다. 예를 들어 2026-08-26 확인 기준 DeepResearch + Claude Opus 5는 Node-F1 80.15%, Edge-F1 66.99%, any-hit 88.80%, all-hit 64.00%, path-acc 68.80%를 기록하고 있다 [6].
+본 연구 구현은 다음 원칙을 강제한다.
 
-그러나 현재 본 연구의 150-case 결과는 다음 이유로 공식 leaderboard와 **직접 수치 비교하지 않는다.**
-
-- 아직 500/500 inference aggregate가 끝나지 않았다.
-- 현재 완료된 150 case는 random sample이 아니다.
-- 본 연구는 fault type을 별도로 예측하지 않는 현재 구현 단계이므로 leaderboard의 전체 outcome metric과 완전히 동일한 출력 범위를 갖지 않는다.
-
-따라서 direct comparison은 500-case aggregate 완료 후 동일 metric 정의를 확인한 뒤 수행한다.
-
----
-
-# 8. 논의
-
-## 8.1 현재까지 가장 강한 실험적 결론
-
-현재까지 가장 일관된 결론은 **좋은 RCA는 후보를 많이 생성하는 문제보다 causal/non-causal relation을 얼마나 잘 구분하고 불필요한 edge를 제거하는가의 문제**라는 점이다.
-
-연구 과정은 다음과 같이 이동하였다.
-
-```text
-Tableau가 관계를 검증하면 되는가?
-        ↓
-Ontology에 관계가 없으면 검증 자체가 불가능
-        ↓
-누락 relation hypothesis를 생성해야 함
-        ↓
-Abduction으로 candidate coverage 확보
-        ↓
-DeBERTa로 semantic discrimination 강화
-        ↓
-PSL로 local evidence + path coherence 결합
-        ↓
-현재 결과: Recall은 높지만 Precision이 낮음
-        ↓
-다음 병목: Causal Edge Calibration / Pruning
-```
-
-## 8.2 PSL에 대한 현재 판단
-
-20-case masking에서 A2/A3/A4의 Relation F1이 동일하므로 현재 결과만으로 “PSL이 relation classification을 유의하게 개선한다”고 주장할 수 없다.
-
-반면 Full model은 Path Reachability와 Root@3에서 작은 개선을 보였다. 따라서 PSL의 가설은 **relation classifier가 아니라 process-level structured inference component**로 검증해야 한다.
-
-향후 500-case ablation에서는 다음 비교가 핵심이다.
-
-$$
-\Delta Path = Path(A4) - Path(A2)
-$$
-
-$$
-\Delta EdgeF1 = EdgeF1(A4) - EdgeF1(A2)
-$$
-
-그리고 PSL이 의미 있으려면 적어도 Path 또는 Edge 구조에서 반복 가능한 개선을 보여야 한다.
-
-## 8.3 DeBERTa에 대한 현재 판단
-
-과거 MAGIC 실험과 20-case relation masking 모두 semantic scorer가 candidate discrimination에 도움을 줄 가능성을 지지한다. 그러나 20-case 표본이 작고 standard A2 vs A4 500-case ablation이 아직 완료되지 않았으므로 DeBERTa의 최종 기여도 역시 확정하지 않는다.
-
-현재 DeBERTa는 novelty가 아니라 **semantic grounding module**이다.
-
-## 8.4 Root ranking의 한계
-
-현재 max root causes가 3으로 고정되어 있어 Any Hit을 높이는 대신 Exact Root Precision을 낮출 수 있다. 따라서 향후에는 다음을 검토해야 한다.
-
-- fixed Top-3 대신 confidence-based root set selection
-- root score margin에 따른 adaptive cutoff
-- incident별 expected root cardinality 추정
-
-다만 이러한 개선은 development split에서만 조정하고 최종 test set에서는 고정해야 한다.
-
-## 8.5 다음 핵심 개선: Edge Precision
-
-현재 standard interim 결과에서 가장 명확한 개선 지점은 Edge Precision 28.87%이다.
-
-다음 개선 후보는 다음과 같다.
-
-1. PSL edge threshold calibration
-2. source-target anomaly time-lag의 연속형 모델링
-3. negative evidence 강화
-4. path-minimality 또는 sparsity constraint 강화
-5. 동일 symptom에 도달하는 redundant branch pruning
-6. semantic score reliability calibration
-7. system별 threshold가 아닌 validation-set 기반 global calibration
-
-목표는 단순히 edge 수를 줄이는 것이 아니라 다음 조건을 만족하는 것이다.
-
-$$
-Precision \uparrow,\quad Recall \approx 유지,\quad PathReachability \approx 유지
-$$
+1. **Structural relation과 causal relation을 같은 `relation` 의미로 부르지 않는다.**
+2. `RcaCase.structural_relations`에 typed operational triples를 별도로 보존한다.
+3. 기존 `known_edges`는 Stage 2 service propagation candidate로 유지하여 기존 결과 재현성을 보존한다.
+4. `mask_relation_types()`는 backward compatibility를 위해 유지하지만 의미를 **Stage-2 causal semantic masking**으로 명시한다.
+5. Stage 1 extractor는 `causal_graph.json`과 injection labels를 읽지 않는다.
+6. DB/pod/node/messaging relation은 관련 telemetry attribute가 없으면 생성하지 않는다.
+7. `CALLS`의 natural direction과 failure-propagation candidate direction을 명시적으로 변환한다.
+8. A5는 observed endpoint candidate 밖의 edge를 발명할 수 없다.
 
 ---
 
-# 9. 타당성 위협 및 제한사항
+# 9. 위협 요인과 한계
 
-## 9.1 150/500 결과는 최종 결과가 아님
+## 9.1 Structural Ground Truth의 제한
 
-현재 standard 결과는 500개 중 150개만 inference가 완료된 시점의 중간값이다. 따라서 최종 논문에서 이 값을 확정 성능으로 사용하지 않는다.
+OpenRCA의 causal graph는 typed operational ontology의 완전한 정답이 아니다. 따라서 Stage 1의 `USES_DATABASE`, `RUNS_ON` 등은 데이터가 제공하는 telemetry attribute 범위에서만 검증 가능하다. 완전한 structural gold가 없는 relation은 coverage/audit 결과와 별도의 reference topology가 필요하다.
 
-## 9.2 Shard ordering bias
+## 9.2 Typed Endpoint Leakage
 
-완료된 shard 3, 4, 5는 manifest 순서에 따른 부분집합이며 random sampling이 아니다. system/fault distribution이 전체 500개와 다를 수 있다.
+`service→database` endpoint를 그대로 제공하고 relation label만 mask하면 `USES_DATABASE`가 거의 자명해질 수 있다. 따라서 단순 structural label masking을 주요 성능 실험으로 사용하지 않는다. 독립 telemetry window에서 relation을 재구성하거나 전체 typed triple holdout/reference comparison을 사용해야 한다.
 
-## 9.3 20-case masking은 development benchmark
+## 9.3 Service-level Causal Evaluation
 
-Relation masking 20-case 결과는 설계 오류 수정 후의 corrected benchmark이지만 표본이 작고 hyperparameter 개발에 사용된 development set이다. 따라서 statistical significance 또는 generalization claim을 하지 않는다.
+현재 OpenRCA causal evaluator는 주로 service-level propagation을 평가하므로 pod/node/database와 같은 heterogeneous entity의 full causal graph를 직접 평가하지 못한다. 본 연구에서는 heterogeneous structure를 보존하되 service projection과 분리한다.
 
-## 9.4 Causality와 temporal correlation의 구분
+## 9.4 Structural Recovery와 Causal Qualification의 오류 전파
 
-Temporal precedence, anomaly co-occurrence, NLI support 및 PSL consistency는 causal evidence를 강화하지만 그 자체로 intervention-based causal proof는 아니다. OpenRCA 2.0의 PAVE gold는 fault injection intervention에서 forward verification된 ground truth이므로 평가에는 적합하지만, 본 모델의 inference score 자체를 “인과관계가 증명되었다”고 표현해서는 안 된다.
+Stage 2 결과가 좋아도 Stage 1에서 중요한 dependency를 놓치면 end-to-end RCA는 실패할 수 있다. 반대로 Stage 1 coverage가 높더라도 Stage 2 precision이 낮으면 false-positive causal path가 증가한다. 따라서 C1/C2 조건을 분리한 실험이 필요하다.
 
-## 9.5 Service-level abstraction
+## 9.5 현재 결과의 범위
 
-현재 주요 metric은 service-level directed pair를 사용한다. 실제 장애는 pod, container, database, SQL, instance, network component 수준에서 시작될 수 있으므로 향후 component-level relation recovery로 확장할 필요가 있다.
-
----
-
-# 10. 재현성 및 결과 사용 원칙
-
-본 연구는 실험 과정에서 발견된 구현 오류를 결과 해석과 분리한다. 다음 원칙을 적용한다.
-
-1. gold causal graph/root label은 evaluator 이외의 inference code에 전달하지 않는다.
-2. provenance/audit metadata를 semantic proposition에 혼입하지 않는다.
-3. relation masking에서는 endpoint connectivity를 제거하지 않고 relation semantics만 숨긴다.
-4. observed connectivity 자체에는 causal positive score를 주지 않는다.
-5. class imbalance가 큰 relation task에서 Accuracy만으로 우수성을 주장하지 않는다.
-6. development에서 선택한 threshold/weight를 test result를 보고 재조정하지 않는다.
-7. 중간 shard 결과와 최종 500-case aggregate를 명확히 구분한다.
-8. 공식 OpenRCA leaderboard와 비교할 때 동일 입력 조건과 metric scope가 확인된 결과만 direct comparison으로 표기한다.
+현재 20-case와 150-case 수치는 주로 Stage 2를 검증한다. 이 결과만으로 structural ontology recovery 성능이 입증되었다고 주장하지 않는다.
 
 ---
 
-# 11. 결론
+# 10. 결론
 
-본 연구는 불완전한 운영 지식 그래프에서 사전에 정의되지 않은 incident-specific causal relation을 telemetry evidence로 복원하고, 이를 root-cause propagation path로 연결하는 RCA 방법을 연구한다. 초기의 Rashomon Worlds + Tableau 접근에서 출발했으나, 실제 ontology의 relation incompleteness와 noisy evidence 문제를 확인한 뒤 현재는 Abductive Hypothesis Generation + DeBERTa Contrastive NLI + Probabilistic Soft Logic의 구조로 재정의하였다.
+본 연구가 해결하려는 현실적 문제는 단순 “missing causal edge prediction”이 아니다. 실제 운영 환경에서는 먼저 불완전한 CMDB/ontology를 telemetry로 보완하여 **현실적인 typed structural relation**을 구성해야 하고, 이후 그 관계들이 특정 incident의 장애 전파에 실제로 참여했는지를 별도로 판정해야 한다.
 
-현재까지의 controlled relation-masking 결과는 Abduction이 positive causal relation recall을 확보하고, semantic evidence가 relation discrimination을 개선할 수 있음을 보여준다. Full model의 작은 20-case 실험에서는 relation F1 자체보다 process-level Path Reachability에서 추가 개선이 관찰되었다.
-
-OpenRCA 2.0 standard에서는 500/500 데이터 정규화 및 leakage-safe evaluation pipeline 검증을 완료하였다. 현재 완료된 150 case에서 Any Service Hit 60.00%, Process Path Reachability 57.33%, Node-F1 52.94%, Edge-F1 38.11%를 기록하였다. 가장 중요한 진단은 Edge Recall 80.26% 대비 Edge Precision 28.87%라는 비대칭이다. 이는 현재 모델이 causal propagation 후보를 충분히 찾고 있으나 non-causal edge를 과도하게 유지하고 있음을 의미한다.
-
-따라서 다음 연구 단계의 핵심 질문은 더 이상 “누락 관계 후보를 더 많이 만들 수 있는가”가 아니다. 다음을 검증해야 한다.
+따라서 최종 방법론은 다음과 같이 정리된다.
 
 $$
-Can\ we\ remove\ false\ causal\ edges\ without\ losing\ the\ true\ propagation\ path?
+\boxed{
+Telemetry
+\rightarrow Structural\ Relation\ Recovery
+\rightarrow Incident\ Causal\ Qualification
+\rightarrow Causal\ Process\ Reconstruction
+\rightarrow RCA
+}
 $$
 
-즉 **정답 causal path의 recall을 유지하면서 graph precision을 높이는 evidence-grounded causal pruning**이 현재 연구의 가장 직접적인 후속 과제이다.
+현재 relation masking 실험은 이 중 두 번째 추론 단계인 incident causal qualification을 통제된 조건에서 검증한다. 새 structural layer는 첫 번째 단계를 코드와 논문에 명시적으로 추가하며, 향후 end-to-end 평가는 recovered structural graph를 실제 causal reasoning 입력으로 사용하여 두 단계의 결합 효과를 측정한다.
+
+이 구조는 연구 결과를 현실 운영 문제와 직접 연결한다. 즉 “관계가 완전하지 않은 환경에서 구조를 관측으로 복원하고, 그 위에서 실제 장애 전파 관계만 선별하여 root cause와 설명 가능한 propagation path를 제공한다”는 것이 본 연구의 최종 주장이다.
 
 ---
 
 # 참고문헌
 
-[1] A. Fang, Y. Yang, J. Shang, Q. Lu, J. Xu, R. Wang, S. Zhang, Y. Zhang, B. Yu, and P. He, “OpenRCA 2.0: From Outcome Labels to Causal Process Supervision,” arXiv:2606.27154, 2026. https://arxiv.org/abs/2606.27154
-
-[2] J. R. Hobbs, M. E. Stickel, D. E. Appelt, and P. Martin, “Interpretation as Abduction,” *Artificial Intelligence*, vol. 63, no. 1–2, pp. 69–142, 1993. https://doi.org/10.1016/0004-3702(93)90015-4
-
-[3] J. Bai, Y. Wang, T. Zheng, Y. Guo, X. Liu, and Y. Song, “Advancing Abductive Reasoning in Knowledge Graphs through Complex Logical Hypothesis Generation,” *Proceedings of ACL 2024*, pp. 1312–1329, 2024. https://aclanthology.org/2024.acl-long.72/
-
-[4] P. He, X. Liu, J. Gao, and W. Chen, “DeBERTa: Decoding-Enhanced BERT with Disentangled Attention,” *International Conference on Learning Representations (ICLR)*, 2021. https://openreview.net/forum?id=XPZIaotutsD
-
-[5] S. H. Bach, M. Broecheler, B. Huang, and L. Getoor, “Hinge-Loss Markov Random Fields and Probabilistic Soft Logic,” *Journal of Machine Learning Research*, vol. 18, no. 109, pp. 1–67, 2017. https://jmlr.org/papers/v18/15-631.html
-
-[6] OpenRCA Official Leaderboard, “OpenRCA 2.0,” accessed 2026-08-26. https://microsoft.github.io/OpenRCA/
-
----
-
-# Appendix A. 현재 결과의 상태 구분
-
-| Result | Status | 논문 사용 방식 |
-|---|---|---|
-| MAGIC path coverage vs Tableau detection | 선행 구조 실험 | 연구 동기 설명 |
-| DAFNA-EA candidate coverage 93% vs exact selection 62% | 선행 실험 | 후보 생성/선택 분리 근거 |
-| MAGIC weak lexical vs DeBERTa | 검증된 structured 선행 비교 | semantic scorer 선택 근거 |
-| 수정 전 natural-language MAGIC | **폐기** | 최종 성능 근거 사용 금지 |
-| Relation Masking 20-case corrected | Development result | ablation 방향성 근거 |
-| OpenRCA2 Standard normalized 500/500 | 검증 완료 | protocol/reproducibility 근거 |
-| OpenRCA2 A4 150/500 | **Interim** | 중간 진단만 사용 |
-| OpenRCA2 A4 500/500 aggregate | Pending | 완료 후 최종 주요 결과로 교체 |
-
-# Appendix B. GitHub Markdown 수식 표기 원칙
-
-본 문서의 수식은 GitHub Markdown math renderer에서 깨지는 문제를 줄이기 위해 다음 원칙으로 작성하였다.
-
-- display equation은 `$$ ... $$`만 사용한다.
-- 수식 내부에 한글 문장을 넣지 않는다.
-- 복잡한 `\boxed`, nested `\text{}`, 과도한 `aligned` 환경을 사용하지 않는다.
-- piecewise 정의는 복잡한 LaTeX `cases` 대신 표와 단순 수식으로 분리한다.
-- `\neq`, `\Rightarrow`, `\leadsto`, `\arg\min` 등 GitHub가 안정적으로 지원하는 기본 명령만 사용한다.
+[1] *OpenRCA 2.0: From Outcome Labels to Causal Process Supervision*, 2026.  
+[2] J. R. Hobbs et al., *Interpretation as Abduction*, 1993.  
+[3] Abductive reasoning / logical hypothesis generation over knowledge graphs 관련 연구.  
+[4] P. He et al., *DeBERTa: Decoding-enhanced BERT with Disentangled Attention*, ICLR, 2021.  
+[5] S. Bach et al., *Hinge-Loss Markov Random Fields and Probabilistic Soft Logic*, JMLR, 2017.  
+[6] `anon-ops/ops-lite`, 500-case microservice RCA benchmark artifact, 2026.

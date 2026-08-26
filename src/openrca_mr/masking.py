@@ -11,6 +11,7 @@ from .models import (
     REL_MASKED,
     REL_NON_CAUSAL,
 )
+from .structural import mask_structural_relation_types
 
 
 def _case_seed(case_id: str, seed: int) -> int:
@@ -22,17 +23,20 @@ def _pair(edge: CausalEdge) -> tuple[str, str]:
     return normalize_service(edge.source), normalize_service(edge.target)
 
 
-def mask_relation_types(case: RcaCase, ratio: float, seed: int = 42) -> tuple[RcaCase, list[CausalEdge]]:
-    """Mask relation semantics while preserving every observed endpoint pair.
+def mask_relation_types(
+    case: RcaCase,
+    ratio: float,
+    seed: int = 42,
+) -> tuple[RcaCase, list[CausalEdge]]:
+    """Mask Stage-2 incident causal semantics on observed service pairs.
 
-    This is the main controlled incomplete-ontology track. The full relation
-    label for an observed dependency is defined from PAVE causal supervision:
-    an observed pair that occurs in the gold propagation graph is causal;
-    otherwise it is a non-causal dependency. A fraction of those labels is
-    hidden from the model, while source/target connectivity remains visible.
+    This function intentionally does *not* mask operational relation types such
+    as CALLS, DEPLOYED_ON, or USES_DATABASE. The endpoint pair stays visible and
+    only the incident-specific label ``causal_propagates_to`` versus
+    ``non_causal_dependency`` is hidden.
 
-    Gold-derived labels are used only to construct this controlled masking
-    benchmark. The model sees only unmasked labels and ``REL_MASKED`` atoms.
+    The historical function name is retained because existing 20/500-case
+    experiment artifacts and workflows call it directly.
     """
     if not 0.0 <= ratio <= 1.0:
         raise ValueError("ratio must be in [0, 1]")
@@ -66,6 +70,7 @@ def mask_relation_types(case: RcaCase, ratio: float, seed: int = 42) -> tuple[Rc
             symptom_nodes=list(case.symptom_nodes),
             known_edges=visible_edges,
             evidence=list(case.evidence),
+            structural_relations=list(case.structural_relations),
             gold_root_causes=list(case.gold_root_causes),
             gold_edges=list(case.gold_edges),
             gold_paths=[list(path) for path in case.gold_paths],
@@ -73,6 +78,7 @@ def mask_relation_types(case: RcaCase, ratio: float, seed: int = 42) -> tuple[Rc
             metadata={
                 **case.metadata,
                 "mask_mode": "relation",
+                "relation_layer": "incident_causal",
                 "mask_ratio": ratio,
                 "mask_seed": seed,
             },
@@ -81,8 +87,16 @@ def mask_relation_types(case: RcaCase, ratio: float, seed: int = 42) -> tuple[Rc
     )
 
 
-def mask_relations(case: RcaCase, ratio: float, seed: int = 42) -> tuple[RcaCase, list[CausalEdge]]:
-    """Legacy edge-removal stress test; not the main relation-masking track."""
+# Explicit alias used by new code/documentation; old callers remain compatible.
+mask_causal_relation_types = mask_relation_types
+
+
+def mask_relations(
+    case: RcaCase,
+    ratio: float,
+    seed: int = 42,
+) -> tuple[RcaCase, list[CausalEdge]]:
+    """Legacy Stage-2 edge-removal stress test; not the main masking protocol."""
     if not 0.0 <= ratio <= 1.0:
         raise ValueError("ratio must be in [0, 1]")
     rng = random.Random(_case_seed(case.case_id, seed))
@@ -97,11 +111,18 @@ def mask_relations(case: RcaCase, ratio: float, seed: int = 42) -> tuple[RcaCase
             symptom_nodes=list(case.symptom_nodes),
             known_edges=kept,
             evidence=list(case.evidence),
+            structural_relations=list(case.structural_relations),
             gold_root_causes=list(case.gold_root_causes),
             gold_edges=list(case.gold_edges),
             gold_paths=[list(path) for path in case.gold_paths],
             gold_alarm_nodes=list(case.gold_alarm_nodes),
-            metadata={**case.metadata, "mask_mode": "edge", "mask_ratio": ratio, "mask_seed": seed},
+            metadata={
+                **case.metadata,
+                "mask_mode": "edge",
+                "relation_layer": "incident_causal",
+                "mask_ratio": ratio,
+                "mask_seed": seed,
+            },
         ),
         masked,
     )

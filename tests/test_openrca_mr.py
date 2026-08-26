@@ -1,5 +1,11 @@
+import pandas as pd
+
 from openrca_mr.abduction import AbductiveRelationGenerator
-from openrca_mr.masking import mask_relation_types, mask_relations
+from openrca_mr.masking import (
+    mask_relation_types,
+    mask_relations,
+    mask_structural_relation_types,
+)
 from openrca_mr.metrics import (
     normalize_service,
     process_path_reachability,
@@ -11,11 +17,22 @@ from openrca_mr.models import (
     Evidence,
     Hypothesis,
     RcaCase,
+    REL_CALLS,
     REL_CAUSAL,
+    REL_DEPLOYED_ON,
     REL_MASKED,
     REL_NON_CAUSAL,
+    REL_RUNS_ON,
+    REL_STRUCTURAL_MASKED,
+    REL_USES_DATABASE,
 )
+from openrca_mr.openrca2 import dump_normalized_cases, load_normalized_cases
 from openrca_mr.pipeline import MissingRelationRCA
+from openrca_mr.structural import (
+    extract_structural_relations,
+    propagation_service_edges,
+    structural_relation_metrics,
+)
 
 
 def make_case(case_id="c1"):
@@ -34,6 +51,12 @@ def make_case(case_id="c1"):
             Evidence("e3", "ts-api", "metric", "latency", 0.98, 3.0, "api latency high"),
             Evidence("e4", "ts-other", "metric", "cpu", 0.10, 2.0, "cpu normal"),
             Evidence("e5", "ts-cache", "metric", "cpu", 0.05, 1.0, "cache stable"),
+        ],
+        structural_relations=[
+            CausalEdge("service:ts-api", REL_CALLS, "service:ts-worker"),
+            CausalEdge("service:ts-worker", REL_CALLS, "service:ts-db"),
+            CausalEdge("service:ts-api", REL_DEPLOYED_ON, "pod:api-1"),
+            CausalEdge("pod:api-1", REL_RUNS_ON, "node:node-1"),
         ],
         gold_root_causes=["ts-db"],
         gold_edges=[
@@ -57,16 +80,18 @@ def test_process_pr_requires_correct_predicted_root():
     assert process_path_reachability(edges, ["ts-cache"], ["db"], ["ts-api"]) == 0.0
 
 
-def test_relation_masking_preserves_endpoints_and_hides_only_labels():
+def test_relation_masking_preserves_endpoints_and_hides_only_causal_labels():
     case = make_case("relation-mask")
     visible, truth = mask_relation_types(case, 0.5, seed=42)
     assert len(visible.known_edges) == len(case.known_edges)
+    assert visible.structural_relations == case.structural_relations
     original_pairs = {(e.source, e.target) for e in case.known_edges}
     visible_pairs = {(e.source, e.target) for e in visible.known_edges}
     assert original_pairs == visible_pairs
     assert len(truth) == 2
     assert sum(e.relation == REL_MASKED for e in visible.known_edges) == 2
     assert {e.relation for e in truth} <= {REL_CAUSAL, REL_NON_CAUSAL}
+    assert visible.metadata["relation_layer"] == "incident_causal"
 
 
 def test_relation_masking_is_reproducible_and_case_salted():
@@ -77,10 +102,93 @@ def test_relation_masking_is_reproducible_and_case_salted():
     assert [e.key() for e in a] != [e.key() for e in b]
 
 
+def test_structural_relation_masking_preserves_pairs_and_is_nested():
+    case = make_case("structural-mask")
+    visible20, truth20 = mask_structural_relation_types(case, 0.25, seed=7)
+    visible50, truth50 = mask_structural_relation_types(case, 0.50, seed=7)
+    assert {(e.source, e.target) for e in visible20.structural_relations} == {
+        (e.source, e.target) for e in case.structural_relations
+    }
+    assert sum(e.relation == REL_STRUCTURAL_MASKED for e in visible20.structural_relations) == 1
+    assert {e.key() for e in truth20} <= {e.key() for e in truth50}
+    assert visible20.known_edges == case.known_edges
+
+
+def test_structural_relation_metrics_are_typed_triple_exact():
+    truth = [
+        CausalEdge("service:a", REL_CALLS, "service:b"),
+        CausalEdge("service:a", REL_DEPLOYED_ON, "pod:p1"),
+    ]
+    pred = [
+        CausalEdge("service:a", REL_CALLS, "service:b"),
+        CausalEdge("service:a", REL_CALLS, "pod:p1"),
+    ]
+    score = structural_relation_metrics(pred, truth)
+    assert score.precision == 0.5
+    assert score.recall == 0.5
+    assert score.f1 == 0.5
+
+
+def test_structural_extraction_keeps_natural_direction_and_propagation_reverses_calls():
+    traces = pd.DataFrame(
+        [
+            {
+                "trace_id": "t1",
+                "span_id": "p",
+                "parent_span_id": "",
+                "service_name": "frontend",
+                "attr.k8s.pod.name": "front-1",
+                "attr.k8s.node.name": "node-a",
+                "attr.db.system": None,
+                "attr.server.address": None,
+            },
+            {
+                "trace_id": "t1",
+                "span_id": "c",
+                "parent_span_id": "p",
+                "service_name": "orders",
+                "attr.k8s.pod.name": "orders-1",
+                "attr.k8s.node.name": "node-b",
+                "attr.db.system": "postgresql",
+                "attr.server.address": "orders-db",
+            },
+        ]
+    )
+    relations = extract_structural_relations(traces)
+    assert CausalEdge("service:frontend", REL_CALLS, "service:orders") in relations
+    assert CausalEdge("service:orders", REL_USES_DATABASE, "database:postgresql:orders-db") in relations
+    assert CausalEdge("service:frontend", REL_DEPLOYED_ON, "pod:front-1") in relations
+    assert CausalEdge("pod:orders-1", REL_RUNS_ON, "node:node-b") in relations
+
+    propagation = propagation_service_edges(relations)
+    assert CausalEdge("orders", "dependency_propagates_to", "frontend") in propagation
+    assert all(edge.source != "frontend" or edge.target != "orders" for edge in propagation)
+
+
+def test_normalized_round_trip_preserves_structural_relations(tmp_path):
+    path = tmp_path / "case.jsonl"
+    original = make_case("round-trip")
+    dump_normalized_cases([original], path)
+    loaded = load_normalized_cases(path)[0]
+    assert loaded.structural_relations == original.structural_relations
+    assert loaded.known_edges == original.known_edges
+
+
+def test_legacy_artifact_without_structural_relations_still_loads(tmp_path):
+    path = tmp_path / "legacy.jsonl"
+    path.write_text(
+        '{"case_id":"legacy","symptom_nodes":[],"known_edges":[],"evidence":[]}',
+        encoding="utf-8",
+    )
+    loaded = load_normalized_cases(path)[0]
+    assert loaded.structural_relations == []
+
+
 def test_legacy_edge_masking_still_available_for_stress_test():
     case = make_case()
     visible, masked = mask_relations(case, 0.5, seed=13)
     assert len(visible.known_edges) + len(masked) == len(case.known_edges)
+    assert visible.structural_relations == case.structural_relations
 
 
 def test_abduction_generates_only_observed_unknown_pairs():
@@ -179,6 +287,8 @@ def test_smoke_pipeline_relation_mask():
     visible, truth = mask_relation_types(make_case(), 0.5, seed=13)
     prediction = MissingRelationRCA().run(visible)
     assert prediction.case_id == visible.case_id
-    assert len(prediction.ranked_hypotheses) <= sum(e.relation == REL_MASKED for e in visible.known_edges)
+    assert len(prediction.ranked_hypotheses) <= sum(
+        e.relation == REL_MASKED for e in visible.known_edges
+    )
     score = relation_classification_metrics(prediction.predicted_edges, truth)
     assert 0.0 <= score.accuracy <= 1.0
