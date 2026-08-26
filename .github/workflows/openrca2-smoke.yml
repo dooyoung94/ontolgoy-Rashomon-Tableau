@@ -1,4 +1,4 @@
-name: Topology Relation Recovery
+name: Topology Relation Recovery and RCA
 
 on:
   push:
@@ -63,7 +63,7 @@ jobs:
           PY
 
   prepare_topology_cases:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[topology-rca-20]')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -79,9 +79,10 @@ jobs:
       - name: Build complete topology reference and collector observations
         env:
           HF_HUB_DISABLE_XET: '1'
+          LIMIT: ${{ github.event.inputs.limit || '20' }}
         run: |
           python scripts/build_ops_lite_cases_fast.py \
-            --limit '${{ inputs.limit }}' \
+            --limit "$LIMIT" \
             --out artifacts/topology_cases.jsonl
           python - <<'PY'
           from openrca_mr.openrca2 import load_normalized_cases
@@ -89,6 +90,7 @@ jobs:
           assert cases
           assert all(c.structural_relations for c in cases)
           assert all(c.relation_observations for c in cases)
+          assert all(c.gold_root_causes and c.gold_edges for c in cases)
           print('CASES', len(cases))
           print('MEAN_TOPOLOGY_RELATIONS', sum(len(c.structural_relations) for c in cases) / len(cases))
           print('MEAN_COLLECTOR_OBSERVATIONS', sum(len(c.relation_observations) for c in cases) / len(cases))
@@ -138,6 +140,7 @@ jobs:
           TOKENIZERS_PARALLELISM: 'false'
           VARIANT: ${{ matrix.variant }}
           RATIO: ${{ matrix.missing_ratio }}
+          LIMIT: ${{ github.event.inputs.limit || '20' }}
         run: |
           SAFE_RATIO=$(echo '${{ matrix.missing_ratio }}' | tr '.' '_')
           OUT="results/${{ matrix.variant }}_${SAFE_RATIO}.json"
@@ -148,55 +151,120 @@ jobs:
             --topology-missing-ratio '${{ matrix.missing_ratio }}' \
             --seed 42 \
             --relation-threshold 0.5 \
-            --limit '${{ inputs.limit }}'
-          python - <<'PY'
-          import glob, json, os
-          ratio = os.environ['RATIO'].replace('.', '_')
-          path = f"results/{os.environ['VARIANT']}_{ratio}.json"
-          r = json.load(open(path))
-          print('RESULT', r['variant'], r['topology_missing_ratio'], json.dumps(r['summary'], sort_keys=True))
-          print('PER_RELATION', json.dumps(r['per_relation_type'], sort_keys=True))
-          PY
+            --limit "$LIMIT"
       - uses: actions/upload-artifact@v4
         with:
           name: topology-result-${{ matrix.variant }}-${{ matrix.missing_ratio }}
           path: results/*.json
           retention-days: 14
 
-  aggregate:
-    if: always() && github.event_name == 'workflow_dispatch'
-    needs: topology_recovery
+  topology_rca:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[topology-rca-20]')
+    needs: prepare_topology_cases
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        missing_ratio: [0.2, 0.4, 0.6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: topology-cases
+          path: artifacts
+      - name: Install topology and RCA stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e '.[all]'
+      - name: Run topology recovery plus OpenRCA RCA
+        env:
+          HF_HUB_DISABLE_XET: '1'
+          TOKENIZERS_PARALLELISM: 'false'
+          RATIO: ${{ matrix.missing_ratio }}
+          LIMIT: ${{ github.event.inputs.limit || '20' }}
+        run: |
+          SAFE_RATIO=$(echo "$RATIO" | tr '.' '_')
+          OUT="results/topology_rca_${SAFE_RATIO}.json"
+          python scripts/run_topology_rca_evaluation.py \
+            --data artifacts/topology_cases.jsonl \
+            --out "$OUT" \
+            --topology-variant abduction_deberta_psl \
+            --rca-variant full \
+            --topology-missing-ratio "$RATIO" \
+            --seed 42 \
+            --relation-threshold 0.5 \
+            --rca-edge-threshold 0.5 \
+            --limit "$LIMIT"
+          python - <<'PY'
+          import glob, json
+          path = glob.glob('results/topology_rca_*.json')[0]
+          r = json.load(open(path))
+          print('TOPOLOGY', json.dumps(r['topology_summary'], sort_keys=True))
+          print('RCA_INCOMPLETE', json.dumps(r['rca_summary']['incomplete'], sort_keys=True))
+          print('RCA_RECOVERED', json.dumps(r['rca_summary']['recovered'], sort_keys=True))
+          print('RCA_COMPLETE', json.dumps(r['rca_summary']['complete'], sort_keys=True))
+          print('RCA_DELTA', json.dumps(r['rca_summary']['delta_recovered_vs_incomplete'], sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: topology-rca-${{ matrix.missing_ratio }}
+          path: results/topology_rca_*.json
+          retention-days: 14
+
+  aggregate_rca:
+    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[topology-rca-20]'))
+    needs: topology_rca
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: topology-result-*
+          pattern: topology-rca-*
           path: results
           merge-multiple: true
-      - name: Build final table
+      - name: Build OpenRCA comparison table
         run: |
           python - <<'PY'
           import glob, json
           rows=[]
-          for path in sorted(glob.glob('results/*.json')):
+          for path in sorted(glob.glob('results/topology_rca_*.json')):
               r=json.load(open(path))
-              s=r['summary']
+              t=r['topology_summary']
+              q=r['rca_summary']
               rows.append({
                   'missing_ratio': r['topology_missing_ratio'],
-                  'variant': r['variant'],
-                  'missing_precision': s['micro_missing_relation_precision'],
-                  'missing_recall': s['micro_missing_relation_recall'],
-                  'missing_f1': s['micro_missing_relation_f1'],
-                  'full_topology_f1': s['micro_full_topology_f1'],
-                  'mean_missing_relations': s['mean_missing_relations'],
-                  'mean_added_relations': s['mean_added_relations'],
+                  'topology_missing_f1': t['macro_missing_relation_f1'],
+                  'incomplete_root_f1': q['incomplete']['root_f1'],
+                  'recovered_root_f1': q['recovered']['root_f1'],
+                  'complete_root_f1': q['complete']['root_f1'],
+                  'incomplete_path': q['incomplete']['path_reachability'],
+                  'recovered_path': q['recovered']['path_reachability'],
+                  'complete_path': q['complete']['path_reachability'],
+                  'incomplete_node_f1': q['incomplete']['node_f1'],
+                  'recovered_node_f1': q['recovered']['node_f1'],
+                  'complete_node_f1': q['complete']['node_f1'],
+                  'incomplete_edge_f1': q['incomplete']['edge_f1'],
+                  'recovered_edge_f1': q['recovered']['edge_f1'],
+                  'complete_edge_f1': q['complete']['edge_f1'],
+                  'delta_root_f1': q['delta_recovered_vs_incomplete']['root_f1'],
+                  'delta_path': q['delta_recovered_vs_incomplete']['path_reachability'],
+                  'delta_node_f1': q['delta_recovered_vs_incomplete']['node_f1'],
+                  'delta_edge_f1': q['delta_recovered_vs_incomplete']['edge_f1'],
               })
-          rows.sort(key=lambda x: (x['missing_ratio'], x['variant']))
+          rows.sort(key=lambda x: x['missing_ratio'])
           print(json.dumps(rows, indent=2))
-          json.dump(rows, open('topology_results.json','w'), indent=2)
+          json.dump(rows, open('openrca_topology_rca_summary.json','w'), indent=2)
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: topology-recovery-summary
-          path: topology_results.json
+          name: openrca-topology-rca-summary
+          path: openrca_topology_rca_summary.json
           retention-days: 14
