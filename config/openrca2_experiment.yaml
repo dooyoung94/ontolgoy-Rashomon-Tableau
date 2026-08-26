@@ -1,6 +1,41 @@
 experiment:
   dataset_family: OpenRCA2
-  controlled_relation_mask:
+
+  structural_recovery:
+    problem: recover_structural_triples_from_incomplete_operational_observations
+    dataset: anon-ops/ops-lite
+    manifest_rows: 500
+    model_visible_inputs:
+      - normal_traces
+      - normal_metrics
+      - normal_logs
+    observation_layer:
+      - trace_parent_child
+      - service_pod_cooccurrence
+      - pod_node_cooccurrence
+      - db_client_context
+      - messaging_context
+    relation_vocabulary:
+      - calls
+      - deployed_on
+      - runs_on
+      - uses_database
+      - uses_messaging
+      - has_service
+    candidate_policy: telemetry_grounded_endpoint_pairs_plus_ontology_type_constraints
+    prohibit_cartesian_all_pairs: true
+    gold_causal_graph_usage: none
+    normalization_baseline: observation_then_abduction
+    main_evaluation:
+      protocol: independent_reference_or_controlled_evidence_missingness
+      simple_relation_label_masking_is_main_metric: false
+      metrics:
+        - structural_precision
+        - structural_recall
+        - structural_f1
+        - relation_type_coverage
+
+  controlled_causal_relation_mask:
     dataset: anon-ops/ops-lite
     manifest_rows: 500
     adapter_case_policy: attributed_and_telemetry_valid
@@ -8,33 +43,63 @@ experiment:
     seeds: [42]
     relation_positive: causal_propagates_to
     relation_negative: non_causal_dependency
-    structural_edge_visibility: preserved
+    structural_relation_visibility: preserved
     gold_graph_usage: mask_construction_and_evaluation_only
+
   standard_protocol:
     topology_input: false
-    dependency_source: traces_only
+    dependency_source: recovered_model_visible_telemetry
     gold_graph_usage: evaluation_only
 
-ablation:
+stage1_ablation:
+  - observation_abduction
+  - observation_abduction_deberta
+  - observation_abduction_psl
+  - observation_abduction_deberta_psl
+
+stage2_ablation:
   - graph_only
   - abduction
   - abduction_deberta
   - abduction_psl
   - full
 
-abduction:
+stage1_abduction:
+  candidate_policy: observed_endpoint_pairs_only
+  ontology_type_constraints: true
+  generic_cooccurrence_prior: 0.35
+  relation_threshold: 0.5
+  all_pairs_generation: false
+
+stage1_semantic:
+  model: MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli
+  task: structural_relation_support_vs_non_support
+  max_length: 512
+  batch_size: 16
+  combination: neutral_preserving_contrastive_margin
+
+stage1_psl:
+  implementation: pslpython
+  role: global_candidate_selection
+  constraints:
+    - ontology_type_compatibility_is_enforced_before_psl
+    - competing_relation_candidates_on_same_endpoint_pair
+    - unsupported_relation_sparsity_prior
+  no_endpoint_invention: true
+
+stage2_abduction:
   max_candidates: null
   candidate_policy: all_observed_masked_pairs
   edge_threshold: 0.5
   threshold_tuning_on_full_set: false
 
-semantic:
+stage2_semantic:
   model: MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli
   max_length: 512
   batch_size: 16
   combination: neutral_preserving_contrastive_margin
 
-psl:
+stage2_psl:
   implementation: pslpython
   note: structural connectivity is eligibility only, not causal evidence
   evidence:
@@ -43,6 +108,15 @@ psl:
     - visible_causal_noncausal_facts
     - semantic_and_contradiction_when_full
     - downstream_reachability
+
+llm:
+  role: downstream_rca_and_optional_stage2_adjudication
+  restriction: must_not_invent_unobserved_endpoint_pairs_in_constrained_adjudication
+  rca_outputs:
+    - root_cause
+    - causal_path
+    - impact
+    - action
 
 llm_baselines:
   runtime: huggingface_transformers_cpu_float32
@@ -60,8 +134,12 @@ llm_baselines:
 
 metrics:
   service_normalization: lower_strip_ts_prefix_remove_separators
-  filter_loadgen_edges: true
-  controlled_primary:
+  structural_primary:
+    - structural_precision
+    - structural_recall
+    - structural_f1
+    - relation_type_coverage
+  controlled_causal_primary:
     - relation_precision
     - relation_recall
     - relation_f1
@@ -71,16 +149,18 @@ metrics:
     - process_path_reachability
     - root_hit_at_1
     - root_hit_at_3
+  downstream_effect:
+    - delta_edge_f1_recovered_vs_incomplete
+    - delta_path_reachability_recovered_vs_incomplete
+    - delta_root_outcome_recovered_vs_incomplete
   score_diagnostics:
-    - a2_a3_pairwise_decision_disagreement
-    - a2_a3_final_score_mae
-    - a2_a3_final_score_pearson
-    - threshold_crossing_counts
     - semantic_margin
     - psl_score_shift
+    - predicted_positive_rate
 
 leakage_policy:
   causal_graph_json: evaluator_only
   injection_json: evaluator_only
   gold_alarm_nodes: evaluator_only
+  stage1_must_not_read_gold: true
   no_full_set_threshold_tuning: true
