@@ -148,6 +148,91 @@ $$
 
 > Rashomon의 가치가 반드시 최종 class accuracy에 있는 것은 아니며, **후속 설명과 검증에 필요한 대안을 보존하는 데 있을 수 있다.**
 
+## 4.4 외부 Case Study: CONAN의 관점별 관계 그래프
+
+초기 `Perspective Tableau` 문제 설정과 직접 연결되는 외부 사례로 Zhao et al.의 **CONAN** benchmark를 볼 수 있다.
+
+- 논문: *Large Language Models Fall Short: Understanding Complex Relationships in Detective Narratives*
+- 발표: Findings of ACL 2024
+- 원문: https://aclanthology.org/2024.findings-acl.454/
+- 코드/데이터: https://github.com/BLPXSPG/Conan
+
+CONAN은 탐정 서사에서 복잡한 인물 관계 그래프를 추출·분석하기 위한 benchmark이다. 단순한 `(인물 A, 관계, 인물 B)` 집합만 다루는 것이 아니라 다음 특성을 명시적으로 포함한다.
+
+1. **계층적 관계 유형(hierarchical relationship categories)**
+2. **인물별 관점(role-oriented / character-oriented perspective)**
+3. **대부분의 인물이 알고 있는 public relationship**
+4. **일부 인물만 알고 있는 secret relationship**
+5. **장문 narrative에서 간접적으로 형성되는 복잡한 관계 추론**
+
+즉 동일한 두 인물 사이의 관계라도 관찰자와 지식 범위에 따라 표현 가능한 사실 집합이 달라질 수 있다.
+
+이를 본 연구의 표현으로 단순화하면 관계 edge를 다음처럼 둘 수 있다.
+
+$$
+e=(u,r,v,\pi,k)
+$$
+
+여기서:
+
+- $u,v$: 관계의 두 entity
+- $r$: relation type
+- $\pi$: 해당 관계를 바라보는 character/source perspective
+- $k$: knowledge scope (`public` 또는 `secret` 등)
+
+따라서 관점을 제거하고 모든 관계를 하나의 전역 graph로 평탄화하면:
+
+$$
+G=\bigcup_{\pi}G_{\pi}
+$$
+
+와 같이 서로 다른 knowledge state가 병합될 수 있다. 이 경우 실제 contradiction과 단순한 **관점 차이 / 정보 비대칭**을 구분하기 어려워진다.
+
+본 연구의 초기 `Perspective Tableau`가 사실을 source/perspective 단위로 분리했던 이유도 이 문제와 같다.
+
+```text
+CONAN
+character perspective
++ public / secret relation
+        ↓
+관계의 참/거짓만으로는 충분하지 않음
+        ↓
+누가 알고 있는가 / 어느 관점에서 유효한가가 필요
+        ↓
+Perspective-aware graph / provenance-aware reasoning 필요
+```
+
+CONAN 자체가 본 연구의 Possible Worlds나 BADP를 검증한 것은 아니다. 따라서 **CONAN의 논문 성능을 본 연구의 검증 결과 표에 섞지 않는다.** 여기서 중요한 것은 외부 benchmark가 다음 문제 설정을 독립적으로 보여준다는 점이다.
+
+> **복잡한 관계 추론에서는 하나의 전역 관계 그래프로 조기 병합하는 것보다, perspective와 knowledge scope를 보존한 상태에서 관계를 해석할 필요가 있다.**
+
+또한 CONAN은 이후 pruning 연구와도 연결될 수 있다. secret relation이나 특정 인물 관점의 evidence는 public relation보다 관찰 빈도가 낮거나 narrative 후반에 나타날 수 있기 때문에, 검색 초기에 global score만으로 후보를 제거하면 중요한 관계 경로가 먼저 소실될 가능성이 있다.
+
+따라서 향후 CONAN을 본 연구 framework의 외부 case study로 직접 평가한다면 다음 지표가 적절하다.
+
+| 평가 항목 | 의미 |
+|---|---|
+| Relation coverage | gold character relation이 candidate graph에 포함되는가 |
+| Perspective consistency | 관계가 올바른 인물 관점에 귀속되는가 |
+| Secret-relation survival | 비공개 관계 evidence가 pruning 후에도 남는가 |
+| Perspective-aware precision/F1 | 다른 관점의 관계를 잘못 병합하지 않는가 |
+| Pruning Regret | 정답 관계 경로가 후보에 있었지만 검색 중 제거되는가 |
+| Search cost | perspective 분리/후보 보존으로 증가하는 탐색 비용 |
+
+여기서 핵심은 특정 `Rashomon Worlds` 명칭을 유지하는 것이 아니다. 필요한 연구 요소는 더 일반적으로:
+
+$$
+\boxed{
+\text{Perspective Preservation}
++\text{Candidate Relation Reasoning}
++\text{Delayed Irreversible Pruning}
+}
+$$
+
+으로 볼 수 있다.
+
+즉 CONAN은 본 연구 초기에 사용한 관점 분리 아이디어와 현재의 pruning-regret 문제를 연결해 주는 **관계 중심 외부 사례**로 활용할 수 있다.
+
 ---
 
 # 5. 첫 번째 실제 한계: 온톨로지는 완전하지 않다
