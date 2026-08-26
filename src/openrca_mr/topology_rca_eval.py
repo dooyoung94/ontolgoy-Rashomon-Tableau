@@ -18,9 +18,13 @@ from .models import RcaCase
 from .openrca2 import load_normalized_cases
 from .pipeline import IncidentCausalRCA
 from .psl import PslGlobalInference, PslStructuralInference
+from .reference_topology import (
+    load_evaluation_reference,
+    score_reference_relations,
+)
 from .research_protocol import audit_reference_protocol, topology_group_id
 from .semantic import DebertaEvidenceScorer, DebertaStructuralRelationScorer
-from .structural import propagation_service_edges, structural_relation_metrics
+from .structural import propagation_service_edges
 from .topology_recovery import (
     mask_topology_relations_by_group,
     recover_missing_topology_relations,
@@ -186,11 +190,8 @@ def run_topology_rca_evaluation(
     if limit:
         cases = cases[:limit]
 
-    if reference_data:
-        reference_cases = load_normalized_cases(reference_data)
-        reference_map = _unique_case_map(reference_cases, "reference data")
-    else:
-        reference_map = _unique_case_map(cases, "embedded complete topology")
+    evaluation_reference = load_evaluation_reference(cases, reference_data)
+    reference_map = evaluation_reference.cases_by_id
 
     missing_case_ids = [case.case_id for case in cases if case.case_id not in reference_map]
     if missing_case_ids:
@@ -211,7 +212,12 @@ def run_topology_rca_evaluation(
         case.case_id: list(reference_map[case.case_id].structural_relations)
         for case in cases
     }
-    case_groups = {case.case_id: topology_group_id(case) for case in cases}
+    case_groups = {
+        case.case_id: evaluation_reference.topology_id_by_case.get(
+            case.case_id, topology_group_id(case)
+        )
+        for case in cases
+    }
     masks = mask_topology_relations_by_group(
         full_relations_by_case,
         case_groups,
@@ -242,8 +248,17 @@ def run_topology_rca_evaluation(
             added = []
             recovered_topology = list(masked.visible_relations)
 
-        missing_score = structural_relation_metrics(added, masked.missing_relations)
-        full_score = structural_relation_metrics(recovered_topology, full_topology)
+        status_index = evaluation_reference.status_by_case.get(case.case_id)
+        missing_score = score_reference_relations(
+            added,
+            masked.missing_relations,
+            status_index=status_index,
+        )
+        full_score = score_reference_relations(
+            recovered_topology,
+            full_topology,
+            status_index=status_index,
+        )
 
         conditions = {
             "incomplete": masked.visible_relations,
@@ -256,6 +271,8 @@ def run_topology_rca_evaluation(
             "n_full_topology_relations": len(full_topology),
             "n_missing_topology_relations": len(masked.missing_relations),
             "n_added_topology_relations": len(added),
+            "n_verified_false_topology_additions": missing_score.fp,
+            "n_unknown_topology_additions": missing_score.unknown,
             "missing_relation_precision": (
                 missing_score.precision if masked.missing_relations else None
             ),
@@ -307,6 +324,8 @@ def run_topology_rca_evaluation(
         "seed": seed,
         "claim_scope": reference_audit.claim_scope,
         "reference_audit": reference_audit.to_dict(),
+        "reference_artifact_kind": evaluation_reference.artifact_kind,
+        "reference_validation": evaluation_reference.validation,
         "protocol": {
             "collector_observations_modified": False,
             "topology_nodes_removed": False,
@@ -319,10 +338,24 @@ def run_topology_rca_evaluation(
             "masking_unit": "topology_group",
             "empty_missing_cases_in_macro": "excluded",
             "visible_topology_constraint_inference": topology_psl,
+            "reference_world_assumption": (
+                "open_world_tristate"
+                if evaluation_reference.open_world
+                else "closed_world_legacy"
+            ),
+            "unknown_prediction_handling": (
+                "excluded_from_false_positives"
+                if evaluation_reference.open_world
+                else "not_available"
+            ),
         },
         "topology_summary": {
             "mean_missing_relations": _mean(rows, "n_missing_topology_relations"),
             "mean_added_relations": _mean(rows, "n_added_topology_relations"),
+            "mean_verified_false_additions": _mean(
+                rows, "n_verified_false_topology_additions"
+            ),
+            "mean_unknown_additions": _mean(rows, "n_unknown_topology_additions"),
             "macro_missing_relation_precision": _mean(rows, "missing_relation_precision"),
             "macro_missing_relation_recall": _mean(rows, "missing_relation_recall"),
             "macro_missing_relation_f1": _mean(rows, "missing_relation_f1"),

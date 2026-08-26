@@ -231,12 +231,51 @@ $$
 
 ### 연구 실행 게이트
 
-- 기본 실행은 별도 `--reference-data`와 case별 `reference_topology_provenance`가 없으면 중단한다.
-- provenance에는 `source`, `version`, `independent_of_model_observations=true`,
-  `evaluator_only=true`가 필요하다.
+- 기본 실행은 별도 `--reference-data`가 없으면 중단한다.
+- contract-v1 reference는 topology·relation별 provenance와 case의 명시적 `topology_id`가 필요하다.
+- 기존 case JSONL reference를 사용할 때는 case별 `reference_topology_provenance`에 `source`,
+  `version`, `independent_of_model_observations=true`, `evaluator_only=true`가 필요하다.
 - 기존 telemetry-derived embedded topology는 `--allow-derived-reference`를 붙인 CI·단위검증에서만
   허용하며, 산출물은 자동으로 `claim_scope=diagnostic_only`가 된다.
 - 제거 관계가 0개인 사례는 missing-relation macro 평균에서 제외한다.
+
+### 독립 Reference Topology 계약
+
+논문용 정답은 기존 case JSONL의 `structural_relations`에 직접 넣지 않고
+[`config/reference_topology_contract.yaml`](config/reference_topology_contract.yaml)의 v1 계약으로 관리한다.
+작성 형식은 [`config/reference_topology_example.json`](config/reference_topology_example.json)에서 확인한다.
+각 topology snapshot에는 `topology_id`, 시스템, 배포 버전, 유효 시간, entity, typed relation과
+독립 provenance가 들어가야 한다. 각 관계 상태는 다음 셋 중 하나다.
+
+| 상태 | 평가 의미 |
+|---|---|
+| `VERIFIED_POSITIVE` | 마스킹·Recall 정답으로 사용 |
+| `VERIFIED_NEGATIVE` | 해당 관계를 예측하면 False Positive |
+| `UNKNOWN` | 확인 불가능하므로 FP에서 제외하고 별도 비율로 보고 |
+
+artifact에 없는 관계도 `UNKNOWN`으로 취급한다. 따라서 독립 자료에서 확인하지 못한 관계를
+임의로 음성 정답으로 바꾸지 않는다. 대신 `verified_prediction_coverage`와
+`unknown_edge_insertion_rate`를 함께 공개하여 precision의 감사 가능 범위를 표시한다.
+
+Primary 실행에서는 각 case의 `metadata.topology_id`가 reference snapshot의 `topology_id`와
+정확히 일치해야 한다. `system` 이름만으로 유일한 snapshot을 찾는 fallback은 파일 점검에는
+사용할 수 있지만 배포 버전 혼합 위험 때문에 논문 결과로 승격하지 않는다.
+
+독립적으로 작성한 JSON/JSONL manifest를 정규화하고 감사한다.
+
+```bash
+python scripts/build_reference_topology.py \
+  --manifest artifacts/reference_manifest.json \
+  --out artifacts/reference_topology.jsonl \
+  --audit-out results/reference_topology_audit.json
+
+python scripts/audit_reference_topology.py \
+  --reference-data artifacts/reference_topology.jsonl
+```
+
+`build_reference_topology.py`는 입력 manifest를 정규화할 뿐, telemetry·trace에서 정답 관계를
+추론하지 않는다. 실제 manifest는 source/deployment repository, service catalog, Kubernetes
+control-plane snapshot 등 모델 관측과 독립된 원천에서 작성해야 한다.
 
 ---
 
@@ -244,7 +283,8 @@ $$
 
 - OpenRCA 2.0의 장애 사례와 단계별 원인 전파 정답을 RCA 평가에 사용한다.
 - OpenRCA 2.0이 완전한 영구 토폴로지 정답을 제공한다고 가정하지 않는다.
-- 현재 완전 기준 토폴로지는 사용 가능한 수집 데이터에서 구성한 통제 실험용 구조다.
+- 기존 수집 데이터 기반 구조는 diagnostic smoke test에만 사용한다.
+- 논문용 완전 기준 토폴로지는 독립 source/deployment snapshot으로 별도 구축하며 아직 데이터 수집 전이다.
 - 공개 mirror 또는 snapshot을 사용하면 dataset ID와 버전을 결과에 기록한다.
 - 결과는 통제된 관계 누락 환경에서의 복원 및 LLM-RCA 효과로 한정하여 해석한다.
 
@@ -262,9 +302,13 @@ $$
 - 독립 reference provenance 검사와 순환 reference 차단
 - empty-denominator macro 제외, 실제 마스킹 비율 및 candidate ceiling 기록
 - PSL이 visible topology의 기능적 관계 제약을 실제 추론 입력으로 사용
+- Reference Topology v1 계약, 관계별 provenance와 3상태 판정
+- 독립성·domain/range·시간·버전·중복 검증 및 감사 CLI
+- `UNKNOWN`을 FP에서 제외하는 open-world Track A 평가
 
 ### 다음 구현
 
+- OpenRCA 대상 시스템별 독립 source/deployment snapshot 수집 및 manifest 작성
 - 동일 복원 그래프에 대한 LLM RCA 인터페이스
 - B0~B4 2×2 요인 실험 자동화
 - LLM 추가 효과와 결합 시너지 계산

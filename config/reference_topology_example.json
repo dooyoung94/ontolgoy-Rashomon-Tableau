@@ -1,0 +1,74 @@
+{
+  "topologies": [
+    {
+      "schema_version": "1.0",
+      "topology_id": "checkout:abc1234:deploy-v7",
+      "system": "checkout",
+      "version": "deploy-v7",
+      "valid_from": "2026-08-01T00:00:00+09:00",
+      "valid_to": "2026-09-01T00:00:00+09:00",
+      "provenance": {
+        "source_type": "git",
+        "source": "checkout deployment repository",
+        "version": "abc1234",
+        "locator": "config/services.yaml",
+        "independent_of_model_observations": true,
+        "evaluator_only": true,
+        "verification_level": "reviewed"
+      },
+      "entities": [
+        {"id": "service:frontend", "type": "service"},
+        {"id": "service:orders", "type": "service"},
+        {"id": "service:catalog", "type": "service"},
+        {"id": "database:orders", "type": "database"}
+      ],
+      "relations": [
+        {
+          "source": "service:frontend",
+          "relation": "calls",
+          "target": "service:orders",
+          "status": "VERIFIED_POSITIVE",
+          "provenance": {
+            "source_type": "git",
+            "source": "checkout deployment repository",
+            "version": "abc1234",
+            "locator": "config/services.yaml#frontend-orders",
+            "independent_of_model_observations": true,
+            "evaluator_only": true,
+            "verification_level": "reviewed"
+          }
+        },
+        {
+          "source": "service:frontend",
+          "relation": "calls",
+          "target": "service:catalog",
+          "status": "VERIFIED_NEGATIVE",
+          "provenance": {
+            "source_type": "git",
+            "source": "checkout deployment repository",
+            "version": "abc1234",
+            "locator": "config/services.yaml#frontend-routes",
+            "independent_of_model_observations": true,
+            "evaluator_only": true,
+            "verification_level": "reviewed"
+          }
+        },
+        {
+          "source": "service:orders",
+          "relation": "uses_database",
+          "target": "database:orders",
+          "status": "UNKNOWN",
+          "provenance": {
+            "source_type": "git",
+            "source": "checkout application repository",
+            "version": "def5678",
+            "locator": "config/application.yaml#datasource",
+            "independent_of_model_observations": true,
+            "evaluator_only": true,
+            "verification_level": "reviewed"
+          }
+        }
+      ]
+    }
+  ]
+}

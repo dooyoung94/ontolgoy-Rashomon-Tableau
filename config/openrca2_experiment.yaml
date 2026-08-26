@@ -3,9 +3,15 @@ experiment:
   problem: collector_data_available_but_topology_relation_missing
 
   topology_reference:
+    contract: config/reference_topology_contract.yaml
+    schema_version: "1.0"
     source: external_versioned_topology_reference
     evaluator_only: true
     required: true
+    world_assumption: open_world
+    relation_statuses: [VERIFIED_POSITIVE, VERIFIED_NEGATIVE, UNKNOWN]
+    absent_relation_status: UNKNOWN
+    unknown_counts_as_false_positive: false
     required_provenance_fields:
       - source
       - version
@@ -75,6 +81,8 @@ relation_recovery_metrics:
     - full_topology_precision
     - full_topology_recall
     - full_topology_f1
+    - verified_prediction_coverage
+    - unknown_edge_insertion_rate
 
 openrca2_rca_evaluation:
   topology_conditions:
@@ -122,3 +130,4 @@ leakage_policy:
   removed_topology_relations_are_never_shown_to_model: true
   derived_reference_allowed_for_primary_results: false
   empty_missing_relation_cases_excluded_from_macro_recovery_metrics: true
+  unverified_reference_absence_is_negative: false

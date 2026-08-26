@@ -241,6 +241,8 @@ OpenRCA 2.0의 500개 장애 사례와 과정 수준 정답을 사용한다. 공
 
 OpenRCA 2.0의 causal graph와 injection label은 평가기에만 제공한다. 기준 구조 관계는 버전 관리된 deployment manifest, service catalog, CMDB export 또는 독립 검수된 구조에서 구성한다. 복원 모델에 제공하는 relation observation과 동일한 추출 규칙으로 생성한 관계는 CI·단위검증용 diagnostic reference로만 사용하며 주 결과에서 제외한다.
 
+기준 구조 관계는 `VERIFIED_POSITIVE`, `VERIFIED_NEGATIVE`, `UNKNOWN`으로 구분한다. 독립 자료에서 존재가 확인된 관계만 마스킹·Recall 정답으로 사용하고, 부재가 확인된 관계를 예측했을 때만 False Positive로 판정한다. reference에 없거나 확인 불가능한 관계는 `UNKNOWN`으로 유지하여 False Positive에서 제외하되, 검증된 예측 비율과 unknown 삽입 비율을 함께 보고한다. 배포 버전 혼합을 막기 위해 primary 평가에서는 각 장애 case의 `topology_id`를 버전이 고정된 reference snapshot과 명시적으로 연결한다.
+
 ### 5.2 Track A: 관계 복원 실험
 
 | 실험군 | 방법 |
@@ -254,15 +256,15 @@ OpenRCA 2.0의 causal graph와 injection label은 평가기에만 제공한다. 
 
 각 방법은 관계 마스킹 20%, 40%, 60%에서 동일 사례와 동일 마스크 seed로 평가한다. 마스킹은 사건 ID가 아니라 시스템 또는 배포 버전의 topology group을 단위로 수행한다. 동일 group의 장애 사례는 같은 관계 누락 상태를 공유하며, 고정 순서를 사용하여 20%에서 제거한 관계가 40%와 60%에도 포함되는 nested masking으로 구성한다. seed는 13, 42, 97, 123, 2026을 사용한다.
 
-주 지표는 실제 제거 관계 $M_\rho$에 대한 Precision, Recall, F1이다.
+주 지표는 실제 제거된 `VERIFIED_POSITIVE` 관계 $M_\rho$에 대한 Precision, Recall, F1이다. $FP_v$는 `VERIFIED_NEGATIVE`로 확인된 예측만 의미한다.
 
 $$
-P=\frac{|\hat{M}_\rho\cap M_\rho|}{|\hat{M}_\rho|},\qquad
+P=\frac{TP}{TP+FP_v},\qquad
 R=\frac{|\hat{M}_\rho\cap M_\rho|}{|M_\rho|},\qquad
 F1=\frac{2PR}{P+R}
 $$
 
-관계 유형별 F1, Candidate Recall Ceiling, 허위 관계 삽입률, 논리 모순률을 함께 보고한다. MRR과 Hits@K는 query별 negative candidate universe가 확정된 후에만 추가한다. 복원 후 전체 토폴로지 F1은 잔존 관계의 영향을 받으므로 보조 지표로만 사용한다. 마스킹 결과 제거 관계가 0개인 사례는 missing-relation macro 평균에서 제외하고, 요청 비율과 실제 제거 비율을 함께 기록한다.
+관계 유형별 F1, Candidate Recall Ceiling, 허위 관계 삽입률, 검증 예측 coverage, unknown 삽입률, 논리 모순률을 함께 보고한다. 검증 coverage가 낮은 Precision은 제한된 후보 공간의 조건부 성능으로 해석한다. MRR과 Hits@K는 query별 negative candidate universe가 확정된 후에만 추가한다. 복원 후 전체 토폴로지 F1은 잔존 관계의 영향을 받으므로 보조 지표로만 사용한다. 마스킹 결과 제거 관계가 0개인 사례는 missing-relation macro 평균에서 제외하고, 요청 비율과 실제 제거 비율을 함께 기록한다.
 
 ### 5.3 Track B: 관계 복원 × LLM 요인 실험
 
@@ -376,7 +378,8 @@ O0만 공식 no-topology 조건과 직접 비교할 수 있다. B2~B4는 온톨�
 
 ## 8. 타당성 위협 및 한계
 
-- **기준 토폴로지 편향:** 수집 데이터에서 만든 완전 구조가 실제 운영 정답과 다를 수 있다.
+- **기준 토폴로지 편향:** 독립 source/deployment snapshot도 시점 불일치·미기재 설정 때문에 실제 운영 구조를 완전히 표현하지 못할 수 있다.
+- **음성 정답 coverage:** `VERIFIED_NEGATIVE` 후보가 적으면 Precision은 제한된 감사 공간의 조건부 수치이므로 coverage와 함께 해석해야 한다.
 - **마스킹 현실성:** 균등 무작위 마스킹은 실제 CMDB 누락 패턴과 다를 수 있으므로 관계 유형별·구조별 마스킹이 필요하다.
 - **데이터셋 일반화:** 3개 공개 마이크로서비스 시스템의 결과가 기업 운영 환경 전체를 대표하지 않는다.
 - **LLM 변동성:** 모델 버전, temperature, 도구 호출 순서에 따라 성능이 달라질 수 있다.

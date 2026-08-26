@@ -7,9 +7,13 @@ from pathlib import Path
 from .models import RcaCase, STRUCTURAL_RELATION_TYPES
 from .openrca2 import load_normalized_cases
 from .psl import PslStructuralInference
+from .reference_topology import (
+    load_evaluation_reference,
+    score_reference_relations,
+)
 from .research_protocol import audit_reference_protocol, topology_group_id
 from .semantic import DebertaStructuralRelationScorer
-from .structural import relation_type_counts, structural_relation_metrics
+from .structural import relation_type_counts
 from .topology_recovery import (
     mask_topology_relations_by_group,
     recover_missing_topology_relations,
@@ -100,11 +104,8 @@ def run_stage1_evaluation(
     if limit:
         cases = cases[:limit]
 
-    if reference_data:
-        reference_cases = load_normalized_cases(reference_data)
-        reference_map = _unique_case_map(reference_cases, "reference data")
-    else:
-        reference_map = _unique_case_map(cases, "embedded complete topology")
+    evaluation_reference = load_evaluation_reference(cases, reference_data)
+    reference_map = evaluation_reference.cases_by_id
 
     missing_case_ids = [case.case_id for case in cases if case.case_id not in reference_map]
     if missing_case_ids:
@@ -122,16 +123,25 @@ def run_stage1_evaluation(
         allow_derived_reference=allow_derived_reference,
     )
     reference_protocol = (
-        "independent_topology_reference"
-        if reference_audit.independent_reference
-        else "derived_reference_diagnostic_only"
+        "independent_reference_topology_contract_v1"
+        if evaluation_reference.open_world
+        else (
+            "independent_topology_reference"
+            if reference_audit.independent_reference
+            else "derived_reference_diagnostic_only"
+        )
     )
 
     full_relations_by_case = {
         case.case_id: list(reference_map[case.case_id].structural_relations)
         for case in cases
     }
-    case_groups = {case.case_id: topology_group_id(case) for case in cases}
+    case_groups = {
+        case.case_id: evaluation_reference.topology_id_by_case.get(
+            case.case_id, topology_group_id(case)
+        )
+        for case in cases
+    }
     masks = mask_topology_relations_by_group(
         full_relations_by_case,
         case_groups,
@@ -144,9 +154,12 @@ def run_stage1_evaluation(
 
     rows: list[dict] = []
     missing_tp = missing_fp = missing_fn = 0
+    missing_unknown = missing_non_target_positive = 0
     candidate_gold_hits = candidate_gold_total = 0
-    full_tp = full_fp = full_fn = 0
-    type_counts = defaultdict(lambda: {"tp": 0, "fp": 0, "fn": 0})
+    full_tp = full_fp = full_fn = full_unknown = 0
+    type_counts = defaultdict(
+        lambda: {"tp": 0, "fp": 0, "fn": 0, "unknown": 0}
+    )
 
     for case in cases:
         full_truth = list(reference_map[case.case_id].structural_relations)
@@ -171,15 +184,24 @@ def run_stage1_evaluation(
             hypothesis_keys = set()
 
         # 주 지표: 실제로 토폴로지에서 제거한 관계를 얼마나 되찾았는가.
-        missing_score = structural_relation_metrics(added_relations, masked.missing_relations)
-        pred_missing = _typed_keys(added_relations)
+        status_index = evaluation_reference.status_by_case.get(case.case_id)
+        missing_score = score_reference_relations(
+            added_relations,
+            masked.missing_relations,
+            status_index=status_index,
+        )
         gold_missing = _typed_keys(masked.missing_relations)
-        tp_keys = pred_missing & gold_missing
-        fp_keys = pred_missing - gold_missing
-        fn_keys = gold_missing - pred_missing
+        tp_keys = missing_score.tp_keys
+        fp_keys = missing_score.fp_keys
+        fn_keys = missing_score.fn_keys
+        unknown_keys = missing_score.unknown_keys
         missing_tp += len(tp_keys)
         missing_fp += len(fp_keys)
         missing_fn += len(fn_keys)
+        missing_unknown += len(unknown_keys)
+        missing_non_target_positive += len(
+            missing_score.non_target_positive_keys
+        )
         if do_recovery:
             candidate_gold_hits += len(hypothesis_keys & gold_missing)
             candidate_gold_total += len(gold_missing)
@@ -190,14 +212,19 @@ def run_stage1_evaluation(
             type_counts[key[1]]["fp"] += 1
         for key in fn_keys:
             type_counts[key[1]]["fn"] += 1
+        for key in unknown_keys:
+            type_counts[key[1]]["unknown"] += 1
 
         # 보조 지표: 복원 후 전체 토폴로지가 원래 토폴로지와 얼마나 같은가.
-        full_score = structural_relation_metrics(final_topology, full_truth)
-        pred_full = _typed_keys(final_topology)
-        gold_full = _typed_keys(full_truth)
-        full_tp += len(pred_full & gold_full)
-        full_fp += len(pred_full - gold_full)
-        full_fn += len(gold_full - pred_full)
+        full_score = score_reference_relations(
+            final_topology,
+            full_truth,
+            status_index=status_index,
+        )
+        full_tp += full_score.tp
+        full_fp += full_score.fp
+        full_fn += full_score.fn
+        full_unknown += full_score.unknown
 
         rows.append(
             {
@@ -224,6 +251,11 @@ def run_stage1_evaluation(
                 "n_collector_observations": len(case.relation_observations),
                 "n_hypotheses": n_hypotheses,
                 "n_added_relations": len(added_relations),
+                "n_verified_false_additions": missing_score.fp,
+                "n_unknown_additions": missing_score.unknown,
+                "n_non_target_positive_additions": len(
+                    missing_score.non_target_positive_keys
+                ),
                 "missing_relation_types": relation_type_counts(masked.missing_relations),
                 "added_relation_types": relation_type_counts(added_relations),
             }
@@ -262,10 +294,44 @@ def run_stage1_evaluation(
         "micro_missing_tp": missing_tp,
         "micro_missing_fp": missing_fp,
         "micro_missing_fn": missing_fn,
+        "micro_missing_unknown_predictions": missing_unknown,
+        "micro_missing_non_target_positive_predictions": missing_non_target_positive,
         "false_edge_insertion_rate": (
             missing_fp / (missing_tp + missing_fp)
             if missing_tp + missing_fp
             else 0.0
+        ),
+        "unknown_edge_insertion_rate": (
+            missing_unknown
+            / (
+                missing_tp
+                + missing_fp
+                + missing_unknown
+                + missing_non_target_positive
+            )
+            if (
+                missing_tp
+                + missing_fp
+                + missing_unknown
+                + missing_non_target_positive
+            )
+            else 0.0
+        ),
+        "verified_prediction_coverage": (
+            (missing_tp + missing_fp)
+            / (
+                missing_tp
+                + missing_fp
+                + missing_unknown
+                + missing_non_target_positive
+            )
+            if (
+                missing_tp
+                + missing_fp
+                + missing_unknown
+                + missing_non_target_positive
+            )
+            else None
         ),
         "candidate_recall_ceiling": (
             candidate_gold_hits / candidate_gold_total
@@ -285,6 +351,7 @@ def run_stage1_evaluation(
         "micro_full_topology_precision": full_micro_p,
         "micro_full_topology_recall": full_micro_r,
         "micro_full_topology_f1": full_micro_f1,
+        "micro_full_topology_unknown_predictions": full_unknown,
         "mean_full_relations": _mean(rows, "n_full_relations"),
         "mean_visible_relations": _mean(rows, "n_visible_relations"),
         "mean_missing_relations": _mean(rows, "n_missing_relations"),
@@ -301,8 +368,10 @@ def run_stage1_evaluation(
         "seed": seed,
         "relation_threshold": relation_threshold,
         "reference_protocol": reference_protocol,
+        "reference_artifact_kind": evaluation_reference.artifact_kind,
         "claim_scope": reference_audit.claim_scope,
         "reference_audit": reference_audit.to_dict(),
+        "reference_validation": evaluation_reference.validation,
         "protocol": {
             "problem": "collector_data_available_but_topology_relation_missing",
             "collector_observations_modified": False,
@@ -316,6 +385,16 @@ def run_stage1_evaluation(
             "masking_unit": "topology_group",
             "empty_missing_cases_in_macro": "excluded",
             "visible_topology_constraint_inference": use_psl,
+            "reference_world_assumption": (
+                "open_world_tristate"
+                if evaluation_reference.open_world
+                else "closed_world_legacy"
+            ),
+            "unknown_prediction_handling": (
+                "excluded_from_false_positives"
+                if evaluation_reference.open_world
+                else "not_available"
+            ),
         },
         "summary": summary,
         "per_relation_type": per_relation_type,

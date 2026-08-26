@@ -69,12 +69,22 @@
 - **지표:** 제거 관계 0건 사례의 macro 평균 제외, realized mask ratio와 Candidate Recall Ceiling 추가
 - **판정:** 연구 결과 산출 전 필수 프로토콜 수정
 
+### 2026-08-27 — 독립 Reference Topology 계약 구현 시작
+
+- **목적:** telemetry-derived reference를 제거하고 관계별 검증 상태와 provenance를 보존
+- **계약:** topology snapshot, 버전·유효 시간, canonical entity, typed relation 정의
+- **판정:** `VERIFIED_POSITIVE` / `VERIFIED_NEGATIVE` / `UNKNOWN` 3상태 도입
+- **평가:** 미기재·`UNKNOWN` 관계는 FP에서 제외하고 감사 가능 coverage를 별도 보고
+- **검증:** 독립성, evaluator-only, domain/range, self-loop, 중복, 시간대·버전 정합성 검사
+- **바인딩:** primary 평가는 case의 명시적 `topology_id` 일치를 강제하고 system-only fallback은 diagnostic으로 제한
+- **상태:** 계약·검증기·평가 연동 및 단위 테스트 완료, 독립 원천 데이터 수집 전
+
 ---
 
 ## 다음 연구 작업
 
 1. OpenRCA 2.0 공식 500-case artifact와 현재 snapshot의 데이터 버전 확인
-2. typed relation reference topology 생성 규칙과 provenance 확정
+2. 대상 시스템의 독립 source/deployment snapshot 수집 및 reference manifest 작성
 3. nested masking 20% / 40% / 60% 및 복수 seed 구현
 4. Track A A0~A4 전체 ablation 실행
 5. LLM RCA 입력 계약과 관계 confidence 표현 확정
