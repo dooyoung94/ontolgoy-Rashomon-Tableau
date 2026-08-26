@@ -51,27 +51,54 @@ recovery:
   ontology_type_constraints: true
   relation_threshold: 0.5
 
-primary_metrics:
-  - missing_relation_precision
-  - missing_relation_recall
-  - missing_relation_f1
-  - relation_type_f1
+relation_recovery_metrics:
+  primary:
+    - missing_relation_precision
+    - missing_relation_recall
+    - missing_relation_f1
+    - relation_type_f1
+  secondary:
+    - full_topology_precision
+    - full_topology_recall
+    - full_topology_f1
 
-secondary_metrics:
-  - full_topology_precision
-  - full_topology_recall
-  - full_topology_f1
-
-next_downstream_experiment:
-  compare:
-    - incomplete_topology_to_rca
-    - recovered_topology_to_rca
-    - complete_topology_to_rca
+openrca2_rca_evaluation:
+  topology_conditions:
+    - incomplete
+    - recovered
+    - complete
+  invariant_inputs:
+    - incident_evidence
+    - gold_root_causes_for_evaluation_only
+    - gold_causal_process_for_evaluation_only
+  rca_variant_for_current_smoke: full
+  rca_edge_threshold: 0.5
   metrics:
-    - root_cause
+    - any_service_hit
+    - all_service_hit
+    - root_precision
+    - root_recall
+    - root_f1
+    - root_exact
+    - root_hit_at_1
+    - root_hit_at_3
     - path_reachability
+    - node_precision
+    - node_recall
     - node_f1
+    - edge_precision
+    - edge_recall
     - edge_f1
+  primary_deltas:
+    - recovered_minus_incomplete_root_f1
+    - recovered_minus_incomplete_path_reachability
+    - recovered_minus_incomplete_node_f1
+    - recovered_minus_incomplete_edge_f1
+  upper_reference_gaps:
+    - complete_minus_recovered_root_f1
+    - complete_minus_recovered_path_reachability
+    - complete_minus_recovered_node_f1
+    - complete_minus_recovered_edge_f1
 
 leakage_policy:
   causal_graph_json: evaluator_only
