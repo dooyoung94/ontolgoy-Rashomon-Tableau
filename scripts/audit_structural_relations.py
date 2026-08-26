@@ -10,17 +10,26 @@ from openrca_mr.openrca2 import load_normalized_cases
 
 def run(data: str, out: str) -> dict:
     cases = load_normalized_cases(data)
-    type_counts: Counter[str] = Counter()
+    relation_counts: Counter[str] = Counter()
+    observation_counts: Counter[str] = Counter()
     case_type_counts: Counter[str] = Counter()
     examples: dict[str, list[list[str]]] = {}
-    with_any = 0
+    with_any_relation = 0
+    with_any_observation = 0
+    candidate_total = 0
 
     for case in cases:
         if case.structural_relations:
-            with_any += 1
+            with_any_relation += 1
+        if case.relation_observations:
+            with_any_observation += 1
+        candidate_total += int(case.metadata.get("structural_candidate_count", 0) or 0)
+
         seen_types = set()
+        for item in case.relation_observations:
+            observation_counts[item.evidence_kind] += 1
         for edge in case.structural_relations:
-            type_counts[edge.relation] += 1
+            relation_counts[edge.relation] += 1
             seen_types.add(edge.relation)
             examples.setdefault(edge.relation, [])
             if len(examples[edge.relation]) < 5:
@@ -30,13 +39,22 @@ def run(data: str, out: str) -> dict:
 
     result = {
         "n_cases": len(cases),
-        "cases_with_any_structural_relation": with_any,
-        "coverage_any": with_any / len(cases) if cases else 0.0,
-        "total_structural_relations": sum(type_counts.values()),
-        "mean_structural_relations_per_case": (
-            sum(type_counts.values()) / len(cases) if cases else 0.0
+        "cases_with_any_relation_observation": with_any_observation,
+        "observation_coverage_any": with_any_observation / len(cases) if cases else 0.0,
+        "cases_with_any_recovered_structural_relation": with_any_relation,
+        "relation_coverage_any": with_any_relation / len(cases) if cases else 0.0,
+        "total_relation_observations": sum(observation_counts.values()),
+        "mean_relation_observations_per_case": (
+            sum(observation_counts.values()) / len(cases) if cases else 0.0
         ),
-        "relation_counts": dict(sorted(type_counts.items())),
+        "observation_counts": dict(sorted(observation_counts.items())),
+        "total_structural_candidates": candidate_total,
+        "mean_structural_candidates_per_case": candidate_total / len(cases) if cases else 0.0,
+        "total_recovered_structural_relations": sum(relation_counts.values()),
+        "mean_recovered_structural_relations_per_case": (
+            sum(relation_counts.values()) / len(cases) if cases else 0.0
+        ),
+        "relation_counts": dict(sorted(relation_counts.items())),
         "case_coverage_by_relation": {
             relation: {
                 "cases": case_type_counts[relation],
@@ -46,9 +64,10 @@ def run(data: str, out: str) -> dict:
         },
         "examples": examples,
         "note": (
-            "These are telemetry-derived operational relations, not PAVE causal gold. "
-            "Absence means the released telemetry did not expose enough attributes; "
-            "the extractor does not fabricate a relation."
+            "Relation observations and recovered triples use model-visible telemetry only. "
+            "PAVE causal_graph.json is evaluator-only. This audit is a coverage/sanity check, "
+            "not the paper's main structural-recovery score; main Stage-S evaluation requires "
+            "independent reference triples or controlled evidence missingness."
         ),
     }
     path = Path(out)
