@@ -7,6 +7,8 @@ from pathlib import Path
 from openrca_mr.abduction import AbductiveRelationGenerator
 from openrca_mr.masking import mask_relation_types, mask_relations
 from openrca_mr.metrics import (
+    all_root_services_hit,
+    any_root_service_hit,
     exact_root_set,
     is_loadgen,
     node_metrics,
@@ -14,6 +16,7 @@ from openrca_mr.metrics import (
     process_path_reachability,
     relation_classification_metrics,
     root_hit_at_k,
+    root_set_metrics,
     service_edge_metrics,
 )
 from openrca_mr.models import REL_CAUSAL
@@ -66,7 +69,7 @@ def _pair_diagnostics(masked_truth, predicted_edges, hypotheses) -> list[dict]:
     predicted_pairs = {_pair(source, target) for source, _, target in predicted_edges}
     hypothesis_by_pair = {_pair(h.edge.source, h.edge.target): h for h in hypotheses}
     out: list[dict] = []
-    for truth in masked_truth:
+    for idx, truth in enumerate(masked_truth):
         if is_loadgen(truth.source) or is_loadgen(truth.target):
             continue
         key = _pair(truth.source, truth.target)
@@ -75,10 +78,13 @@ def _pair_diagnostics(masked_truth, predicted_edges, hypotheses) -> list[dict]:
         if h is not None and h.semantic_support is not None and h.semantic_contradiction is not None:
             semantic_margin = h.semantic_support - h.semantic_contradiction
         out.append({
+            "candidate_id": idx,
             "source": truth.source,
             "target": truth.target,
             "source_norm": key[0],
             "target_norm": key[1],
+            # Evaluator-only labels below are intentionally stored for diagnostics;
+            # the A5 LLM script strips them before prompt construction.
             "truth_relation": truth.relation,
             "truth_causal": truth.relation == REL_CAUSAL,
             "predicted_causal": key in predicted_pairs,
@@ -176,7 +182,19 @@ def run(
             hypotheses = pred.ranked_hypotheses
 
         process_edge = service_edge_metrics(predicted_edges, case.gold_edges)
-        process_node = node_metrics(predicted_edges, case.gold_edges)
+        process_node = node_metrics(
+            predicted_edges,
+            case.gold_edges,
+            predicted_roots=predicted_roots,
+            gold_roots=case.gold_root_causes,
+        )
+        root_service = root_set_metrics(predicted_roots, case.gold_root_causes)
+        path_reachability = process_path_reachability(
+            predicted_edges,
+            predicted_roots,
+            case.gold_root_causes,
+            case.gold_alarm_nodes or case.symptom_nodes,
+        )
         relation = relation_classification_metrics(predicted_edges, masked) if mask_mode == "relation" and masked else None
         missing = service_edge_metrics(predicted_edges, masked) if mask_mode == "edge" and masked else None
         pair_diagnostics = (
@@ -186,22 +204,26 @@ def run(
 
         rows.append({
             "case_id": case.case_id,
+            # OpenRCA 2.0-compatible outcome/process metrics.
+            "root_service_precision": root_service.precision,
+            "root_service_recall": root_service.recall,
+            "root_service_f1": root_service.f1,
+            "root_service_exact": exact_root_set(predicted_roots, case.gold_root_causes),
+            "any_service_hit": any_root_service_hit(predicted_roots, case.gold_root_causes),
+            "all_service_hit": all_root_services_hit(predicted_roots, case.gold_root_causes),
+            "path_reachability": path_reachability,
             "node_precision": process_node.precision,
             "node_recall": process_node.recall,
             "node_f1": process_node.f1,
             "edge_precision": process_edge.precision,
             "edge_recall": process_edge.recall,
             "edge_f1": process_edge.f1,
+            # Controlled missing-relation diagnostics (supplementary Track B).
             "relation_accuracy": relation.accuracy if relation else None,
             "relation_precision": relation.precision if relation else None,
             "relation_recall": relation.recall if relation else None,
             "relation_f1": relation.f1 if relation else None,
-            "process_path_reachability": process_path_reachability(
-                predicted_edges,
-                predicted_roots,
-                case.gold_root_causes,
-                case.gold_alarm_nodes or case.symptom_nodes,
-            ),
+            "process_path_reachability": path_reachability,
             "root_exact_set": exact_root_set(predicted_roots, case.gold_root_causes),
             "root_hit_at_1": root_hit_at_k(predicted_roots, case.gold_root_causes, 1),
             "root_hit_at_3": root_hit_at_k(predicted_roots, case.gold_root_causes, 3),
@@ -212,12 +234,19 @@ def run(
             "n_gold_edges": len(case.gold_edges),
             "n_masked_relations": len(masked) if mask_mode == "relation" else 0,
             "n_masked_edges": len(masked) if mask_mode == "edge" else 0,
+            # Stored for downstream A5 adjudication. No gold values are consumed
+            # by the A5 prompt; pair diagnostics are sanitized before use.
+            "predicted_roots": list(predicted_roots),
+            "predicted_edges": [list(edge) for edge in predicted_edges],
             "pair_diagnostics": pair_diagnostics,
         })
 
+    metric_exclude = {
+        "case_id", "predicted_roots", "predicted_edges", "pair_diagnostics"
+    }
     metrics = [
         key for key, value in (rows[0].items() if rows else [])
-        if key != "case_id" and not key.startswith("n_") and isinstance(value, (int, float))
+        if key not in metric_exclude and not key.startswith("n_") and isinstance(value, (int, float))
     ]
     result = {
         "dataset_id": dataset_id,
@@ -231,9 +260,11 @@ def run(
             "main_task": "recover masked causal-vs-noncausal relation semantics on observed service pairs",
             "structural_edge_visibility": "preserved for relation masking",
             "candidate_policy": "score every observed masked relation pair; no candidate cap in main benchmark",
-            "edge_metric": "directed normalized service pair; relation label ignored for OpenRCA process scoring",
+            "edge_metric": "OpenRCA2-style directed normalized service pair; relation label ignored",
+            "node_metric": "OpenRCA2-style service nodes from propagation edges plus predicted/gold roots",
+            "outcome_metrics": "root service P/R/F1 + exact + AnySvc + AllSvc",
             "relation_metric": "binary masked-relation classification: causal_propagates_to vs non_causal_dependency",
-            "process_path_reachability": "correct predicted root -> gold alarm service via predicted causal edges",
+            "path_reachability": "correct predicted root -> gold alarm service via predicted causal edges",
             "gold_usage": "gold causal edges construct controlled relation-mask labels and evaluation only; masked labels are hidden from model",
             "threshold_policy": "fixed 0.5 for A1-A4; no full-set threshold tuning",
         },
