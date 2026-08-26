@@ -1,4 +1,4 @@
-name: OpenRCA Missing-Relation Smoke
+name: OpenRCA Structural+Causal Smoke
 
 on:
   push:
@@ -65,7 +65,7 @@ jobs:
   ops_lite_prepare:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -76,29 +76,155 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
           pip install 'pyarrow>=16'
-      - name: Build leakage-safe 20-case telemetry set
+      - name: Build leakage-safe 20-case causal set and cross-window structural set
         env:
           HF_HUB_DISABLE_XET: '1'
         run: |
           python scripts/build_ops_lite_cases_fast.py --limit 20 --out artifacts/ops_lite_20.jsonl
+          python scripts/build_stage1_cross_window.py \
+            --source artifacts/ops_lite_20.jsonl \
+            --cache .cache/ops-lite \
+            --out artifacts/ops_lite_20_stage1.jsonl
           python - <<'PY'
           from openrca_mr.openrca2 import load_normalized_cases
-          cases=load_normalized_cases('artifacts/ops_lite_20.jsonl')
-          assert len(cases) == 20, len(cases)
-          assert all(c.gold_root_causes and c.gold_edges for c in cases)
-          assert all(c.known_edges and c.evidence and c.symptom_nodes for c in cases)
-          assert all(c.relation_observations and c.structural_relations for c in cases)
-          print('PREPARED', len(cases))
-          print('AVG_KNOWN_EDGES', sum(len(c.known_edges) for c in cases)/len(cases))
-          print('AVG_RELATION_OBSERVATIONS', sum(len(c.relation_observations) for c in cases)/len(cases))
-          print('AVG_STRUCTURAL_RELATIONS', sum(len(c.structural_relations) for c in cases)/len(cases))
-          print('AVG_EVIDENCE', sum(len(c.evidence) for c in cases)/len(cases))
+
+          causal=load_normalized_cases('artifacts/ops_lite_20.jsonl')
+          stage1=load_normalized_cases('artifacts/ops_lite_20_stage1.jsonl')
+          assert len(causal) == 20, len(causal)
+          assert len(stage1) == 20, len(stage1)
+          assert [c.case_id for c in causal] == [c.case_id for c in stage1]
+          assert all(c.gold_root_causes and c.gold_edges for c in causal)
+          assert all(c.known_edges and c.evidence and c.symptom_nodes for c in causal)
+          assert all(c.structural_relations and c.relation_observations for c in stage1)
+          assert all(
+              c.metadata.get('structural_reference_protocol') ==
+              'normal_window_reference_vs_abnormal_window_observations'
+              for c in stage1
+          )
+          print('PREPARED_CAUSAL', len(causal))
+          print('PREPARED_STAGE1', len(stage1))
+          print('AVG_KNOWN_EDGES', sum(len(c.known_edges) for c in causal)/len(causal))
+          print('AVG_EVIDENCE', sum(len(c.evidence) for c in causal)/len(causal))
+          print('AVG_STAGE1_ABNORMAL_OBSERVATIONS', sum(len(c.relation_observations) for c in stage1)/len(stage1))
+          print('AVG_STAGE1_NORMAL_REFERENCE_RELATIONS', sum(len(c.structural_relations) for c in stage1)/len(stage1))
           PY
       - uses: actions/upload-artifact@v4
         with:
           name: ops-lite-20-normalized
-          path: artifacts/ops_lite_20.jsonl
+          path: |
+            artifacts/ops_lite_20.jsonl
+            artifacts/ops_lite_20_stage1.jsonl
           retention-days: 7
+
+  stage1_benchmark:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
+    needs: ops_lite_prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - observation_abduction
+          - observation_abduction_deberta
+          - observation_abduction_psl
+          - observation_abduction_deberta_psl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: ops-lite-20-normalized
+          path: artifacts
+      - name: Install structural inference stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e '.[all]'
+      - name: Run cross-window structural recovery ${{ matrix.variant }}
+        env:
+          HF_HUB_DISABLE_XET: '1'
+          TOKENIZERS_PARALLELISM: 'false'
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          python scripts/run_structural_recovery.py \
+            --data artifacts/ops_lite_20_stage1.jsonl \
+            --out results/stage1_${{ matrix.variant }}.json \
+            --variant '${{ matrix.variant }}' \
+            --observation-drop-ratio 0.0 \
+            --seed 42 \
+            --relation-threshold 0.5 \
+            --limit 20
+          python - <<'PY'
+          import json, os
+          p='results/stage1_' + os.environ['VARIANT'] + '.json'
+          r=json.load(open(p))
+          print('STAGE1_RESULT', r['variant'], r['reference_protocol'], json.dumps(r['summary'], sort_keys=True))
+          print('STAGE1_PER_RELATION', json.dumps(r['per_relation_type'], sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: structural-result-${{ matrix.variant }}
+          path: results/stage1_${{ matrix.variant }}.json
+          retention-days: 14
+
+  stage1_aggregate:
+    if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
+    needs: stage1_benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: structural-result-*
+          path: results
+          merge-multiple: true
+      - name: Aggregate Stage-1 cross-window results
+        run: |
+          python - <<'PY'
+          import json
+          variants=[
+              'observation_abduction',
+              'observation_abduction_deberta',
+              'observation_abduction_psl',
+              'observation_abduction_deberta_psl',
+          ]
+          rows=[]
+          for v in variants:
+              p=f'results/stage1_{v}.json'
+              try: r=json.load(open(p))
+              except FileNotFoundError: continue
+              s=r['summary']
+              rows.append({
+                  'variant':v,
+                  'macro_precision':s.get('macro_structural_precision'),
+                  'macro_recall':s.get('macro_structural_recall'),
+                  'macro_f1':s.get('macro_structural_f1'),
+                  'micro_precision':s.get('micro_structural_precision'),
+                  'micro_recall':s.get('micro_structural_recall'),
+                  'micro_f1':s.get('micro_structural_f1'),
+                  'tp':s.get('micro_tp'),
+                  'fp':s.get('micro_fp'),
+                  'fn':s.get('micro_fn'),
+                  'mean_observations':s.get('mean_observations_full'),
+                  'mean_candidates':s.get('mean_candidates'),
+                  'mean_selected_relations':s.get('mean_selected_relations'),
+                  'mean_reference_relations':s.get('mean_reference_relations'),
+              })
+          print('STAGE1_CROSS_WINDOW_RESULTS')
+          print(json.dumps(rows, indent=2))
+          json.dump(rows, open('results/stage1_summary.json','w'), indent=2)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ops-lite-20-stage1-cross-window-results
+          path: results
+          retention-days: 14
 
   ops_lite_benchmark:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[ops-lite-20]')
@@ -122,7 +248,7 @@ jobs:
         with:
           name: ops-lite-20-normalized
           path: artifacts
-      - name: Install inference stack
+      - name: Install causal inference stack
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
