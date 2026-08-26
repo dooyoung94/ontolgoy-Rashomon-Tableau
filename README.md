@@ -1,468 +1,259 @@
-# Abductive Structural Relation Recovery for OpenRCA 2.0
+# 수집 데이터 기반 누락 토폴로지 관계 복원
 
-## 연구 목표
+## 연구 문제
 
-실제 운영환경에서는 CMDB, topology, ontology, business logic을 사람이 완전하게 정의하기 어렵다. 수집기를 통해 Service, Pod, Node, Database 등의 객체는 관찰되더라도 **객체 사이의 관계가 누락되거나 의미가 불명확한 상태**가 남을 수 있다.
+운영 수집기는 서비스, 데이터베이스, 파드, 노드, 추적, 지표, 로그를 가져올 수 있다. 그러나 기존 토폴로지에 객체 사이 관계가 정의되어 있지 않으면 수집된 객체를 하나의 구조로 연결하지 못한다.
 
-본 연구의 중심 문제는 일반적인 “missing edge 생성”이 아니다. 그래프의 edge는 표현 단위일 뿐이며, 실제 연구대상은 다음과 같은 **typed structural relation triple**이다.
+본 연구가 해결하려는 문제는 이것 하나다.
+
+> **수집 데이터는 존재하지만 기존 토폴로지에 관계가 없을 때, 수집된 실행 정보를 이용해 누락된 관계를 복원할 수 있는가? 그리고 복원된 토폴로지가 장애 원인 분석을 개선하는가?**
+
+예:
 
 ```text
-(source, relation, target)
+수집된 객체
+payment-api
+payment-db
+payment-pod-01
+node-3
 
-Service --CALLS--> Service
-Service --DEPLOYED_ON--> Pod
-Pod     --RUNS_ON--> Node
-Service --USES_DATABASE--> Database
-Service --USES_MESSAGING--> MessagingSystem
+기존 토폴로지
+payment-api
+payment-db
+payment-pod-01
+node-3
+
+관계가 없어 서로 연결되지 않음
 ```
 
-따라서 핵심 연구 질문은 다음과 같다.
+수집 정보에는 다음과 같은 단서가 있을 수 있다.
 
-> **불완전한 운영 지식과 telemetry 관측만으로 가능한 Structural Relation 후보를 생성하고, 그중 근거 있는 관계를 선별하여 Operational Graph를 복원할 수 있는가? 그리고 복원된 관계가 실제 causal-process RCA 성능을 개선하는가?**
+```text
+payment-api가 payment-db를 사용하는 흔적
+payment-api가 payment-pod-01에서 실행된 흔적
+payment-pod-01이 node-3에서 실행된 흔적
+서비스 간 부모-자식 추적 흔적
+```
+
+이를 이용해 다음 관계를 복원한다.
+
+```text
+payment-api --USES_DATABASE--> payment-db
+payment-api --DEPLOYED_ON----> payment-pod-01
+payment-pod-01 --RUNS_ON-----> node-3
+frontend --CALLS-------------> order
+```
+
+`CALLS`, `USES_DATABASE`, `DEPLOYED_ON`, `RUNS_ON`은 코드와 평가에서 사용하는 관계 이름이다.
 
 ---
 
-## 1. 문제 정의
-
-### 현실 문제
+## 연구 흐름
 
 ```text
-CMDB / Ontology
-
-Application: payment-api
-Database:    payment-db
-Pod:         payment-api-1
-Node:        node-3
-
-하지만 일부 관계는 미정의 / 미수집 / 최신화 지연
-```
-
-운영자가 모든 관계를 수작업으로 입력하도록 요구하면 동적 배포, 신규 서비스, 외부 데이터소스, 런타임 호출구조를 지속적으로 반영하기 어렵다.
-
-본 연구는 이를 다음 두 문제로 분리한다.
-
-### Stage 1 — Structural Relation Recovery
-
-```text
-Incomplete Operational Knowledge
-            +
-Model-visible Telemetry
-            ↓
-Relation Observation
-            ↓
-Abductive Relation Hypotheses
-            ↓
-DeBERTa Semantic Validation
-            ↓
-PSL Global Selection
-            ↓
-Recovered Structural Relations
-```
-
-### Stage 2 — Incident Causal Qualification
-
-구조적으로 연결되었다고 해서 그 관계가 모든 incident에서 원인은 아니다.
-
-```text
-Structural topology
-frontend --CALLS--> orders
-
-Incident-specific failure propagation
-orders --causal_propagates_to--> frontend
-```
-
-따라서 Stage 2에서는 복원된 구조를 후보 공간으로 사용하고, 특정 incident에서 실제 장애 전파에 참여한 관계만 판정한다.
-
-```text
-causal_propagates_to
-non_causal_dependency
-```
-
-### Final — LLM RCA
-
-LLM의 주 역할은 Structural Relation을 임의 생성하는 것이 아니라, 검증된 구조·인과 그래프와 telemetry evidence를 이용해 운영자가 사용할 RCA 결과를 생성하는 것이다.
-
-```text
-Root Cause
-Propagation Path
-Impact
-Action
-```
-
----
-
-## 2. 핵심 파이프라인
-
-```text
-CMDB / Ontology / Telemetry
-          |
-          v
-[1] Relation Observation
-    trace parent-child
-    service/pod resource context
-    pod/node resource context
-    DB / messaging context when observable
-          |
-          v
-[2] Abduction
-    possible (source, relation, target)
-    hypotheses only from telemetry-grounded endpoints
-          |
-          v
-[3] DeBERTa
-    relation-support vs non-support
-    contrastive semantic validation
-          |
-          v
-[4] PSL
-    ontology/type consistency
-    competing candidate selection
-    sparsity / global coherence
-          |
-          v
-Recovered Operational Structural Graph
-          |
-          v
-[5] Incident Causal Qualification
-    temporal + anomaly + semantic + path coherence
-          |
-          v
-Incident Causal Graph
-          |
-          v
-[6] LLM RCA
-    Root Cause → Path → Impact → Action
-```
-
----
-
-## 3. 각 구성요소의 역할
-
-| 단계 | 해결하려는 문제 | 역할 |
-|---|---|---|
-| Relation Observation | collector가 본 사실과 최종 relation을 혼동 | telemetry의 관측 단서만 저장하고 relation을 확정하지 않음 |
-| Abduction | 가능한 관계 후보가 필요 | 관측 endpoint와 ontology type constraint 안에서 relation hypothesis 생성 |
-| DeBERTa | abductive candidate의 의미적 오탐 | telemetry premise가 relation claim을 실제로 지지하는지 contrastive NLI로 평가 |
-| PSL | 개별 후보는 plausible하지만 전체 그래프에서 충돌 가능 | semantic/prior/ontology/global consistency를 soft logic으로 결합 |
-| Structural Recovery | 불완전 운영지식 | 검증된 `(source, relation, target)`을 Operational Graph에 반영 |
-| Causal Qualification | structural relation ≠ incident cause | 이번 incident에서 실제 전파된 관계만 causal/non-causal 판정 |
-| LLM RCA | 그래프 결과를 운영 판단으로 변환 | root cause, propagation path, 영향, 조치 생성 |
-
-### 후보 폭발 방지 원칙
-
-본 연구는 모든 `Node × Node` 조합을 만들지 않는다.
-
-```text
-금지
-all nodes × all nodes
+완전한 기준 토폴로지
         ↓
-unconstrained relation hypothesis explosion
+관계만 20% / 40% / 60% 제거
+        ↓
+불완전한 토폴로지
 
-사용
-telemetry-grounded endpoint observations
         +
-ontology type constraints
+
+수집 데이터는 그대로 유지
+추적 / 지표 / 로그 / 자원 정보
         ↓
-bounded relation hypothesis space
+가능한 관계 생성
+        ↓
+문장 의미 검증
+        ↓
+규칙 기반 확률 검증
+        ↓
+누락 관계 복원
+        ↓
+복원된 토폴로지
+        ↓
+장애 원인 분석
 ```
 
-현재 구현의 `AbductiveStructuralRelationGenerator`는 **RelationObservation에 존재하는 endpoint pair만 후보화**하며, type-compatible relation만 허용한다. 관측 근거가 전혀 없는 두 독립 객체 사이의 관계는 임의로 발명하지 않고 unknown으로 남긴다.
+### 중요한 원칙
+
+이번 실험에서는 다음을 하지 않는다.
+
+- 수집 데이터를 20%, 40%, 60% 삭제하지 않는다.
+- 노드를 삭제하지 않는다.
+- 관계가 빠졌다는 표시를 모델에 주지 않는다.
+- 장애 인과 라벨을 주 실험에서 마스킹하지 않는다.
+- 모든 노드 조합을 무작정 후보로 만들지 않는다.
+
+**오직 기존 토폴로지의 관계만 제거한다.**
 
 ---
 
-## 4. Stage 1의 수식화
+## 관계 복원 방법
 
-초기 운영 그래프를
+수집된 객체 사이에 연결 단서가 있으면 가능한 관계를 만든다.
 
-\[
-G_0=(V,E_0)
-\]
+예:
 
-라고 하고 structural relation vocabulary를
+```text
+수집 단서
+payment-api에서 PAYDB01 접근 흔적
 
-\[
-\mathcal R=\{CALLS,DEPLOYED\_ON,RUNS\_ON,USES\_DATABASE,\ldots\}
-\]
+가능한 관계
+payment-api --USES_DATABASE--> PAYDB01
+```
 
-로 둔다.
+이후 두 단계를 추가할 수 있다.
 
-Telemetry에서 relation observation 집합
+1. **DeBERTa**: 수집 내용이 제안된 관계의 의미를 실제로 지지하는지 확인하는 문장 의미 검증 모델
+2. **PSL**: 관계 종류와 규칙을 함께 보고 모순되는 후보를 줄이는 확률 규칙 추론
 
-\[
-O=\{o_1,\ldots,o_m\}
-\]
+실험 비교는 다음과 같이 고정한다.
 
-을 얻는다. Abduction은 관측 endpoint와 ontology constraint \(K\)를 만족하는 후보를 생성한다.
-
-\[
-\mathcal H(O,K)=
-\{(u,r,v)\mid grounded(u,v,O)\land compatible(u,r,v,K)\}
-\]
-
-모든 node pair가 아니라 `grounded`된 endpoint만 사용한다.
-
-각 후보 \(h\)의 abductive prior를 \(A(h)\), DeBERTa semantic support와 contradiction을 \(S(h),C(h)\)라 둔다. Semantic margin은
-
-\[
-M(h)=S(h)-C(h)
-\]
-
-로 정의한다.
-
-PSL은 후보별 soft truth value \(y_h\in[0,1]\)에 대해 ontology/global rule violation을 최소화한다.
-
-\[
-y^*=\arg\min_y\sum_k w_k[\max(0,\ell_k(y))]^{p_k}
-\]
-
-최종 structural graph는
-
-\[
-\hat E_S=E_0\cup\{h\in\mathcal H\mid y_h^*\ge\tau_r\}
-\]
-
-이다.
-
-핵심은 **Abduction이 후보를 만들고, DeBERTa와 PSL이 그 후보를 검증·선별한다는 역할 분리**다.
+| 이름 | 구성 | 의미 |
+|---|---|---|
+| S0 | 복원 없음 | 관계가 빠진 토폴로지를 그대로 사용 |
+| S1 | 귀추 | 수집 단서로 가능한 관계 생성 |
+| S2 | 귀추 + DeBERTa | 생성된 관계의 의미 검증 추가 |
+| S3 | 귀추 + PSL | 생성된 관계의 규칙 검증 추가 |
+| S4 | 귀추 + DeBERTa + PSL | 제안 방법 전체 |
 
 ---
 
-## 5. Structural Relation과 Causal Relation은 다르다
+## 주 실험
 
-`CALLS`의 자연 방향과 장애 전파 방향도 구분한다.
+관계 누락 비율은 다음 세 단계다.
 
 ```text
-caller --CALLS--> callee
-
-potential synchronous propagation candidate
-callee --dependency_propagates_to--> caller
+20%
+40%
+60%
 ```
 
-현재 OpenRCA service-level Stage 2에서는 `CALLS`만 propagation candidate로 projection하며, DB/Pod/Node 같은 heterogeneous structural relation을 임의로 service-service causal edge로 축약하지 않는다.
+각 비율에서 S0~S4를 모두 실행한다.
 
-또한 connectivity 자체는 causal evidence에 가산하지 않는다.
+| 관계 누락 | S0 | S1 | S2 | S3 | S4 |
+|---:|---:|---:|---:|---:|---:|
+| 20% | 실행 | 실행 | 실행 | 실행 | 실행 |
+| 40% | 실행 | 실행 | 실행 | 실행 | 실행 |
+| 60% | 실행 | 실행 | 실행 | 실행 | 실행 |
+
+### 가장 중요한 평가값
+
+남아 있는 관계가 많으면 전체 토폴로지 점수가 높게 보일 수 있다. 따라서 주 평가는 **실제로 제거한 관계만 대상으로** 한다.
+
+- 복원 정확도
+- 복원 재현율
+- 복원 F1
+- 관계 종류별 F1
+
+보조 평가로 복원 후 전체 토폴로지 F1을 함께 기록한다.
+
+예:
+
+```text
+원래 관계 50개
+40% 제거 → 20개가 복원 대상
+
+모델이 새로 추가한 관계 18개
+그중 정답 16개
+
+주 평가는 20개 누락 관계를 기준으로 계산
+```
 
 ---
 
-## 6. OpenRCA 2.0과 연구 필요성
+## 장애 원인 분석 실험
 
-OpenRCA 2.0은 dependency graph를 diagnosing agent에게 직접 제공하지 않고 traces, metrics, logs를 이용해 structure, root cause, causal process를 추론하도록 한다. 따라서 본 연구의 incomplete-structure 문제와 잘 맞는다.
+관계 복원 성능만으로 연구를 끝내지 않는다.
 
-OpenRCA 2.0 v2의 11개 frontier LLM 평균은 다음과 같다.
-
-| 문제 | 결과 | 의미 |
-|---|---:|---|
-| 최종 진단 | Outcome F1 **34.1%**, EM **20.7%** | root cause set 복원이 여전히 어려움 |
-| Ungrounded diagnosis | AnySvc **76.0%** vs PR **61.5%** | root service를 찾고도 검증 가능한 path를 만들지 못하는 경우가 존재 |
-| Relation reasoning 병목 | Node F1 **62.2%** vs Edge F1 **43.4%** | component 발견보다 directed relation/process 복원이 더 어려움 |
-
-최고 Outcome F1도 Gemini 3.1 Pro **43.8%**, Claude Opus 4.7 **41.4%** 수준이다.
-
-본 연구는 OpenRCA의 결함을 주장하는 것이 아니다. OpenRCA 2.0의 process supervision이 드러낸 **relation/path reasoning 병목을 더 세분화**한다.
+동일한 장애에 대해 다음 세 토폴로지를 각각 사용한다.
 
 ```text
-Component discovery
-       ↓
-Structural Relation Recovery
-       ↓
-Incident Causal Qualification
-       ↓
-Causal Process Reconstruction
-       ↓
-RCA
+관계가 빠진 토폴로지
+복원한 토폴로지
+완전한 기준 토폴로지
 ```
 
-### Benchmark 범위 주의
+그리고 다음 값을 비교한다.
 
-PAVE `causal_graph.json`은 incident-specific causal process 정답이지 `CALLS / DEPLOYED_ON / RUNS_ON / USES_DATABASE`의 완전한 persistent ontology gold가 아니다.
+- 원인 서비스 적중
+- 원인 경로 도달 여부
+- 노드 F1
+- 관계 F1
 
-따라서:
+원하는 결과는 다음이다.
 
-- `causal_graph.json`, injection label, gold root는 Stage 1에서 사용하지 않는다.
-- Stage 1은 model-visible telemetry만 사용한다.
-- OpenRCA로 enterprise CMDB 전체를 자동 복원했다고 주장하지 않는다.
-- DB/messaging relation은 실제 telemetry attribute가 확인된 case에만 생성한다.
+```text
+관계가 빠진 토폴로지의 장애 분석
+            <
+복원한 토폴로지의 장애 분석
+            <=
+완전한 토폴로지의 장애 분석
+```
 
-2026-08-26의 실제 20-case telemetry smoke에서는 **CALLS, DEPLOYED_ON, RUNS_ON**이 관찰되었다. `USES_DATABASE`, `USES_MESSAGING`은 해당 20-case에서는 확인되지 않았으므로 전체 500-case attribute audit 전에는 coverage를 주장하지 않는다.
+즉 최종 연구 질문은 **관계 복원 자체가 아니라 관계 복원이 실제 장애 분석을 개선하는가**까지 포함한다.
 
 ---
 
-## 7. 실험 설계
+## OpenRCA 2.0 사용 범위
 
-### Track S — Structural Relation Recovery
+OpenRCA 2.0은 추적, 지표, 로그와 장애 원인 경로 평가를 제공하므로 관계 복원 이후의 장애 분석 평가에 적합하다.
 
-논문의 중심 실험이다.
+다만 OpenRCA 2.0에는 완전한 운영 토폴로지 정답 파일이 별도로 제공되지 않는다. 현재 통제 실험에서는 **수집 가능한 전체 데이터에서 만든 구조 관계를 기준 토폴로지로 두고, 그 관계 일부를 제거한 뒤 다시 복원**한다.
 
-Main question:
+따라서 현재 실험의 정확한 표현은 다음과 같다.
 
-> 불완전한 operational observations에서 relation을 얼마나 복원할 수 있는가?
+> **통제된 토폴로지 관계 누락 실험**
 
-평가:
-
-- Structural typed-triple Precision / Recall / F1
-- relation type coverage
-- observation coverage
-- candidate count / selected relation count
-
-**중요:** `service → database` endpoint를 그대로 주고 predicate 이름만 가리면 `USES_DATABASE`가 사실상 노출될 수 있다. 따라서 `mask_structural_relation_types()`는 unit/stress diagnostic일 뿐 main 논문 결과로 사용하지 않는다.
-
-Main Stage-S는 다음 중 하나로 검증한다.
-
-1. 독립 telemetry window / architecture topology reference와 complete triple 비교
-2. full-observation reference를 만든 뒤 relation evidence를 통제적으로 누락시키는 evidence-missingness experiment
-
-### Stage-S Ablation
-
-```text
-S-A0 Observation + Abduction
-S-A1 Observation + Abduction + DeBERTa
-S-A2 Observation + Abduction + PSL
-S-A3 Observation + Abduction + DeBERTa + PSL
-```
-
-### Track C — Controlled Incident Causal Qualification
-
-기존 20/40/60% 실험은 유지하되 의미를 명확히 한다.
-
-```text
-Observed service pair 보존
-causal_propagates_to / non_causal_dependency만 mask
-```
-
-```text
-A0 Graph/visible causal facts
-A1 Abduction
-A2 Abduction + DeBERTa
-A3 Abduction + PSL
-A4 Abduction + DeBERTa + PSL
-A5 A4 + constrained LLM adjudication
-```
-
-이 결과는 **Stage 2 causal qualification**이며 Stage 1 structural relation recovery 성능이 아니다.
-
-### Track O — OpenRCA Standard End-to-End
-
-최종적으로 세 조건을 비교한다.
-
-```text
-Incomplete Structure → RCA
-Recovered Structure  → RCA
-Reference/Oracle Structure → RCA
-```
-
-핵심 downstream 효과는
-
-\[
-\Delta RCA = Metric(RCA_{Recovered})-Metric(RCA_{Incomplete})
-\]
-
-이다.
-
-즉 relation F1만 높이는 것이 아니라 **복원된 relation이 Edge F1, Path Reachability, Root outcome을 실제로 개선하는지**가 최종 주장이다.
+최종 논문에서 더 강한 주장을 하려면 공개 시스템의 실제 배포 구조나 별도 토폴로지 기준 자료를 추가 평가 기준으로 사용할 수 있다.
 
 ---
 
-## 8. 현재 Stage 2 결과
-
-### 20-case / 40% causal-relation mask
-
-| Variant | Causal Rel F1 | Node F1 | Edge F1 | Path Reach | Root@1 | Root@3 |
-|---|---:|---:|---:|---:|---:|---:|
-| A0 | 0.00% | 78.86% | 72.83% | 20% | 10% | 25% |
-| A1 | 29.67% | 69.02% | 61.76% | 30% | 15% | 30% |
-| A2 | 37.17% | 75.68% | 67.43% | 35% | 20% | 40% |
-| A3 | 37.17% | 75.68% | 67.43% | 35% | 20% | 40% |
-| A4 | 37.17% | 75.68% | 67.43% | **40%** | 15% | **45%** |
-
-A1→A2에서 semantic discrimination의 이득이 관찰되었고, A4는 thresholded relation F1은 동일하지만 Path Reachability와 Root@3를 개선했다.
-
-### Standard 150-case intermediate
-
-| Metric | Result |
-|---|---:|
-| AnySvc | 60.00% |
-| Path Reachability | 57.33% |
-| Node F1 | 52.94% |
-| Edge F1 | 38.11% |
-| Edge Precision | 28.87% |
-| Edge Recall | 80.26% |
-
-Stage 2에서는 Recall보다 Precision이 크게 낮아 현재 병목은 candidate enumeration보다 **false-positive causal relation pruning**에 가깝다.
-
-500-case final 수치는 완료 결과를 확인하기 전에는 추정하여 기록하지 않는다.
-
----
-
-## 9. 코드 구조와 연구-코드 정합성
+## 코드 구조
 
 ```text
-src/openrca_mr/
-  models.py
-    RelationObservation
-    StructuralHypothesis
-    Hypothesis                 # Stage 2 causal
+수집 데이터에서 연결 단서 생성
+src/openrca_mr/structural.py
 
-  structural.py
-    collect_structural_observations
-    AbductiveStructuralRelationGenerator
-    StructuralRelationRecovery
-    recover_structural_relations
-    propagation_service_edges
+토폴로지 관계 제거 / 복원
+src/openrca_mr/topology_recovery.py
 
-  semantic.py
-    DebertaStructuralRelationScorer   # Stage 1
-    DebertaEvidenceScorer             # Stage 2
+20% / 40% / 60% 평가
+src/openrca_mr/stage1_eval.py
 
-  psl.py
-    PslStructuralInference            # Stage 1
-    PslGlobalInference                # Stage 2
+실행
+scripts/run_structural_recovery.py
 
-  abduction.py                 # Stage 2 causal hypotheses
-  masking.py                   # Stage 2 causal mask + diagnostic masks
-  pipeline.py                  # Stage 2 RCA/path/root ranking
-  openrca2.py                  # normalized IO
+자동 검증
+.github/workflows/openrca2-smoke.yml
 ```
 
-### 강제하는 불변조건
+### 직접 실행 예
 
-1. RelationObservation에는 gold relation label을 저장하지 않는다.
-2. Stage 1은 PAVE causal graph/root/injection gold를 읽지 않는다.
-3. Abduction은 global Cartesian `Node × Node`를 생성하지 않는다.
-4. ontology type-compatible candidate만 허용한다.
-5. generic/weak co-observation만으로 relation을 자동 확정하지 않는다.
-6. Structural Relation과 Incident Causal Relation을 별도 자료구조/단계로 취급한다.
-7. `CALLS` natural direction과 Stage-2 propagation direction을 명시적으로 구분한다.
-8. 기존 normalized JSONL과 `RcaCase` positional constructor를 backward compatible하게 유지한다.
-9. Stage-2 causal masking은 Stage-1 observations/relations를 보존한다.
-10. LLM constrained adjudication은 관측되지 않은 endpoint pair를 새로 발명하지 않는다.
+```bash
+python scripts/run_structural_recovery.py \
+  --data artifacts/topology_cases.jsonl \
+  --out results/s4_40.json \
+  --variant abduction_deberta_psl \
+  --topology-missing-ratio 0.40 \
+  --seed 42
+```
+
+자동 실험은 현재 수동 실행만 허용한다. 실행하면 20%, 40%, 60%와 S0~S4 조합을 모두 계산한다.
 
 ---
 
-## 10. 검증 상태
+## 이전 실험과의 구분
 
-- Stage-1 observation / abduction / semantic / soft-logic 경계에 대한 regression test 추가
-- legacy JSONL / positional constructor / Stage-2 masking backward compatibility test 유지
-- 최신 unit regression: **28 tests passed**
-- Stage-1 실제 `pslpython` synthetic inference를 GitHub Actions smoke로 별도 검증
-- OpenRCA 20-case real telemetry adapter smoke는 `[ops-lite-20]` gated workflow에서 재검증
+이전 브랜치 작업에는 다음 실험이 있었다.
 
----
+- 수집 정보 자체를 제거하는 실험
+- 장애 인과 관계 라벨을 제거하는 실험
+- 정상 구간과 장애 구간의 구조 일치도를 비교하는 실험
 
-## 11. 최종 논문 검증 순서
+이 값들은 현재 문제정의의 주 결과로 사용하지 않는다.
 
-```text
-S0  Telemetry relation-observation coverage audit
-S1  Structural relation recovery A0-A3
-S2  Evidence missingness / independent-reference evaluation
-C1  Reference/observed structure → Stage-2 causal qualification
-C2  Recovered structure → Stage-2 causal qualification
-O1  Incomplete vs Recovered vs Oracle structure의 OpenRCA end-to-end 비교
-```
+현재 연구의 주 실험은 오직 다음이다.
 
-최종 핵심 주장은 다음 하나로 제한한다.
-
-> **수작업으로 완성하기 어려운 운영 ontology에서 telemetry-grounded abduction으로 structural relation 후보를 만들고 DeBERTa와 PSL로 후보를 검증·선별하면, 불완전한 operational graph를 보강할 수 있으며 그 보강이 causal-process RCA의 관계·경로 성능 개선으로 이어지는가?**
-
-OpenRCA 2.0 원문: https://arxiv.org/html/2606.27154v2
-
-이전 MAGIC, WN18RR, WebQSP, Rashomon Worlds, Tableau, BADP 기반 탐색 과정은 [`studycase.md`](studycase.md)에 보존한다.
+> **수집 정보는 그대로 둔 상태에서 기존 토폴로지 관계가 없을 때 그 관계를 복원하는 실험**
