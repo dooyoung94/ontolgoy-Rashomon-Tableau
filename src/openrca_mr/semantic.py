@@ -22,10 +22,14 @@ class DebertaEvidenceScorer:
     """Contrastive NLI scorer for Stage-2 causal vs non-causal semantics."""
 
     DEFAULT_MODEL = "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
+    # Immutable Hugging Face revision used by all paper runners. Model names
+    # alone are mutable and therefore insufficient for reproducible ablations.
+    DEFAULT_REVISION = "bc8602904bd44dbfd3915e71a32345ae408fd933"
 
     def __init__(
         self,
         model_name: str = DEFAULT_MODEL,
+        model_revision: str = DEFAULT_REVISION,
         device: str | None = None,
         batch_size: int = 16,
     ):
@@ -37,8 +41,13 @@ class DebertaEvidenceScorer:
 
         self.torch = torch
         self.model_name = model_name
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        self.model_revision = model_revision
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name, revision=model_revision
+        )
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            model_name, revision=model_revision
+        )
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)

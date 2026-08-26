@@ -19,6 +19,12 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--relation-threshold", type=float, default=0.5)
     parser.add_argument("--rca-edge-threshold", type=float, default=0.5)
+    parser.add_argument(
+        "--evaluation-relation-types",
+        nargs="+",
+        default=["calls", "uses_database"],
+        help="Primary relation types to mask and score (default: calls uses_database).",
+    )
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument(
         "--allow-derived-reference",
@@ -42,6 +48,7 @@ def main() -> None:
         limit=args.limit,
         reference_data=args.reference_data,
         allow_derived_reference=args.allow_derived_reference,
+        evaluation_relation_types=frozenset(args.evaluation_relation_types),
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

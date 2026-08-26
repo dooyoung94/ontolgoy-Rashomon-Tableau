@@ -14,10 +14,11 @@ from .metrics import (
     root_set_metrics,
     service_edge_metrics,
 )
-from .models import RcaCase
+from .models import RcaCase, STRUCTURAL_RELATION_TYPES
 from .openrca2 import load_normalized_cases
 from .pipeline import IncidentCausalRCA
 from .psl import PslGlobalInference, PslStructuralInference
+from .reference_topology import PRIMARY_REFERENCE_RELATION_TYPES
 from .research_protocol import audit_reference_protocol, topology_group_id
 from .semantic import DebertaEvidenceScorer, DebertaStructuralRelationScorer
 from .structural import propagation_service_edges, structural_relation_metrics
@@ -159,6 +160,7 @@ def run_topology_rca_evaluation(
     limit: int = 0,
     reference_data: str | None = None,
     allow_derived_reference: bool = False,
+    evaluation_relation_types: frozenset[str] | set[str] | None = None,
 ) -> dict:
     """Jointly evaluate missing topology relation recovery and OpenRCA-style RCA.
 
@@ -179,6 +181,18 @@ def run_topology_rca_evaluation(
         raise ValueError("relation_threshold must be in [0, 1]")
     if not 0.0 <= rca_edge_threshold <= 1.0:
         raise ValueError("rca_edge_threshold must be in [0, 1]")
+    evaluation_relation_types = frozenset(
+        PRIMARY_REFERENCE_RELATION_TYPES
+        if evaluation_relation_types is None
+        else evaluation_relation_types
+    )
+    unknown_relation_types = evaluation_relation_types - STRUCTURAL_RELATION_TYPES
+    if unknown_relation_types:
+        raise ValueError(
+            f"unknown evaluation relation types: {sorted(unknown_relation_types)}"
+        )
+    if not evaluation_relation_types:
+        raise ValueError("evaluation_relation_types must not be empty")
 
     do_recovery, topology_deberta, topology_psl = TOPOLOGY_VARIANTS[topology_variant]
     cases = load_normalized_cases(data)
@@ -217,6 +231,7 @@ def run_topology_rca_evaluation(
         case_groups,
         topology_missing_ratio,
         seed,
+        eligible_relation_types=evaluation_relation_types,
     )
 
     topology_semantic = DebertaStructuralRelationScorer() if topology_deberta else None
@@ -242,8 +257,21 @@ def run_topology_rca_evaluation(
             added = []
             recovered_topology = list(masked.visible_relations)
 
-        missing_score = structural_relation_metrics(added, masked.missing_relations)
-        full_score = structural_relation_metrics(recovered_topology, full_topology)
+        evaluated_added = [
+            edge for edge in added if edge.relation in evaluation_relation_types
+        ]
+        evaluated_recovered = [
+            edge
+            for edge in recovered_topology
+            if edge.relation in evaluation_relation_types
+        ]
+        evaluated_full = [
+            edge for edge in full_topology if edge.relation in evaluation_relation_types
+        ]
+        missing_score = structural_relation_metrics(
+            evaluated_added, masked.missing_relations
+        )
+        full_score = structural_relation_metrics(evaluated_recovered, evaluated_full)
 
         conditions = {
             "incomplete": masked.visible_relations,
@@ -253,9 +281,10 @@ def run_topology_rca_evaluation(
         row = {
             "case_id": case.case_id,
             "topology_group": case_groups[case.case_id],
-            "n_full_topology_relations": len(full_topology),
+            "n_full_topology_relations": len(evaluated_full),
+            "n_auxiliary_topology_relations": len(full_topology) - len(evaluated_full),
             "n_missing_topology_relations": len(masked.missing_relations),
-            "n_added_topology_relations": len(added),
+            "n_added_topology_relations": len(evaluated_added),
             "missing_relation_precision": (
                 missing_score.precision if masked.missing_relations else None
             ),
@@ -307,6 +336,7 @@ def run_topology_rca_evaluation(
         "seed": seed,
         "claim_scope": reference_audit.claim_scope,
         "reference_audit": reference_audit.to_dict(),
+        "evaluation_relation_types": sorted(evaluation_relation_types),
         "protocol": {
             "collector_observations_modified": False,
             "topology_nodes_removed": False,
@@ -319,6 +349,7 @@ def run_topology_rca_evaluation(
             "masking_unit": "topology_group",
             "empty_missing_cases_in_macro": "excluded",
             "visible_topology_constraint_inference": topology_psl,
+            "auxiliary_relations_are_evaluation_targets": False,
         },
         "topology_summary": {
             "mean_missing_relations": _mean(rows, "n_missing_topology_relations"),
@@ -353,5 +384,9 @@ def run_topology_rca_evaluation(
 
     path = Path(out)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    temporary.replace(path)
     return result

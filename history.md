@@ -69,14 +69,25 @@
 - **지표:** 제거 관계 0건 사례의 macro 평균 제외, realized mask ratio와 Candidate Recall Ceiling 추가
 - **판정:** 연구 결과 산출 전 필수 프로토콜 수정
 
+### 2026-08-27 — 독립 reference 및 Stage-1 재현 실행 계약 구현
+
+- **주 평가 관계:** `CALLS`, `USES_DATABASE`; `HAS_SERVICE`는 auxiliary-only
+- **시점 관계:** `DEPLOYED_ON`, `RUNS_ON`은 incident snapshot/effective interval 정렬 전까지 builder에서 거부
+- **Reference:** 외부 CSV의 source/version/독립성 attestation, ontology domain-range, topology-group coverage 검사
+- **실험 실행:** A0~A4 × seeds `[13, 42, 97, 123, 2026]` × ratios `[0.2, 0.4, 0.6]` 고정
+- **재현성:** 입력/reference SHA-256 일치 시에만 중단 매트릭스 재개, seed별 mean/sample std 집계
+- **식별성:** DeBERTa·PSL score shift, threshold flip, PSL 제약 활성화를 기록하고 효과가 없는 ablation을 경고
+- **검증:** 단위·회귀 테스트 51건 통과(실데이터·전체 모델 매트릭스는 외부 독립 reference 확보 후 실행)
+- **판정:** 코드/프로토콜 준비 완료, 주 결과는 아직 미산출
+
 ---
 
 ## 다음 연구 작업
 
 1. OpenRCA 2.0 공식 500-case artifact와 현재 snapshot의 데이터 버전 확인
-2. typed relation reference topology 생성 규칙과 provenance 확정
-3. nested masking 20% / 40% / 60% 및 복수 seed 구현
-4. Track A A0~A4 전체 ablation 실행
+2. 외부 service catalog/CMDB export를 확보하고 independent reference builder 실행
+3. 20-case A0~A4 × 5-seed × 3-ratio 매트릭스 및 식별성 경고 확인
+4. 경고 해소 후 OpenRCA 2.0 전체 사례 Track A 실행
 5. LLM RCA 입력 계약과 관계 confidence 표현 확정
 6. Track B O0 및 B0~B4 자동 평가 구현
 7. paired bootstrap, McNemar, interaction effect 계산

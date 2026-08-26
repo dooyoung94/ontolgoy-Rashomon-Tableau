@@ -45,6 +45,12 @@ H1~H4는 결론이 아니라 실험으로 검증할 명제다. 결과가 성립�
 
 노드는 유지하고 관계만 제거한다. 제거된 관계와 정답 관계는 모델에 공개하지 않는다.
 
+첫 주 실험의 평가 대상은 독립 자료로 검증 가능한 `CALLS`, `USES_DATABASE`로 고정한다.
+`HAS_SERVICE`는 마스킹·점수 계산에서 제외한 보조 문맥이다. `DEPLOYED_ON`, `RUNS_ON`은
+incident topology snapshot과 관계 effective interval이 모두 확보된 경우에만 후속 실험에
+포함하며, 현재 reference builder는 시점 정렬 없는 입력을 거부한다. `USES_MESSAGING`은
+독립 기준 자료의 범위가 확정될 때까지 첫 주 실험에서 제외한다.
+
 ---
 
 ## 전체 연구 구조
@@ -237,6 +243,9 @@ $$
 - 기존 telemetry-derived embedded topology는 `--allow-derived-reference`를 붙인 CI·단위검증에서만
   허용하며, 산출물은 자동으로 `claim_scope=diagnostic_only`가 된다.
 - 제거 관계가 0개인 사례는 missing-relation macro 평균에서 제외한다.
+- 외부 reference 생성 시 독립성 확인을 명시적으로 attestation하고 source와 immutable version을 기록한다.
+- DeBERTa 또는 PSL이 선택 임계값에서 단 한 건도 결정을 바꾸지 않으면 해당 ablation을
+  식별 가능하다고 해석하지 않고 `review_required`로 기록한다.
 
 ---
 
@@ -244,7 +253,9 @@ $$
 
 - OpenRCA 2.0의 장애 사례와 단계별 원인 전파 정답을 RCA 평가에 사용한다.
 - OpenRCA 2.0이 완전한 영구 토폴로지 정답을 제공한다고 가정하지 않는다.
-- 현재 완전 기준 토폴로지는 사용 가능한 수집 데이터에서 구성한 통제 실험용 구조다.
+- telemetry-derived topology는 CI·단위검증용 diagnostic 구조일 뿐 주 결과 정답이 아니다.
+- 실제 주 결과는 별도 service catalog, deployment manifest 또는 CMDB export가 제공되고
+  독립 reference builder를 통과한 뒤에만 산출한다.
 - 공개 mirror 또는 snapshot을 사용하면 dataset ID와 버전을 결과에 기록한다.
 - 결과는 통제된 관계 누락 환경에서의 복원 및 LLM-RCA 효과로 한정하여 해석한다.
 
@@ -262,6 +273,9 @@ $$
 - 독립 reference provenance 검사와 순환 reference 차단
 - empty-denominator macro 제외, 실제 마스킹 비율 및 candidate ceiling 기록
 - PSL이 visible topology의 기능적 관계 제약을 실제 추론 입력으로 사용
+- 외부 CSV → evaluator-only reference JSONL 변환·도메인/범위·coverage 검증
+- A0~A4 × 5 seeds × 3 ratios 고정 매트릭스, 입력 해시 기반 재개, mean/sample-std 집계
+- DeBERTa·PSL 선택 flip 및 제약 활성화 기반 ablation 식별성 경고
 
 ### 다음 구현
 
@@ -286,11 +300,21 @@ src/openrca_mr/topology_recovery.py
 관계 복원 평가
 src/openrca_mr/stage1_eval.py
 
+외부 독립 reference 계약/생성
+src/openrca_mr/reference_topology.py
+
+고정 Stage-1 실험 매트릭스와 식별성 진단
+src/openrca_mr/experiment_matrix.py
+
 토폴로지 + OpenRCA 장애 원인 분석 통합 평가
 src/openrca_mr/topology_rca_eval.py
 
 관계 복원 실행
 scripts/run_structural_recovery.py
+
+외부 reference 생성 / 전체 매트릭스 실행
+scripts/build_reference_topology.py
+scripts/run_stage1_matrix.py
 
 통합 평가 실행
 scripts/run_topology_rca_evaluation.py
@@ -301,6 +325,22 @@ scripts/run_topology_rca_evaluation.py
 
 ### Track A 실행
 
+먼저 모델 입력과 별도로 버전 관리된 외부 CSV를 준비한다. 필수 열은
+`topology_group,source,relation,target`이다. 독립성은 코드가 자동으로 증명할 수 없으므로
+검수 후에만 attestation 옵션을 사용한다.
+
+```bash
+python scripts/build_reference_topology.py \
+  --data artifacts/topology_cases.jsonl \
+  --external-topology-csv artifacts/service_catalog_v1.csv \
+  --out artifacts/reference_topology.jsonl \
+  --source service-catalog \
+  --version git-commit-or-export-id \
+  --attest-independent-of-model-observations
+```
+
+단일 조건 확인:
+
 ```bash
 python scripts/run_structural_recovery.py \
   --data artifacts/topology_cases.jsonl \
@@ -310,6 +350,24 @@ python scripts/run_structural_recovery.py \
   --topology-missing-ratio 0.40 \
   --seed 42
 ```
+
+논문용 고정 75회 매트릭스(A0~A4 × 5 seeds × 3 ratios):
+
+```bash
+python scripts/run_stage1_matrix.py \
+  --data artifacts/topology_cases.jsonl \
+  --reference-data artifacts/reference_topology.jsonl \
+  --out-dir results/stage1_matrix
+```
+
+중단된 동일 실험은 `--resume`으로 이어갈 수 있다. 입력 또는 reference의 SHA-256이나
+실험 grid가 달라지면 재개를 거부한다. 최종 `matrix.json`의
+`ablation_identifiability.status`가 `review_required`이면 평균 성능표를 논문 근거로 사용하기
+전에 warning 원인을 먼저 해결한다. 전체 PSL 매트릭스는 현재 검증된 Python 3.10 + Java 17
+환경에서 실행한다.
+DeBERTa 가중치는 `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli`의 immutable revision
+`bc8602904bd44dbfd3915e71a32345ae408fd933`으로 고정하며 matrix checkpoint에 런타임과
+주요 패키지 버전을 함께 기록한다.
 
 ### 현재 Track A + 비-LLM RCA 통합 평가
 
