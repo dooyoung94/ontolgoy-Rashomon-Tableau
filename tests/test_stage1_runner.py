@@ -19,7 +19,8 @@ from openrca_mr.models import (
 )
 from openrca_mr.openrca2 import dump_normalized_cases
 from openrca_mr.pipeline import IncidentCausalRCA, MissingRelationRCA
-from openrca_mr.stage1_eval import drop_relation_observations, run_stage1_evaluation
+from openrca_mr.stage1_eval import run_stage1_evaluation
+from openrca_mr.topology_recovery import mask_topology_relations
 
 
 def _case(case_id: str = "s1") -> RcaCase:
@@ -60,7 +61,7 @@ def _case(case_id: str = "s1") -> RcaCase:
     )
 
 
-def test_stage2_new_names_and_legacy_aliases_are_identical():
+def test_stage2_legacy_aliases_remain_compatible():
     assert MissingRelationRCA is IncidentCausalRCA
     assert AbductiveRelationGenerator is AbductiveCausalRelationGenerator
 
@@ -74,44 +75,79 @@ def test_incident_causal_pipeline_validates_threshold_and_root_count():
         IncidentCausalRCA(max_root_causes=0)
 
 
-def test_observation_drop_is_stable_and_nested():
+def test_topology_mask_removes_relations_only_and_is_stable():
     case = _case("stable")
-    keep0 = drop_relation_observations(case, 0.0, seed=42)
-    keep50 = drop_relation_observations(case, 0.5, seed=42)
-    keep100 = drop_relation_observations(case, 1.0, seed=42)
-    keep50_again = drop_relation_observations(case, 0.5, seed=42)
-    assert keep0 == case.relation_observations
-    assert keep50 == keep50_again
-    assert set(x.observation_id for x in keep100) <= set(x.observation_id for x in keep50)
-    assert len(keep50) == 1
-    assert keep100 == []
+    masked_a = mask_topology_relations(case.case_id, case.structural_relations, 0.5, seed=42)
+    masked_b = mask_topology_relations(case.case_id, case.structural_relations, 0.5, seed=42)
+
+    assert masked_a == masked_b
+    assert len(masked_a.visible_relations) == 1
+    assert len(masked_a.missing_relations) == 1
+    assert set(masked_a.visible_relations).isdisjoint(set(masked_a.missing_relations))
+    assert set(masked_a.visible_relations + masked_a.missing_relations) == set(case.structural_relations)
+    # 수집 정보는 mask 함수의 입력조차 아니므로 삭제될 수 없다.
+    assert len(case.relation_observations) == 2
 
 
-def test_stage1_runner_uses_observations_only_and_scores_typed_triples(tmp_path):
+def test_topology_mask_is_nested_across_missing_ratios():
+    case = _case("nested")
+    m0 = mask_topology_relations(case.case_id, case.structural_relations, 0.0, seed=42)
+    m50 = mask_topology_relations(case.case_id, case.structural_relations, 0.5, seed=42)
+    m100 = mask_topology_relations(case.case_id, case.structural_relations, 1.0, seed=42)
+
+    assert m0.missing_relations == []
+    assert set(m50.missing_relations) <= set(m100.missing_relations)
+    assert m100.visible_relations == []
+
+
+def test_s0_keeps_incomplete_topology_without_recovery(tmp_path):
     data = tmp_path / "cases.jsonl"
-    out = tmp_path / "result.json"
+    out = tmp_path / "s0.json"
     dump_normalized_cases([_case()], data)
 
     result = run_stage1_evaluation(
         data=str(data),
         out=str(out),
-        variant="observation_abduction",
-        observation_drop_ratio=0.0,
+        variant="topology_only",
+        topology_missing_ratio=0.5,
         seed=42,
     )
-    assert result["track"] == "stage1_structural_relation_recovery"
-    assert result["reference_protocol"] == "same_artifact_full_observation_reference_diagnostic"
-    assert result["protocol"]["all_pairs_generation"] is False
-    assert result["summary"]["macro_structural_precision"] == 1.0
-    assert result["summary"]["macro_structural_recall"] == 1.0
-    assert result["summary"]["macro_structural_f1"] == 1.0
-    assert result["summary"]["micro_structural_f1"] == 1.0
+
+    assert result["track"] == "missing_topology_relation_recovery"
+    assert result["protocol"]["collector_observations_modified"] is False
+    assert result["protocol"]["masked_object"] == "topology_relation"
+    assert result["summary"]["micro_missing_relation_recall"] == 0.0
+    assert result["rows"][0]["n_visible_relations"] == 1
+    assert result["rows"][0]["n_missing_relations"] == 1
+    assert result["rows"][0]["n_added_relations"] == 0
+
+
+def test_s1_recovers_relation_missing_from_topology_using_unchanged_collector_data(tmp_path):
+    data = tmp_path / "cases.jsonl"
+    out = tmp_path / "s1.json"
+    dump_normalized_cases([_case()], data)
+
+    result = run_stage1_evaluation(
+        data=str(data),
+        out=str(out),
+        variant="abduction",
+        topology_missing_ratio=0.5,
+        seed=42,
+    )
+
+    assert result["summary"]["micro_missing_relation_precision"] == 1.0
+    assert result["summary"]["micro_missing_relation_recall"] == 1.0
+    assert result["summary"]["micro_missing_relation_f1"] == 1.0
+    assert result["summary"]["micro_full_topology_f1"] == 1.0
+    assert result["rows"][0]["n_collector_observations"] == 2
+    assert result["rows"][0]["n_added_relations"] == 1
+
     saved = json.loads(out.read_text(encoding="utf-8"))
-    assert saved["rows"][0]["n_candidates"] == 2
-    assert saved["rows"][0]["n_selected_relations"] == 2
+    assert saved["topology_missing_ratio"] == 0.5
+    assert saved["protocol"]["masked_relation_marker_visible_to_model"] is False
 
 
-def test_stage1_runner_joins_independent_reference_by_case_id(tmp_path):
+def test_runner_joins_independent_topology_reference_by_case_id(tmp_path):
     data = tmp_path / "input.jsonl"
     reference = tmp_path / "reference.jsonl"
     out = tmp_path / "independent.json"
@@ -122,15 +158,16 @@ def test_stage1_runner_joins_independent_reference_by_case_id(tmp_path):
         data=str(data),
         reference_data=str(reference),
         out=str(out),
-        variant="observation_abduction",
+        variant="abduction",
+        topology_missing_ratio=0.5,
     )
+
     assert result["n"] == 1
-    assert result["reference_protocol"] == "independent_reference_artifact"
+    assert result["reference_protocol"] == "independent_topology_reference"
     assert result["rows"][0]["case_id"] == "case-A"
-    assert result["summary"]["micro_structural_f1"] == 1.0
 
 
-def test_stage1_runner_rejects_missing_reference_case_ids(tmp_path):
+def test_runner_rejects_missing_reference_case_ids(tmp_path):
     data = tmp_path / "input.jsonl"
     reference = tmp_path / "reference.jsonl"
     out = tmp_path / "out.json"
@@ -142,25 +179,6 @@ def test_stage1_runner_rejects_missing_reference_case_ids(tmp_path):
             data=str(data),
             reference_data=str(reference),
             out=str(out),
-            variant="observation_abduction",
+            variant="abduction",
+            topology_missing_ratio=0.5,
         )
-
-
-def test_stage1_runner_detects_cross_window_protocol(tmp_path):
-    data = tmp_path / "cross-window.jsonl"
-    out = tmp_path / "out.json"
-    case = _case("case-A")
-    case.metadata["structural_reference_protocol"] = (
-        "normal_window_reference_vs_abnormal_window_observations"
-    )
-    dump_normalized_cases([case], data)
-
-    result = run_stage1_evaluation(
-        data=str(data),
-        out=str(out),
-        variant="observation_abduction",
-    )
-    assert result["reference_protocol"] == (
-        "normal_window_reference_vs_abnormal_window_observations"
-    )
-    assert "cross-window structural consistency" in result["protocol"]["warning"].lower()
