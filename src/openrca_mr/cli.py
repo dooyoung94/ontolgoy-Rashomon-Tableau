@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from .abduction import AbductiveRelationGenerator
+from .abduction import AbductiveCausalRelationGenerator
 from .masking import mask_causal_relation_types
 from .metrics import (
     process_path_reachability,
@@ -11,7 +11,7 @@ from .metrics import (
     root_hit_at_k,
 )
 from .openrca2 import load_normalized_cases
-from .pipeline import MissingRelationRCA
+from .pipeline import IncidentCausalRCA
 from .psl import PslGlobalInference, SoftLogicApproximation
 from .semantic import DebertaEvidenceScorer, DeterministicEvidenceScorer
 
@@ -20,7 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "OpenRCA 2.0 Stage-2 controlled incident-causal relation qualification. "
-            "Stage-1 structural recovery is exposed through openrca_mr.structural."
+            "Stage-1 structural recovery uses scripts/run_structural_recovery.py."
         )
     )
     parser.add_argument("data", help="Normalized OpenRCA 2.0 JSONL")
@@ -53,8 +53,8 @@ def main() -> None:
         "none": lambda: None,
     }[args.logic]()
 
-    model = MissingRelationRCA(
-        generator=AbductiveRelationGenerator(),
+    model = IncidentCausalRCA(
+        generator=AbductiveCausalRelationGenerator(),
         semantic_scorer=semantic,
         global_inference=logic,
     )
