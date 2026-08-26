@@ -1,603 +1,623 @@
-# 선행 실험과 연구 문제의 발전 과정
+# 선행 Study Cases: MAGIC와 DAFNA-EA Books/Authors
 
-## 1. 문서 목적
+## 1. 문서 목적과 범위
 
-본 문서는 제안 방법이 어떤 연구적 고민과 실패를 거쳐 도출되었는지를 정리한다. 단순한 개발 이력이나 성공 결과의 나열이 아니라, 각 단계에서 **무엇을 문제로 보았고, 어떤 가설을 세웠으며, 실제 실험 결과 때문에 연구 질문이 어떻게 바뀌었는지**를 기록한다.
+이 문서는 현재 진행 중인 RCA/OpenRCA 연구의 실행 로그가 아니다. **현재 연구에 앞서 수행했던 두 개의 독립적인 선행 실험 사례(MAGIC, DAFNA-EA Books/Authors)를 외부 독자가 처음부터 이해할 수 있도록 정리한 Study Case 문서**다.
 
-또한 과거 실험 중 구현 오류가 확인된 실행은 최종 성능 근거에서 제외한다. 특히 자연어 MAGIC 실험은 이후 `scorer input`, provenance metadata, retry/accounting, analyzer eligibility 등이 수정되었으므로 수정 이전의 수치를 최종 성능으로 사용하지 않는다. 본 문서에서 수치를 제시하는 경우 현재 결과 파일 또는 수정 이후 검증된 실행을 기준으로 한다.
+문서의 목적은 다음 세 가지다.
 
-연구의 전체 흐름은 다음과 같다.
+1. 어떤 데이터에서 어떤 문제가 있었는지 설명한다.
+2. 왜 `Rashomon / Possible Worlds`, `Tableau`, provenance, reliability 같은 개념을 실험하게 되었는지 설명한다.
+3. 실제 측정 결과를 통해 무엇이 가능했고 무엇이 병목이었는지를 구분한다.
 
-$$
-\text{상충 주장 해결}
-\rightarrow
-\text{복수 해석 보존}
-\rightarrow
-\text{온톨로지 불완전성 문제}
-\rightarrow
-\text{관계 후보 예측}
-\rightarrow
-\text{의미 점수화}
-\rightarrow
-\text{가지치기 손실 발견}
-\rightarrow
-\text{경계 인식 보존}
-\rightarrow
-\text{조건부 BADP}
-$$
-
-현재 논문의 중심은 최종 진실 판정 자체가 아니라, **후속 추론에 필요한 유효 경로를 조기에 소실하지 않는 가지치기 정책**이다.
+이 문서에는 observability log, OpenRCA, 장애 원인 분석 파이프라인, 현재 논문의 실험 결과를 포함하지 않는다. 그 내용은 별도의 `paper.md`에서 다룬다.
 
 ---
 
-## 2. 출발점: Rashomon Worlds와 Tableau를 이용한 상충 해결
+# 2. 전체 연구 흐름
 
-### 2.1 초기 연구 질문
+두 Study Case의 공통 문제는 **여러 개의 그럴듯한 설명이나 주장이 동시에 존재할 때 너무 일찍 하나를 선택하면 정답을 잃을 수 있다**는 것이었다.
 
-초기에는 다음 문제를 해결하려 하였다.
-
-> 다중 홉 경로에서 서로 다른 설명이나 주장이 동시에 존재할 때 하나의 설명을 즉시 선택하지 않고 여러 가능한 설명을 유지한 뒤, 온톨로지 제약과 Tableau를 이용해 논리적으로 불가능한 설명을 제거할 수 있는가?
-
-초기 구조는 다음과 같았다.
+초기 연구 질문은 다음과 같이 발전했다.
 
 ```text
-질의 / 주장
-  ↓
-다중 홉 경로 탐색
-  ↓
-복수의 설명 후보
-  ↓
-Rashomon / Possible Worlds
-  ↓
-Ontology constraints
-  ↓
-Tableau consistency checking
-  ↓
-일관된 world만 유지
-  ↓
-최종 설명 또는 주장
+상충하는 사실/경로가 존재한다
+        ↓
+하나를 즉시 선택하면 정답 후보를 버릴 수 있다
+        ↓
+여러 해석을 Possible Worlds로 보존한다
+        ↓
+논리적으로 불가능한 world는 Tableau로 제거한다
+        ↓
+남은 world를 provenance / source reliability로 비교한다
+        ↓
+"정답 후보를 만드는 문제"와
+"그 후보 중 정답을 고르는 문제"를 분리해서 평가한다
 ```
 
-핵심 아이디어는 `Preserve before Resolve`, 즉 **판정 전에 대안을 보존한다**는 것이었다.
+이 관점을 한 문장으로 요약하면 다음과 같다.
 
-### 2.2 통제된 Tableau 실험에서 얻은 첫 번째 관찰
+> **Preserve before Resolve — 판정하기 전에 가능한 설명을 충분히 보존한다.**
 
-초기 통제 실험에서는 병합된 ABox보다 관점별로 명제를 분리했을 때 모순의 발생 위치를 더 정확히 구분할 수 있었다. 그러나 이 결과는 자연어 일반화 성능이 아니라 **의도적으로 구성된 논리 규칙에 대해 reasoner가 올바르게 작동하는지 확인한 단위 검증**이었다.
+두 데이터셋은 이 명제를 서로 다른 방향에서 검증했다.
 
-따라서 이 단계에서 얻은 핵심은 높은 정확도 자체가 아니라 다음이었다.
+| Study Case | 주된 질문 | 입력의 불확실성 | 핵심 평가 |
+|---|---|---|---|
+| MAGIC | 다중 홉 상충 설명을 올바르게 구성·지역화할 수 있는가? | 관계 의미와 경로 해석 | conflict recall, gold-world recall, localization |
+| DAFNA-EA Books/Authors | 여러 출처의 상충 저자 주장 중 실제 truth를 선택할 수 있는가? | 출처 신뢰도와 다중 값 truth | gold-world coverage, exact truth accuracy, Author F1 |
 
-> 여러 설명을 하나로 합치기보다 서로 분리해 유지하면 모순의 범위와 설명 provenance를 보존할 수 있다.
-
-이는 이후 복수 경로 보존이라는 연구 방향의 출발점이 되었다.
-
----
-
-## 3. 첫 번째 한계: 실제 온톨로지는 완전하지 않다
-
-### 3.1 문제 인식
-
-통제 실험에서는 `inverse`, `symmetric`, `disjoint`, `exclusive` 등의 관계가 명시적으로 정의되어 있었다. 그러나 실제 KG나 자연어 데이터에서는 필요한 관계 의미가 온톨로지에 모두 들어 있지 않다.
-
-예를 들어 관찰된 그래프가 다음과 같다고 하자.
-
-$$
-h \xrightarrow{r_1} e_1 \xrightarrow{r_2} e_2 \xrightarrow{r_3} t
-$$
-
-우리가 알고 싶은 직접 관계가
-
-$$
-(h, ?, t)
-$$
-
-라면, Tableau는 `?`에 들어갈 의미를 스스로 만들어 주지 않는다. 온톨로지에 합성 관계나 배타 제약이 정의되어 있지 않으면 다음 두 문제를 해결할 수 없다.
-
-1. 경로가 존재한다는 사실만으로 `h`와 `t` 사이의 의미 관계를 알 수 없음
-2. 두 경로가 의미적으로 상충하더라도 이를 논리적 contradiction으로 변환할 규칙이 없을 수 있음
-
-즉 다음을 구분해야 했다.
-
-$$
-\text{Graph Reachability}
-\neq
-\text{Semantic Relation}
-\neq
-\text{Logical Contradiction}
-$$
-
-### 3.2 MAGIC에서 드러난 온톨로지 불완전성
-
-MAGIC 다중 홉 실험에서는 경로 자체는 상당 부분 찾을 수 있었지만 hard ontology와 Tableau만으로 의미적 상충을 직접 검증하기 어려웠다. 대표적인 검증 실행에서 다중 홉 양방향 경로 coverage는 68.03%였지만 온톨로지/Tableau 기반 conflict detection은 5.44%였다.
-
-이 차이는 다음 결론으로 이어졌다.
-
-> 경로를 찾았다고 해서 그 경로의 의미적 관계를 온톨로지가 자동으로 알고 있는 것은 아니다.
-
-따라서 연구는 단순한 `ontology lookup`에서 **불완전한 온톨로지의 누락 관계를 후보로 예측하고, 예측된 관계를 온톨로지가 후속 검증하는 구조**로 이동하였다.
+즉 MAGIC은 주로 **설명 world의 생성과 보존**, DAFNA는 주로 **보존된 world의 선택과 truth adjudication**을 검증한 사례다.
 
 ---
 
-## 4. 누락·모호 관계를 예측하려는 시도: Multi-hop Relation Completion
+# 3. Study Case 1 — MAGIC 다중 홉 상충 추론
 
-### 4.1 연구 질문의 변화
+## 3.1 MAGIC에서 다룬 문제
 
-온톨로지에 관계가 없다고 추론을 중단하는 대신 다음 문제를 다루었다.
+MAGIC 계열 데이터는 하나의 짧은 사실만 비교하는 것이 아니라, 여러 관계를 거쳐야 상충 여부를 이해할 수 있는 multi-hop conflict를 포함한다.
 
-> 관찰된 다중 홉 경로를 바탕으로 직접 관계의 후보를 여러 개 예측하고, 온톨로지와 Tableau는 그 후보 중 논리적으로 불가능한 것만 제거할 수 있는가?
-
-이를 다음과 같이 정식화하였다.
-
-관찰 그래프가 주어졌을 때
-
-$$
-(h, ?, t)
-$$
-
-에 대한 관계 후보를
-
-$$
-\mathcal{R}(h,t)=\{r_1,r_2,\ldots,r_m\}
-$$
-
-으로 생성한다.
-
-각 관계 후보와 경로의 조합에 의미 점수
-
-$$
-s_\theta(p,r) \in [0,1]
-$$
-
-을 부여하고, 여러 근접 후보를 가능한 world로 유지한다.
-
-$$
-W_{p,r}=G_{obs}\cup\{(h,r,t)\}
-$$
-
-그 뒤 온톨로지 `O`에 대해
-
-$$
-SAT(O\cup W_{p,r})
-$$
-
-를 검사하여 논리적으로 불가능한 world를 제거하는 구조였다.
-
-### 4.2 구현으로 이어진 내용
-
-이 아이디어는 이후 `multihop_completion.py`에 다음 구성으로 구현되었다.
-
-- `RelationCandidate`
-- `RelationWorld`
-- `CompletionResult`
-- near-optimal relation candidate 보존
-- 후보 관계별 world 생성
-- Ontology + Tableau SAT filtering
-- surviving world의 relation marginal 계산
-
-이 시점의 연구 관점은 다음과 같았다.
+개념적으로 다음과 같은 구조를 생각할 수 있다.
 
 ```text
-불완전한 온톨로지
-   ↓
-관계를 못 찾음
-   ↓
-추론 종료  X
+Original evidence
+A --r1--> B --r2--> C
 
-불완전한 온톨로지
-   ↓
-다중 홉 경로로 관계 후보 생성
-   ↓
-Semantic scorer로 plausibility 계산
-   ↓
-여러 후보 보존
-   ↓
-Ontology/Tableau는 불가능한 후보 제거
+Perturbed / conflicting evidence
+A --r3--> D --r4--> C
 ```
 
-즉 **온톨로지는 관계 생성기가 아니라 제약 검증기**로 역할을 재정의하였다.
+여기서 단순히 `A`와 `C`가 연결되어 있다는 사실만으로는 두 경로가 같은 의미인지, 반대 의미인지, 서로 독립적인지 알 수 없다.
 
-### 4.3 이 시도가 현재 논문과 연결되는 이유
+따라서 다음 세 개념을 구분해야 했다.
 
-이 구조에서 중요한 문제가 새로 나타났다. 관계 후보를 잘 생성해도 후보 선택 단계에서 정답 후보를 먼저 제거하면 Tableau는 아무것도 검증할 수 없다.
+\[
+Graph\ Reachability
+\neq
+Semantic\ Relation
+\neq
+Logical\ Contradiction
+\]
 
-따라서 다음 관계가 명확해졌다.
+- **Graph Reachability**: 두 엔티티가 어떤 경로로 연결되는가?
+- **Semantic Relation**: 그 경로가 의미적으로 무엇을 뜻하는가?
+- **Logical Contradiction**: 두 해석을 동시에 참이라고 둘 수 없는가?
 
-$$
-\text{후보 생성 성공}
-\not\Rightarrow
-\text{최종 추론 성공}
-$$
+이 구분이 MAGIC 실험의 출발점이었다.
 
-그리고 연구의 병목은 점차 **관계 예측 자체보다 후보 보존과 가지치기**로 이동하였다.
+## 3.2 실제 사용한 structured MAGIC 데이터
+
+검증된 possible-world 실험에서는 released structured multi-hop subset의 **588 rows, 1,056 query conflicts**를 사용했다.
+
+각 row에는 원래 사실 경로와 perturbation으로 생성된 상충 경로가 존재하며, 구현에서는 `original_triplet[i]`와 대응하는 `perturb_triplet[i]`가 동일한 conflict pair를 구성한다고 보았다.
+
+중요한 점은 현재 선행 실험의 입력이 **자연어 문단을 그대로 LLM에 넣은 공식 MAGIC natural-language protocol이 아니라 structured triplet 표현**이라는 것이다.
+
+따라서 아래에 제시하는 `row conflict recall`, `query conflict recall`, `structured exact localization`은 공식 MAGIC ID/LOC와 동일한 점수가 아니다.
+
+## 3.3 첫 접근 — hard ontology + Tableau
+
+초기에는 관계의 inverse, symmetric, exclusive, disjoint 등 의미를 ontology에 정의하고, 두 경로를 하나의 논리 체계에 넣은 뒤 Tableau를 이용해 충돌 여부를 확인했다.
+
+개념적으로는 다음과 같다.
+
+\[
+O \cup C \cup \{q, \neg q\}
+\]
+
+에 대해 Tableau가 branch를 모두 닫으면 contradiction으로 판단한다.
+
+이 접근의 장점은 판정 근거가 명시적이라는 점이었다. 그러나 실제 multi-hop 데이터에서는 필요한 관계 합성 의미가 ontology에 모두 존재하지 않았다.
+
+예를 들어
+
+\[
+r_1(A,B) \land r_2(B,C)
+\]
+
+가 관찰되어도 ontology에
+
+\[
+r_1 \circ r_2 \Rightarrow r_3
+\]
+
+가 정의되어 있지 않으면 Tableau는 `A`와 `C` 사이의 의미를 새로 만들어내지 못한다.
+
+### 검증 결과
+
+선행 bidirectional-Tableau 진단 실험은 다음과 같았다.
+
+| 진단 지표 | 결과 |
+|---|---:|
+| Direct heuristic detection | 33.16% |
+| Bidirectional candidate-path coverage | **68.03%** |
+| Strict ontology/Tableau contradiction | **5.44%** |
+
+이 세 숫자는 서로 다른 지표다. 특히 **68.03%는 정확도가 아니라 candidate path coverage**이며, 5.44%는 hard ontology로 실제 contradiction까지 닫을 수 있었던 row 수준 진단이다.
+
+이 결과에서 가장 중요한 것은 68.03%와 5.44% 사이의 격차였다.
+
+> 경로는 찾았지만, 그 경로가 의미적으로 무엇을 뜻하는지 hard ontology만으로는 닫지 못했다.
+
+따라서 문제를 “더 많은 ontology rule을 손으로 넣자”로 해결하지 않고, **불확실한 관계 해석 자체를 후보 변수로 유지**하는 방향으로 바꾸었다.
 
 ---
 
-## 5. DAFNA-EA: 후보가 존재하는 것과 정답을 고르는 것은 다르다
+# 4. MAGIC Possible Worlds — 하나의 해석을 강제로 고르지 않기
 
-DAFNA-EA Books / AuthorsNamesList 100개 골드 subset을 이용한 가능세계 실험에서는 후보 생성 단계가 정답 world를 93% 포함했지만 최종 exact selection은 최고 62% 수준이었다.
+## 4.1 Possible World의 의미
 
-대표 결과는 다음과 같다.
+한 경로에 대해 의미 해석이 하나로 확정되지 않는다면 다음처럼 여러 가설을 둘 수 있다.
 
-| 방법 | Exact-set 정확도 | 저자 F1 |
-|---|---:|---:|
-| 가능세계 균등 | 58% | 80.38% |
-| hard commit reliability | 61% | 84.04% |
-| 가능세계 marginal | **62%** | **84.13%** |
-| 기존 atomic resolution | 61% | 82.88% |
+\[
+H_1: r_1 \circ r_2 \Rightarrow q
+\]
 
-이 실험에서 얻은 가장 중요한 결론은 62%라는 숫자 자체가 아니다.
+\[
+H_2: r_1 \circ r_2 \Rightarrow \neg q
+\]
 
-$$
-\text{Gold candidate coverage}=93\%
-$$
+\[
+H_3: unresolved
+\]
 
-임에도
+각 선택을 하나의 possible world로 분리한다.
 
-$$
-\text{Exact selection}=62\%
-$$
+\[
+W=(C,S,R,D)
+\]
 
-였다는 점이다.
+- `C`: 해당 world에서 채택한 claim 집합
+- `S`: claim의 source/provenance
+- `R`: 선택된 relation interpretation
+- `D`: 해당 claim을 만든 derivation/proof
 
-즉 **좋은 후보를 생성하는 문제와 좋은 후보를 선택하는 문제는 분리해야 한다.** 이후의 연구에서 scorer와 pruning을 별도 실험 변수로 분해한 이유가 여기에 있다.
+후보 world가 내부적으로 명백한 논리 충돌을 만들면 Tableau로 제거한다.
+
+\[
+Tableau(W)=SAT
+\]
+
+인 world만 다음 단계에 남긴다.
+
+이 방식의 핵심은 uncertain relation을 hard ontology axiom으로 승격하지 않는 것이다. relation interpretation은 **defeasible hypothesis**이며, 다른 해석과 경쟁할 수 있다.
+
+## 4.2 MAGIC에서 무엇을 따로 측정했는가
+
+이 실험에서는 두 질문을 구분했다.
+
+### 질문 A — 정답 설명을 후보 집합 안에 보존했는가?
+
+이를 `Gold-world query recall`로 보았다.
+
+### 질문 B — 보존한 후보 중 실제로 올바른 설명을 최종 선택했는가?
+
+이를 row/query conflict recall과 structured exact localization으로 진단했다.
+
+이 두 값을 분리해야 “후보 생성 실패”와 “후보 랭킹 실패”를 구별할 수 있다.
+
+## 4.3 검증된 MAGIC 결과
+
+검증 workflow: `32725453943`  
+검증 artifact: `9519356207`
+
+| Variant | Row conflict recall | Query conflict recall | Gold-world query recall | Structured row exact LOC |
+|---|---:|---:|---:|---:|
+| B1 Static Tableau | **5.44%** | 4.45% | — | — |
+| B2 Early-commit single world | **29.93%** | 22.63% | — | — |
+| B3 Possible-world retention | — | — | **39.39%** | **29.42%** |
+| B4 Weakly weighted worlds | **22.79%** | 16.86% | — | **7.14%** |
+
+평균적으로 query당 candidate path는 1.46개, retained world는 4.10개였고 row당 7.36개의 world가 유지되었다.
+
+## 4.4 결과가 의미하는 것
+
+가장 중요한 수치는 다음 두 값의 차이다.
+
+\[
+GoldWorldRecall=39.39\%
+\]
+
+\[
+SelectedExactLocalization=7.14\%
+\]
+
+즉 possible-world 구조는 static Tableau보다 훨씬 많은 올바른 상충 설명을 **후보 안에 보존**했지만, 약한 lexical/relation prior로는 그중 올바른 world를 잘 **선택하지 못했다**.
+
+이 결과는 다음을 보여줬다.
+
+> Possible Worlds는 정답을 자동으로 맞히는 기법이 아니라, 정답 후보가 조기에 사라지는 것을 줄이는 representation이다.
+
+따라서 이후 병목은 world generation 자체보다 world ranking으로 이동했다.
 
 ---
 
-## 6. MAGIC Possible Worlds: 후보 보존 후에도 점수화가 병목
+# 5. MAGIC Semantic Scoring 실험
 
-MAGIC 588개 행, 1,056개 query를 이용한 structured possible-world 실험에서는 weak lexical scorer가 후보 world의 의미를 충분히 구분하지 못했다.
+## 5.1 왜 의미 scorer가 필요했는가
 
-외부 골드 경로가 후보 중 존재하는지를 보는 existential coverage와 실제 weighted selection 사이에 큰 차이가 관찰되었다. 이 결과로 다음 질문이 생겼다.
+B4의 weak weighting은 relation 이름이나 얕은 lexical signal을 이용했기 때문에, 문맥상 더 그럴듯한 causal/contradictory interpretation을 충분히 구별하지 못했다.
 
-> 가능한 설명을 많이 보존하는 것만으로 충분한가, 아니면 의미적으로 더 나은 점수기가 필요한가?
+동일한 candidate generation을 유지하고 scorer만 의미 기반 NLI로 교체하여 이 영향을 확인했다.
 
-이에 weak lexical prior를 semantic NLI scorer로 교체하였다.
+사용 모델:
 
----
+`MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli`
 
-## 7. DeBERTa 의미 점수기: 의미 점수화의 유효성 확인
+이 단계에서 DeBERTa는 새로운 relation을 생성하는 모델이 아니라 **이미 생성된 candidate interpretation의 의미 적합도를 점수화하는 모듈**이었다.
 
-`MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli`를 사용한 이후 동일 candidate generation에서 다음 개선이 확인되었다.
+## 5.2 측정 결과
 
-| 지표 | weak lexical | DeBERTa | 개선 |
+| 지표 | Weak lexical | DeBERTa | 변화 |
 |---|---:|---:|---:|
-| 행 단위 conflict recall | 22.79% | **41.50%** | **+18.71%p** |
-| query conflict recall | 16.86% | **31.53%** | **+14.68%p** |
-| structured exact localization | 7.14% | **15.48%** | **+8.33%p** |
+| Row conflict recall | 22.79% | **41.50%** | **+18.71%p** |
+| Query conflict recall | 16.86% | **31.53%** | **+14.68%p** |
+| Structured exact localization | 7.14% | **15.48%** | **+8.34%p** |
 
-이 결과는 현재도 다음 의미로 사용한다.
+이 실험의 해석은 제한적이어야 한다.
 
-> 동일한 후보가 주어졌을 때 의미 기반 NLI scorer가 약한 lexical scorer보다 유용한 경로를 더 잘 구분한다.
+- DeBERTa가 MAGIC 전체 문제를 해결했다는 뜻이 아니다.
+- structured input에서 동일 후보들의 ranking이 lexical scorer보다 개선되었다는 뜻이다.
+- 공식 natural-language MAGIC ID/LOC와 직접 비교할 수 없다.
 
-다만 DeBERTa 자체를 논문의 novelty로 보지 않는다. 이후 실험에서는 scorer를 고정하고 pruning operator만 변경하였다.
+### 구현 과정에서 확인한 주의점
 
-### 7.1 scorer 입력 오류에서 얻은 교훈
-
-자연어 MAGIC 실험을 진행하는 과정에서 scorer 입력에 다음과 같은 provenance용 metadata가 포함되어 있었다.
+초기 자연어 실험 일부에서는 scorer 입력에 proposition 자체가 아닌 provenance metadata가 섞인 문제가 있었다.
 
 ```text
 [source=context1, sentence=...]
 [source=context2, sentence=...]
 ```
 
-이 정보는 proposition의 의미가 아니라 audit metadata인데, NLI 입력에 들어가면서 동일하거나 유사한 사실도 인위적으로 다른 문장처럼 보이게 할 수 있었다. 이후 scorer 입력을 자연어 triple만 사용하도록 수정하였다.
+이런 metadata는 NLI가 판단해야 할 의미가 아니라 audit 정보다. 이후 scorer 입력에서는 자연어 proposition/triple과 provenance metadata를 분리하였다.
 
-따라서 **수정 전 자연어 MAGIC 정확도는 최종 성능 근거로 사용하지 않는다.**
-
-또한 이후 transport retry accounting, fixed-call budget, analyzer eligibility도 수정되었다. 이 때문에 코드 수정 이전 실행 결과는 연구 진행 과정의 디버깅 기록으로만 취급하고, 논문의 최종 표에는 재검증된 결과만 넣는 원칙을 세웠다.
+따라서 해당 수정 전의 자연어 MAGIC 결과는 이 문서의 검증 성능으로 사용하지 않는다.
 
 ---
 
-## 8. 핵심 문제의 이동: 의미 점수기가 좋아도 pruning에서 정답이 사라질 수 있다
+# 6. Study Case 2 — DAFNA-EA Books / AuthorsNamesList
 
-DeBERTa를 도입한 뒤에도 성능이 완전히 해결되지 않았다. 여기서 연구 질문이 다시 바뀌었다.
+## 6.1 MAGIC과 다른 문제
 
-초기 질문:
+MAGIC이 “올바른 설명 경로를 만들고 보존할 수 있는가?”를 검증했다면, DAFNA-EA Books는 다음 질문을 검증하기 위해 사용했다.
+
+> 같은 책에 대해 여러 출처가 서로 다른 저자 목록을 주장할 때, 가능한 truth 후보를 보존한 뒤 어떤 저자 집합이 실제 truth인지 선택할 수 있는가?
+
+즉 DAFNA는 전형적인 **multi-source truth discovery** 문제다.
+
+## 6.2 데이터 구조
+
+검증 실험에서는 repository의 기존 direct comparison과 동일한 `AuthorsNamesList` **100-book gold subset**을 사용했다.
+
+실험 데이터의 규모는 다음과 같다.
+
+- Gold books: **100**
+- Collapsed source-object claims: **1,999**
+- Distinct sources: **227**
+- 평가 시 person normalization: surname + first initial 기반의 공통 benchmark normalization
+
+한 개의 book object에 대해 여러 source가 서로 다른 author set을 주장하는 형태다.
+
+개념적인 예시는 다음과 같다.
 
 ```text
-어떤 relation/world가 맞는가?
+Book X
+  Source A -> {Alice Smith, Bob Lee}
+  Source B -> {Alice Smith}
+  Source C -> {A. Smith, Robert Lee}
+  Source D -> {Alice Smith, Carol Kim}
 ```
 
-변경된 질문:
+이때 단순 majority voting은 항상 적합하지 않다.
+
+- 한 출처가 공동 저자 한 명을 누락할 수 있다.
+- 이름 표기가 서로 다를 수 있다.
+- 여러 출처가 같은 잘못된 값을 복제했을 수 있다.
+- source마다 신뢰도가 다를 수 있다.
+- truth 자체가 단일 값이 아니라 **저자 집합(set)** 이다.
+
+따라서 `누가 더 많이 말했다`뿐 아니라 `어떤 저자 조합이 가능한 truth world인지`, `그 world를 지지하는 출처의 reliability가 어떤지`를 함께 보게 되었다.
+
+---
+
+# 7. DAFNA에서 Truth World를 만드는 방법
+
+## 7.1 후보 world 생성
+
+각 book에 대한 possible truth world는 gold를 보지 않고 다음 정보만으로 생성했다.
+
+1. 실제 관찰된 author set 전체
+2. source support가 높은 상위 12개 atomic author
+3. 이 atomic author들의 bounded combination
+4. 최대 cardinality는 관찰된 claim 중 가장 큰 author set 크기 이하
+5. object당 최대 **256 candidate worlds**
+
+예를 들어 관찰된 claim이 다음과 같다면
 
 ```text
-맞는 relation/world가 후보에 있었는데
-pruning에서 먼저 사라지는 것은 아닌가?
+{A, B}
+{A}
+{A, C}
 ```
 
-이 변화가 현재 논문의 직접적인 출발점이다.
+candidate space에는 관찰 claim뿐 아니라 제한된 조합 조건을 만족하는
+
+```text
+{A}
+{B}
+{C}
+{A,B}
+{A,C}
+{B,C}
+...
+```
+
+같은 truth hypothesis가 포함될 수 있다.
+
+Gold truth는 candidate generation이나 scoring에 사용하지 않고 마지막 evaluation에서만 사용했다.
+
+## 7.2 왜 누락된 공동 저자를 바로 contradiction으로 보지 않았는가
+
+출처가 `{A}`라고 주장하고 candidate world가 `{A,B}`라고 해서 Source가 반드시 `B는 저자가 아니다`라고 주장한 것은 아니다. 단순 누락일 수도 있다.
+
+따라서 compatibility는 overlap을 보상하고 omitted co-author를 완전한 contradiction보다 약한 negative evidence로 처리했다.
+
+기본 world evidence는 다음과 같이 두었다.
+
+\[
+Evidence(W)=0.8\cdot Compatibility(W)+0.2\cdot ExactSupport(W)
+\]
+
+이 점수를 softmax하여 world posterior를 구성했다.
 
 ---
 
-## 9. WN18RR Frozen Candidate 실험: 가지치기 자체의 효과 분리
+# 8. Early Commit과 Delayed Commitment
 
-50개 질의와 11개 relation candidate를 고정하고 scorer도 고정한 뒤 pruning 정책만 바꿨다.
+DAFNA 실험의 핵심 ablation은 candidate 생성기가 아니라 **source reliability를 언제 업데이트하느냐**였다.
 
-| 정책 | 골드 관계 생존율 | 가지치기 손실률 | 평균 보존 수 |
-|---|---:|---:|---:|
-| Top-1 | 16% | 84% | 1.00 |
-| Top-3 | 32% | 68% | 3.00 |
-| Top-5 | 40% | 60% | 5.00 |
-| 전역 점수대 $\epsilon=.05$ | 42% | 58% | 3.82 |
-| 전역 점수대 $\epsilon=.10$ | 58% | 42% | 5.08 |
-| 무가지치기 | 100% | 0% | 11.00 |
+동일한 candidate world 집합에 대해 세 방식을 비교했다.
 
-이 단계에서는 전역 near-optimal 보존이 유망해 보였다. 그러나 후보를 한 번만 자르는 frozen diagnostic이므로 실제 반복 탐색에서는 결과가 달라질 수 있었다.
+### Uniform
+
+모든 source를 같은 reliability로 본다.
+
+### Hard Commit
+
+현재 가장 높은 MAP world 하나를 먼저 선택하고, 해당 world와 source claim의 일치 여부를 기준으로 source reliability를 업데이트한다.
+
+```text
+candidate worlds
+    ↓
+현재 1등 world 선택
+    ↓
+그 world를 기준으로 source reliability 갱신
+```
+
+문제는 초기 1등 world가 틀리면 reliability까지 그 오류를 따라갈 수 있다는 점이다.
+
+### Marginal Reliability
+
+하나의 world에 먼저 고정하지 않고 posterior 전체에 대한 기대 compatibility로 source reliability를 업데이트한다.
+
+\[
+Rel(s) \leftarrow E_{W\sim P(W)}[Compat(c_s,W)]
+\]
+
+즉 여러 plausible truth를 유지한 상태에서 source가 전체 후보 분포와 얼마나 일관적인지를 본다.
+
+이것이 DAFNA Study Case에서의 **delayed commitment** 실험이다.
 
 ---
 
-## 10. 반복 탐색에서 전역 Rashomon 점수대가 실패
+# 9. DAFNA 결과
 
-실제 다중 홉 탐색에서 매 단계 후보를 확장하고 다시 pruning하는 실험에서는 전역 가산 점수대가 Top-K보다 나쁜 경우가 나타났다.
+검증 workflow: `32726434311`  
+검증 artifact: `9519739380`
 
-10질의 pilot:
+## 9.1 Candidate generation
 
-| 정책 | 탐색 성공률 | query pruning regret | 평균 활성 폭 |
-|---|---:|---:|---:|
-| Top-3 | 60% | 40% | 2.67 |
-| Top-5 | 60% | 40% | 3.88 |
-| 전역 $\epsilon=.05$ | 40% | 60% | 2.65 |
-| 전역 $\epsilon=.10$ | 40% | 60% | 3.62 |
+- Gold-world coverage: **93.00%**
+- 평균 candidate worlds/book: **27.94**
+- object당 최대 worlds: **256**
 
-이 실험으로 다음 가설을 폐기하였다.
+즉 100개의 gold book 중 93개는 정답 author set이 candidate space 안에 존재했다.
 
-> 전역 Rashomon score band가 일반적으로 Top-K보다 우수하다.
+이 값은 최종 정확도와 다르다. `93% coverage`는 **정답을 고를 기회가 있었다**는 뜻이다.
 
-점수의 절대 스케일에 따라 동일 `epsilon`이 지나치게 좁거나 넓어질 수 있었기 때문이다.
+## 9.2 Truth selection
+
+| Method | Exact Truth Accuracy | Author F1 |
+|---|---:|---:|
+| **Rashomon Worlds — Marginal Reliability** | **62.00%** | **84.13%** |
+| Rashomon Worlds — Hard Commit | 61.00% | 84.04% |
+| Prior Atomic Resolution | 61.00% | 82.88% |
+| Rashomon Worlds — Uniform | 58.00% | 80.38% |
+| TruthFinder (official DAFNA-EA implementation) | 57.00% | 66.85% |
+| AccuSim (official DAFNA-EA implementation) | 57.00% | 66.18% |
+| 2-Estimates | 54.00% | 65.28% |
+| 3-Estimates | 53.00% | 65.45% |
+| Accu | 53.00% | 65.45% |
+
+동일 candidate generation을 사용하는 Hard Commit과 Marginal Reliability만 비교하면:
+
+- Exact Truth Accuracy: **61% → 62% (+1.00%p)**
+- Author F1: **84.04% → 84.13% (+0.09%p)**
+
+Prior Atomic 대비 Marginal Reliability는:
+
+- Exact: **+1.00%p**
+- Author F1: **+1.25%p**
+
+Official TruthFinder/AccuSim 대비 exact accuracy는 해당 100-book 동일 평가에서 **+5.00%p**였다.
+
+이 결과를 전체 DAFNA에 대한 SOTA 주장으로 해석하지 않는다. 검증된 주장은 이 100-book AuthorsNamesList subset에 한정된다.
 
 ---
 
-## 11. 상대 손실 기준: scale 문제를 줄였지만 비용이 증가
+# 10. DAFNA에서 가장 중요한 관찰
 
-전역 절대 점수차 대신 loss 비율을 이용하였다.
+DAFNA의 핵심은 최고 정확도 62% 자체보다 다음 격차였다.
 
-$$
-L(p)=1-s(p)
-$$
+\[
+GoldWorldCoverage=93\%
+\]
 
-$$
-R_{\epsilon}^{loss}
-=
-\left\{p \mid L(p)\le(1+\epsilon)L^*\right\}
-$$
+\[
+ExactTruthSelection=62\%
+\]
 
-10질의 pilot에서 relative-loss `0.50`은 70% 탐색 성공, 30% pruning regret을 기록하여 Top-3/Top-5보다 높았다. 그러나 평균 활성 폭도 약 5.97까지 증가하였다.
+즉 candidate generator는 93%의 object에서 gold truth를 포함했지만, 실제 ranking/scoring은 그중 상당수를 최종 정답으로 선택하지 못했다.
 
-즉 다음 평가 원칙을 확정하였다.
+따라서 실패 원인을 다음처럼 분해할 수 있었다.
 
-$$
-\text{좋은 pruning}
+```text
+Case A: Gold world가 candidate에 없음
+        -> generation 문제
+
+Case B: Gold world가 candidate에 있음
+        but 다른 world가 더 높은 점수
+        -> ranking / calibration 문제
+```
+
+이 분해는 이후 연구 설계에서 매우 중요해졌다. 최종 정확도 하나만 보면 **왜 틀렸는지 알 수 없기 때문**이다.
+
+---
+
+# 11. MAGIC과 DAFNA를 함께 보면 무엇을 배웠는가
+
+두 Study Case의 결과는 같은 패턴을 보여줬다.
+
+## 11.1 MAGIC
+
+\[
+39.39\%\ GoldWorldRecall
+\rightarrow
+7.14\%\ WeakWeightedExactLOC
+\]
+
+정답 설명을 후보에 보존하는 능력과 최종 선택 능력 사이에 큰 차이가 있었다.
+
+## 11.2 DAFNA
+
+\[
+93\%\ GoldWorldCoverage
+\rightarrow
+62\%\ ExactTruthAccuracy
+\]
+
+마찬가지로 정답 truth를 후보에 포함하는 능력과 선택하는 능력이 달랐다.
+
+## 11.3 공통 결론
+
+따라서 다음 관계를 명확히 구분하게 되었다.
+
+\[
+Candidate\ Generation
 \neq
-\text{많이 보존하는 pruning}
-$$
+Candidate\ Preservation
+\neq
+Candidate\ Ranking
+\neq
+Final\ Decision
+\]
 
-대신
+그리고 possible-world/Rashomon 관점의 가장 중요한 역할은 **많이 생성하는 것** 자체가 아니라 다음이었다.
 
-$$
-\text{Search Success}
-\times
-\text{Retained-set Validity}
-\times
-\text{Search Cost}
-$$
-
-를 함께 평가해야 한다.
+> **서로 경쟁 가능한 합리적 후보가 존재할 때, 충분한 근거 없이 하나를 너무 일찍 제거하지 않는다.**
 
 ---
 
-## 12. MAGIC 외부 골드 분석: branching이 커질수록 Top-K 손실 증가
+# 12. Tableau의 역할을 어떻게 이해하게 되었는가
 
-MAGIC에서 DeBERTa 점수와 독립적인 `perturb_triplet` provenance를 외부 골드로 사용하여 pruning 후 conflict evidence가 살아남는지 측정하였다.
+선행 실험 초기에 Tableau를 contradiction detector의 중심으로 보았지만, MAGIC 결과를 통해 역할의 한계가 분명해졌다.
 
-전체 1,056 query 중 candidate path가 존재한 query는 618개였고, pruning 이전부터 외부 골드 conflict path가 존재했던 recoverable query는 420개였다.
+Tableau가 잘하는 일:
 
-### 12.1 전체 recoverable query
+- 주어진 logical axiom 하에서 consistency/SAT 검사
+- 명시적 contradiction이 있는 world 제거
+- proof provenance를 설명 가능한 형태로 유지
 
-| 정책 | conflict path 생존율 | 골드 precision | 골드 F1 | 평균 폭 |
-|---|---:|---:|---:|---:|
-| Top-1 | 80.71% | **80.71%** | **80.62%** | 1.00 |
-| Top-3 | 94.76% | 59.38% | 73.01% | 1.60 |
-| Top-5 | 98.10% | 55.07% | 70.54% | 1.79 |
-| 전역 $\epsilon=.10$ | 97.14% | 50.18% | 66.18% | 1.94 |
-| Relative-loss $\epsilon=.25$ | 83.81% | 74.26% | 78.66% | 1.13 |
-| Boundary Top-3 $\delta=.01$ | **97.86%** | 55.30% | 70.67% | 1.77 |
-| 무가지치기 | 100% | 46.67% | 63.64% | 2.15 |
+Tableau가 하지 못하는 일:
 
-여기서 중요한 점은 `100% survival`인 무가지치기가 가장 좋은 정책이 아니라는 것이다. non-gold path도 함께 증가하여 precision/F1이 감소한다.
+- ontology에 없는 relation semantics 생성
+- noisy evidence를 확률적으로 calibration
+- source reliability 추정
+- 여러 plausible world 중 가장 현실적인 world 자동 선택
 
-### 12.2 고분기 영역
-
-후보 경로 수가 5개 이상인 recoverable query 32개에서는:
-
-| 정책 | conflict path 생존율 |
-|---|---:|
-| Top-3 | 37.50% |
-| Top-5 | 75.00% |
-| 전역 $\epsilon=.10$ | 96.88% |
-| Boundary Top-5 $\delta=.01$ | 84.38% |
-| 무가지치기 | 100% |
-
-Top-K의 손실이 전체 평균보다 고분기 영역에서 훨씬 커졌다.
-
-따라서 현재까지 가장 강한 구조적 요인은 **branching factor**이다. score margin의 독립 효과는 아직 branching과 분리해 확정하지 않았다.
+즉 Tableau는 **candidate generator나 ranker가 아니라 hard logical validator**로 이해하는 것이 적절했다.
 
 ---
 
-## 13. BADP: 최고점이 아니라 실제 Top-K 경계를 본다
+# 13. Rashomon / Possible Worlds의 역할
 
-전역 Rashomon 방식의 문제는 최고점 $s^*$를 중심으로 전체 후보를 판단한다는 점이다. 하지만 실제로 제거되는 지점은 최고점이 아니라 $K$번째와 $K+1$번째 사이이다.
+이 선행 연구에서 Rashomon이라는 표현은 “정답이 무조건 여러 개다”라는 뜻이 아니다.
 
-후보 점수를 내림차순으로 정렬하면:
+관측된 evidence만으로 여러 설명이 비슷하게 plausible하다면
 
-$$
-s_{(1)}\ge s_{(2)}\ge\cdots\ge s_{(|C|)}
-$$
-
-기본 BADP는 다음과 같이 정의하였다.
-
-$$
-B_{K,\delta}(C)
+\[
+\mathcal{W}_{\epsilon}
 =
-T_K(C)
-\cup
-\left\{p_{(j)}\mid j>K,\;s_{(K)}-s_{(j)}\le\delta\right\}
-$$
+\{W_i \mid Score(W_i) \ge Score(W^*)-\epsilon\}
+\]
 
-MAGIC에서 Boundary Top-3는 fixed Top-3가 잃은 13개 recoverable conflict query를 추가로 살렸고 반대 방향은 0개였다. 다만 이 값은 boundary rule을 앞선 실험 결과를 보고 도입한 뒤 얻은 탐색적 결과이므로 confirmatory result로 과도하게 해석하지 않는다.
+와 같이 near-optimal explanation set을 유지하자는 원칙에 가깝다.
 
----
+이때 최종 시스템은 여전히 하나의 truth나 explanation을 선택할 수 있다. 다만 그 선택 전에 alternative가 어떤 것이었고 왜 탈락했는지를 추적할 수 있다.
 
-## 14. WebQSP 실제 질의 연결에서 나타난 새로운 문제
-
-ToG 공식 WebQSP 데이터의 실제 질문을 사용하고 `qid_topic_entity`를 통해 Wikidata entity statement를 탐색하는 소규모 연결 실험을 수행하였다.
-
-첫 실행에서는 Wikidata 공개 API의 429 rate limit가 발생하였다. 이후 호출 간격과 후보 폭을 조절하여 `n=3` 연결 검증을 완료하였다.
-
-3질의에서는 Top-3, Top-5 및 BADP의 search success가 모두 66.67%였고, BADP는 추가 정답을 복구하지 못하면서 폭과 확장량만 증가하였다.
-
-이 결과는 성능 비교용 표본으로는 너무 작지만 중요한 방법론적 경고를 제공하였다.
-
-> BADP 역시 모든 query에서 항상 켜면 불필요하게 탐색 폭을 증가시킬 수 있다.
-
-따라서 현재 방법은 **항상 동작하는 BADP에서 조건부 BADP로 한 단계 더 변경**한다.
+따라서 Possible Worlds를 사용한 이유는 단순 ensemble 효과가 아니라 **premature commitment를 줄이고 uncertainty/provenance를 보존하기 위해서**였다.
 
 ---
 
-## 15. 현재 제안 방법: 조건부 BADP
+# 14. 두 Study Case의 성과와 한계
 
-### 15.1 경계 위험도
+| 항목 | MAGIC | DAFNA-EA Books/Authors |
+|---|---|---|
+| 데이터 성격 | multi-hop conflict | multi-source truth discovery |
+| 주된 불확실성 | relation/path interpretation | source reliability + multi-valued truth |
+| 정답 후보 보존 | Gold-world query recall 39.39% | Gold-world coverage 93% |
+| 최종 선택 | weak weighted exact LOC 7.14%; semantic scorer에서 개선 | marginal exact truth 62% |
+| 핵심 병목 | world relation ranking | truth-world ranking/calibration |
+| 논리 검증 역할 | Tableau SAT filtering | candidate truth consistency 보조 |
+| 가장 중요한 교훈 | path 존재와 semantic contradiction은 다름 | candidate coverage와 final accuracy는 다름 |
 
-Top-K 경계의 즉시 margin을 다음과 같이 정의한다.
+공통적으로 확인한 것은 다음이다.
 
-$$
-\Delta_K=s_{(K)}-s_{(K+1)}
-$$
-
-`Delta_K`가 작다는 것은 scorer가 $K$번째와 $K+1$번째 후보를 명확하게 구분하지 못하고 있음을 의미한다.
-
-### 15.2 조건부 발동
-
-조건부 BADP는 다음과 같이 정의한다.
-
-$$
-P_{k+1}^{CBADP}
-=
-\begin{cases}
-B_{K,\delta}(C_{k+1}), & \Delta_K\le\tau \\
-T_K(C_{k+1}), & \Delta_K>\tau
-\end{cases}
-$$
-
-여기서:
-
-- $K$: 기본 Top-K 폭
-- $\tau$: BADP를 발동할 경계 불확실성 임계값
-- $\delta$: 발동 후 K번째 점수 아래로 추가 보존할 허용 범위
-
-따라서 `tau`와 `delta`의 역할은 다르다.
-
-```text
-tau   = 지금 경계가 위험한가?
-delta = 위험하다면 얼마나 더 보존할 것인가?
-```
-
-이 구조는 BADP가 항상 추가 비용을 쓰는 문제를 줄이고, **경계가 실제로 불확실한 query에만 선택적으로 예산을 사용하는 것**을 목표로 한다.
+1. hard rule만으로 모든 실제 의미를 표현하기 어렵다.
+2. 정답 후보가 존재한다고 최종 정답을 맞히는 것은 아니다.
+3. candidate generation과 ranking은 반드시 별도 지표로 평가해야 한다.
+4. 여러 후보를 유지할 때 provenance와 source/evidence quality가 중요하다.
+5. 논리 일관성과 현실적 plausibility는 서로 다른 신호다.
 
 ---
 
-## 16. 현재 검증해야 할 핵심 가설
+# 15. 수치 해석 시 주의사항
 
-### H1. 고정 경계 손실
+이 문서의 결과를 읽을 때 다음 경계를 유지해야 한다.
 
-고정 Top-K에서는 pruning 이전에 viable path가 존재해도 rank cutoff 때문에 모두 제거되는 query가 존재한다.
+### MAGIC
 
-### H2. branching sensitivity
+- 588-row / 1,056-query structured experiment다.
+- `Structured row exact LOC`는 공식 자연어 MAGIC LOC와 동일하지 않다.
+- 자연어 LLM peer의 ID/LOC와 이 structured 결과를 직접 leaderboard처럼 비교하면 안 된다.
+- 수정 이전 scorer/provenance 오류가 포함된 자연어 실행 값은 최종 성능 근거에서 제외한다.
 
-candidate branching이 증가할수록 fixed Top-K의 pruning regret이 증가한다.
+### DAFNA
 
-### H3. conditional boundary effect
-
-경계 margin이 작은 경우에만 BADP를 적용하면 always-on BADP보다 적은 평균 비용으로 pruning regret을 줄일 수 있다.
-
-이를 직접 검증해야 할 식은 다음이다.
-
-$$
-P(PR=1\mid \Delta_K\le\tau)
->
-P(PR=1\mid \Delta_K>\tau)
-$$
-
-그리고 최종 비교는 다음 세 축으로 수행한다.
-
-$$
-\boxed{
-\text{Preservation / Success}
-\;\times\;
-\text{Retained-set Validity}
-\;\times\;
-\text{Search Cost}
-}
-$$
+- `AuthorsNamesList` 100-book gold subset 결과다.
+- 1,999 source-object claims와 227 sources를 공통 normalization으로 평가했다.
+- official DAFNA-EA Java baseline을 같은 normalized gold comparison으로 재평가한 결과다.
+- 62% exact를 전체 DAFNA나 모든 truth-discovery 데이터에 대한 SOTA로 주장하지 않는다.
 
 ---
 
-## 17. 실험 결과를 문서에 반영하는 기준
+# 16. Study Case 요약
 
-본 연구에서는 실험 과정에서 구현 오류가 여러 차례 발견되었기 때문에 다음 원칙을 적용한다.
+MAGIC에서는 **정답 conflict explanation을 후보 world로 보존하는 문제**를 주로 다뤘다. Static Tableau가 strict contradiction으로 닫은 범위는 제한적이었고, Possible Worlds는 더 많은 gold explanation을 보존했다. 그러나 weak ranking에서 그 이점이 최종 선택으로 이어지지 않아 semantic/world ranking이 별도 문제임을 확인했다.
 
-1. **수정 전 실행값은 최종 정확도로 사용하지 않는다.**
-2. scorer input에 provenance/audit metadata가 포함된 자연어 MAGIC 결과는 폐기한다.
-3. transport retry와 logical call accounting 수정 전 비용 비교는 폐기한다.
-4. analyzer eligibility 오류 수정 전 compute-matched 통계는 최종 비교에 사용하지 않는다.
-5. workflow output 자체의 표시 오류는 실험 산출물과 구분한다.
-6. 외부 골드가 있는 경우 scorer와 독립적인 gold provenance를 우선 사용한다.
-7. post-hoc로 선택한 epsilon/delta/tau의 p-value는 탐색적 결과로만 표기한다.
-8. 최종 test에서는 development set에서 hyperparameter를 고정한 뒤 재평가한다.
+DAFNA-EA Books/Authors에서는 **정답 truth world를 만들어 놓은 뒤 실제로 올바른 world를 선택할 수 있는가**를 다뤘다. 93% gold-world coverage에도 exact truth는 62%였으며, marginal reliability가 hard early commitment보다 작지만 일관된 개선을 보였다.
 
-따라서 과거 문서에 기록되었던 높은 숫자를 단순히 유지하지 않고, **어떤 코드와 프로토콜로 얻은 값인지가 검증된 결과만 논문 근거로 남긴다.**
+두 실험을 통해 얻은 가장 중요한 선행 결론은 다음이다.
 
----
+> **설명 또는 truth의 후보를 생성하는 단계와, 그 후보를 보존하는 단계, 점수화하는 단계, 최종 판정하는 단계는 서로 다른 문제이며 반드시 분리해서 평가해야 한다.**
 
-## 18. 현재 연구의 핵심 결론
-
-연구는 다음과 같이 변화하였다.
-
-```text
-초기:
-Rashomon Worlds + Ontology + Tableau로 상충을 해결하자
-
-문제 1:
-실제 ontology에는 필요한 relation semantics가 빠져 있다
-
-대응:
-multi-hop relation candidate를 예측하고
-semantic scorer + Tableau filter를 결합하자
-
-문제 2:
-좋은 후보가 있어도 scorer/ranking에서 선택이 어렵다
-
-대응:
-DeBERTa semantic scorer로 후보 구분을 개선하자
-
-문제 3:
-좋은 후보가 있어도 iterative pruning에서 먼저 사라진다
-
-대응:
-Preserve before Resolve,
-pruning regret을 측정하자
-
-문제 4:
-전역적으로 많이 보존하면 비용과 noise가 커진다
-
-대응:
-실제 Top-K 경계만 대상으로 BADP를 적용하자
-
-문제 5:
-BADP를 모든 query에서 켜도 불필요한 비용이 생긴다
-
-현재:
-경계가 불확실한 경우에만 발동하는 Conditional BADP
-```
-
-현재 논문의 중심 주장은 다음과 같다.
-
-> **다중 홉 추론에서 고정 Top-K의 문제는 단순히 K가 작다는 것이 아니라, scorer가 경계를 명확히 구분하지 못하는 상황에서도 동일하게 비가역적 제거를 수행한다는 데 있다. 따라서 경계 위험이 감지될 때에만 선택적으로 가지치기를 지연하는 것이 더 적절한 탐색 원칙이 될 수 있다.**
+이 문서는 여기서 종료한다. 이후의 observability/RCA/OpenRCA 연구는 이 Study Case의 범위에 포함하지 않는다.
