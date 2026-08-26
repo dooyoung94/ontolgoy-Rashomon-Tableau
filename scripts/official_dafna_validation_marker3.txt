@@ -1,0 +1,1 @@
+rerun official DAFNA-EA with legacy XML serializer export enabled
